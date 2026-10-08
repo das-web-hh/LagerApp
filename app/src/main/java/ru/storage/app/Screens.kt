@@ -27,7 +27,8 @@ private val homeSections = listOf(
     "Инвентаризация испорченных товаров",
     "Каталог товаров",
     "Задачи",
-    "Инфо"
+    "Инфо",
+    "Чат"
 )
 
 @Composable
@@ -169,6 +170,30 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
                 )
                 Text(name)
             }
+        }
+    }
+}
+
+@Composable
+fun ReceiveScreen() {
+    var mode by rememberSaveable { mutableStateOf<String?>(null) }
+    val current = mode
+
+    if (current != null) {
+        SectionScreen(current) { mode = null }
+        return
+    }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
+    ) {
+        Text("Приём", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(16.dp))
+        listOf("Ручной", "По наименованию", "Автоприём").forEach { name ->
+            FilledTonalButton(
+                onClick = { mode = name },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) { Text(name) }
         }
     }
 }
