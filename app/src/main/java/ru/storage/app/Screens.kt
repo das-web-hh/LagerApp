@@ -47,6 +47,7 @@ fun HomeScreen(prefs: Prefs) {
             },
             onClose = { scanning = false }
         )
+        current == "Каталог товаров" -> CatalogScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
@@ -175,10 +176,14 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
 }
 
 @Composable
-fun ReceiveScreen() {
+fun ReceiveScreen(prefs: Prefs) {
     var mode by rememberSaveable { mutableStateOf<String?>(null) }
     val current = mode
 
+    if (current == "Ручной") {
+        ManualReceiveScreen(prefs) { mode = null }
+        return
+    }
     if (current != null) {
         SectionScreen(current) { mode = null }
         return

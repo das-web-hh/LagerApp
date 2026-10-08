@@ -134,7 +134,7 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (selected) {
                 0 -> HomeScreen(prefs)
-                1 -> ReceiveScreen()
+                1 -> ReceiveScreen(prefs)
                 2 -> Placeholder("Отправка")
                 else -> ProfileScreen(profile, prefs, onLogout)
             }
