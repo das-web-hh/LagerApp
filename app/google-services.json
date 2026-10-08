@@ -1,0 +1,68 @@
+{
+  "project_info": {
+    "project_number": "965022333314",
+    "project_id": "warehouse26-fbbee",
+    "storage_bucket": "warehouse26-fbbee.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:965022333314:android:7f26c08e14a7846e55379b",
+        "android_client_info": {
+          "package_name": "ru.Lager.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "965022333314-mjvu16d2sa2lsp5p9l0i1u3bi2jfimak.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDVwWVllCp3gNJXB0uc6yujfIx38tIY9P4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "965022333314-mjvu16d2sa2lsp5p9l0i1u3bi2jfimak.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:965022333314:android:60584499e9c0a87255379b",
+        "android_client_info": {
+          "package_name": "ru.storage.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "965022333314-mjvu16d2sa2lsp5p9l0i1u3bi2jfimak.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDVwWVllCp3gNJXB0uc6yujfIx38tIY9P4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "965022333314-mjvu16d2sa2lsp5p9l0i1u3bi2jfimak.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
