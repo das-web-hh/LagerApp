@@ -191,17 +191,21 @@ class ProductDb private constructor(context: Context) :
         readProducts("SELECT $pcols FROM products ORDER BY name_lc", emptyArray())
 
     /** Поиск по названию, артикулу и штрих-коду; каждое слово запроса должно встретиться. */
-    fun search(query: String, limit: Int): List<Product> {
+    fun search(query: String, limit: Int, newestFirst: Boolean = false): List<Product> {
         val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (words.isEmpty()) return emptyList()
         fun esc(s: String) = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         val where = words.joinToString(" AND ") { "search_lc LIKE ? ESCAPE '\\'" }
         val args = ArrayList<String>()
         words.forEach { args.add("%" + esc(it) + "%") }
-        args.add(esc(words.first()) + "%")
+        val order = if (newestFirst) {
+            "updated_at DESC, name_lc"
+        } else {
+            args.add(esc(words.first()) + "%")
+            "(name_lc LIKE ? ESCAPE '\\') DESC, name_lc"
+        }
         return readProducts(
-            "SELECT $pcols FROM products WHERE $where " +
-                "ORDER BY (name_lc LIKE ? ESCAPE '\\') DESC, name_lc LIMIT $limit",
+            "SELECT $pcols FROM products WHERE $where ORDER BY $order LIMIT $limit",
             args.toTypedArray()
         )
     }

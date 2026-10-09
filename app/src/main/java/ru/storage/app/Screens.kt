@@ -25,6 +25,7 @@ fun Placeholder(title: String) {
 }
 
 private val homeSections = listOf(
+    "Поиск",
     "История",
     "Инвентаризация",
     "Приём испорченных товаров",
@@ -37,39 +38,17 @@ private val homeSections = listOf(
 
 @Composable
 fun HomeScreen(prefs: Prefs) {
-    var query by rememberSaveable { mutableStateOf("") }
-    var scanning by remember { mutableStateOf(false) }
     var section by rememberSaveable { mutableStateOf<String?>(null) }
     val current = section
 
     when {
-        scanning -> ScannerScreen(
-            prefs = prefs,
-            onResult = { code ->
-                query = code
-                scanning = false
-            },
-            onClose = { scanning = false }
-        )
+        current == "Поиск" -> SearchScreen(prefs) { section = null }
         current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
         current == "История" -> HistoryScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Поиск") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                FilledTonalButton(onClick = { scanning = true }) { Text("📷 Скан") }
-            }
-            Spacer(Modifier.height(16.dp))
             homeSections.forEach { name ->
                 FilledTonalButton(
                     onClick = { section = name },

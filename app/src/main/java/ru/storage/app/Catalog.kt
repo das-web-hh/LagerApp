@@ -52,6 +52,14 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
     var creating by rememberSaveable { mutableStateOf(false) }
     var rows by remember { mutableStateOf<List<List<String>>?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
+    var found by remember { mutableStateOf<List<Product>?>(null) }
+
+    LaunchedEffect(query, sync.version) {
+        found = if (query.trim().length < MIN_SEARCH_CHARS) null
+        else withContext(Dispatchers.IO) { db.search(query, 2000) }
+    }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { Media.uploadPending(ctx, db) }
@@ -69,6 +77,10 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         }
     }
 
+    if (scanning) {
+        ScannerScreen(prefs = prefs, onResult = { query = it; scanning = false }, onClose = { scanning = false })
+        return
+    }
     if (openId != null || creating) {
         ProductCardScreen(openId, prefs) {
             openId = null
@@ -81,6 +93,13 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Каталог товаров", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(8.dp))
+        SearchBar(
+            query = query,
+            onChange = { query = it },
+            onScan = { scanning = true },
+            placeholder = "Поиск в каталоге"
+        )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { creating = true }) { Text("+ Товар") }
@@ -102,7 +121,7 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         }
         Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
-            items(list, key = { it.id }) { p ->
+            items(found ?: list, key = { it.id }) { p ->
                 Text(
                     p.name,
                     modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 12.dp)

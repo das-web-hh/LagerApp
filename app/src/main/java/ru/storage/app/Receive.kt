@@ -202,7 +202,12 @@ private fun SaveReceiptDialog(
 
 /** Поисковая строка в стиле Google: скруглённая, невысокая, сканер справа внутри. */
 @Composable
-fun SearchBar(query: String, onChange: (String) -> Unit, onScan: () -> Unit) {
+fun SearchBar(
+    query: String,
+    onChange: (String) -> Unit,
+    onScan: () -> Unit,
+    placeholder: String = "Артикул, название или штрих-код"
+) {
     Row(
         Modifier.fillMaxWidth()
             .height(48.dp)
@@ -216,7 +221,7 @@ fun SearchBar(query: String, onChange: (String) -> Unit, onScan: () -> Unit) {
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (query.isEmpty()) {
                 Text(
-                    "Артикул, название или штрих-код",
+                    placeholder,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1
@@ -234,6 +239,6 @@ fun SearchBar(query: String, onChange: (String) -> Unit, onScan: () -> Unit) {
         if (query.isNotEmpty()) {
             TextButton(onClick = { onChange("") }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
         }
-        TextButton(onClick = onScan, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("📷") }
+        IconButton(onClick = onScan) { BarcodeScannerIcon() }
     }
 }
