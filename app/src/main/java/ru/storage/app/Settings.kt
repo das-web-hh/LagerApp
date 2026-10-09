@@ -12,6 +12,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
@@ -89,6 +92,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
     when (section) {
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
+        "Распознавание документов" -> AiSettings { section = null }
         else -> SettingsHome(onBack) { section = it }
     }
 }
@@ -98,7 +102,8 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
     BackHandler(onBack = onBack)
     val sections = listOf(
         "Сканер" to "Камера, типы штрих-кодов",
-        "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен"
+        "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
+        "Распознавание документов" to "ИИ для автоприёма: провайдер, ключ, модель, время ожидания"
     )
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
@@ -252,6 +257,96 @@ private fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
         if (queued > 0) {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { Media.uploadPending(ctx, ProductDb.get(ctx)) }) { Text("Отправить файлы сейчас") }
+        }
+    }
+}
+
+@Composable
+private fun AiSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val labels = listOf("Claude (Anthropic)", "Gemini (Google)", "OpenAI-совместимый")
+    val keys = listOf("claude", "gemini", "openai")
+    var provider by remember { mutableStateOf(AiCfg.provider(ctx)) }
+    var key by remember { mutableStateOf(AiCfg.key(ctx)) }
+    var model by remember { mutableStateOf(AiCfg.rawModel(ctx)) }
+    var base by remember { mutableStateOf(AiCfg.baseUrl(ctx)) }
+    var timeout by remember { mutableStateOf(AiCfg.timeoutSec(ctx).toString()) }
+    var attempts by remember { mutableStateOf(AiCfg.attempts(ctx).toString()) }
+    var msg by remember { mutableStateOf("") }
+    BackHandler(onBack = onBack)
+
+    fun save() {
+        AiCfg.save(
+            ctx, provider, key, model, base,
+            timeout.toIntOrNull()?.coerceIn(5, 600) ?: 60,
+            attempts.toIntOrNull()?.coerceIn(1, 8) ?: 3
+        )
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Распознавание документов", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Ключ хранится только на этом телефоне и в Firebase не отправляется.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("Провайдер ИИ", style = MaterialTheme.typography.titleSmall)
+        DropdownField(labels[keys.indexOf(provider).coerceAtLeast(0)], labels) { l ->
+            provider = keys[labels.indexOf(l)]
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            key, { key = it }, label = { Text("API-ключ") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            model, { model = it }, singleLine = true,
+            label = { Text("Модель (по умолчанию: ${AiCfg.defaultModel(provider)})") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (provider == "openai") {
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                base, { base = it }, singleLine = true, label = { Text("Адрес API (…/v1)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                timeout, { timeout = it.filter { c -> c.isDigit() } }, singleLine = true,
+                label = { Text("Ожидание листа, сек") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                attempts, { attempts = it.filter { c -> c.isDigit() } }, singleLine = true,
+                label = { Text("Попыток на лист") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { save(); msg = "Сохранено" }) { Text("Сохранить") }
+            OutlinedButton(onClick = {
+                save()
+                msg = "Проверка…"
+                scope.launch {
+                    msg = try {
+                        val r = withContext(Dispatchers.IO) { Ai.call(ctx, "Reply with the single word OK", null) }
+                        "ИИ отвечает: " + r.trim().take(60)
+                    } catch (e: Exception) {
+                        "Ошибка: " + (e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }) { Text("Проверить") }
+        }
+        if (msg.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(msg, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

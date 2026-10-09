@@ -2,6 +2,7 @@ package ru.storage.app
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.ContextWrapper
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -27,11 +28,18 @@ import androidx.compose.ui.unit.dp
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) Incoming.handleIntent(this, intent)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) { AppRoot() }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        Incoming.handleIntent(this, intent)
     }
 }
 
@@ -72,8 +80,19 @@ fun AppRoot() {
             }
         }
     }
-    if (loggedIn) MainScreen(prefs = prefs, profile = profile, onLogout = { loggedIn = false })
-    else LoginScreen(onSuccess = { userLogin = it.lowercase(); loggedIn = true })
+    if (loggedIn) {
+        val inc = Incoming.file
+        when {
+            inc != null && Incoming.mode == "auto" -> AutoReceiveScreen(inc) { Incoming.clear() }
+            inc != null && Incoming.mode == "name" -> NameReceiveScreen(inc) { Incoming.clear() }
+            else -> {
+                MainScreen(prefs = prefs, profile = profile, onLogout = { loggedIn = false })
+                if (inc != null) IncomingChoiceDialog(inc)
+            }
+        }
+    } else {
+        LoginScreen(onSuccess = { userLogin = it.lowercase(); loggedIn = true })
+    }
 }
 
 @Composable

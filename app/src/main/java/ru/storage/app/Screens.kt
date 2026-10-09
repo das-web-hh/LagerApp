@@ -1,6 +1,10 @@
 package ru.storage.app
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlin.concurrent.thread
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -114,6 +118,10 @@ fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
 fun ReceiveScreen(prefs: Prefs, receiver: String) {
     var mode by rememberSaveable { mutableStateOf<String?>(null) }
     val current = mode
+    val ctx = LocalContext.current
+    val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) thread { Incoming.accept(ctx, uri) }
+    }
 
     if (current == "Ручной") {
         ManualReceiveScreen(prefs, receiver) { mode = null }
@@ -131,7 +139,9 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         Spacer(Modifier.height(16.dp))
         listOf("Ручной", "По наименованию", "Автоприём").forEach { name ->
             FilledTonalButton(
-                onClick = { mode = name },
+                onClick = {
+                    if (name == "Автоприём") pdfPicker.launch(arrayOf("application/pdf")) else mode = name
+                },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             ) { Text(name) }
         }
