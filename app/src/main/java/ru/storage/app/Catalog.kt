@@ -1,352 +1,379 @@
 package ru.storage.app
 
-import android.content.ContentValues
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteOpenHelper
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.google.android.gms.tasks.Task
-import com.google.firebase.firestore.DocumentSnapshot
-import com.google.firebase.firestore.FieldPath
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.Query
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
+import java.util.UUID
 
-/*
- * Firestore: коллекция "products", документ = один товар:
- *   name (string), article (string), barcode (string), updatedAt (number, миллисекунды)
- */
-
-data class Product(
-    val id: String,
-    val name: String,
-    val article: String,
-    val barcode: String,
-    val updatedAt: Long
-)
-
-class ProductDb private constructor(context: Context) :
-    SQLiteOpenHelper(context, "catalog.db", null, 1) {
-
-    override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            "CREATE TABLE products (" +
-                "id TEXT PRIMARY KEY, name TEXT NOT NULL, article TEXT NOT NULL, " +
-                "barcode TEXT NOT NULL, name_lc TEXT NOT NULL, search_lc TEXT NOT NULL, " +
-                "updated_at INTEGER NOT NULL)"
-        )
-        db.execSQL("CREATE INDEX idx_products_name ON products(name_lc)")
-    }
-
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
-
-    fun count(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM products", null).use {
-        if (it.moveToFirst()) it.getInt(0) else 0
-    }
-
-    fun maxUpdated(): Long = readableDatabase.rawQuery("SELECT MAX(updated_at) FROM products", null).use {
-        if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) else 0L
-    }
-
-    fun upsert(list: List<Product>) {
-        if (list.isEmpty()) return
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            for (p in list) {
-                val v = ContentValues().apply {
-                    put("id", p.id)
-                    put("name", p.name)
-                    put("article", p.article)
-                    put("barcode", p.barcode)
-                    put("name_lc", p.name.lowercase())
-                    put("search_lc", "${p.name} ${p.article} ${p.barcode}".lowercase())
-                    put("updated_at", p.updatedAt)
-                }
-                db.insertWithOnConflict("products", null, v, SQLiteDatabase.CONFLICT_REPLACE)
-            }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-    }
-
-    private fun read(sql: String, args: Array<String>): List<Product> =
-        readableDatabase.rawQuery(sql, args).use { c ->
-            val out = ArrayList<Product>()
-            while (c.moveToNext()) {
-                out.add(Product(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4)))
-            }
-            out
-        }
-
-    private val cols = "id, name, article, barcode, updated_at"
-
-    fun all(): List<Product> = read("SELECT $cols FROM products ORDER BY name_lc", emptyArray())
-
-    /** Поиск по названию, артикулу и штрих-коду; каждое слово запроса должно встретиться. */
-    fun search(query: String, limit: Int): List<Product> {
-        val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
-        if (words.isEmpty()) return emptyList()
-        fun esc(s: String) = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        val where = words.joinToString(" AND ") { "search_lc LIKE ? ESCAPE '\\'" }
-        val args = ArrayList<String>()
-        words.forEach { args.add("%" + esc(it) + "%") }
-        args.add(esc(words.first()) + "%")
-        return read(
-            "SELECT $cols FROM products WHERE $where " +
-                "ORDER BY (name_lc LIKE ? ESCAPE '\\') DESC, name_lc LIMIT $limit",
-            args.toTypedArray()
-        )
-    }
-
-    companion object {
-        @Volatile private var instance: ProductDb? = null
-        fun get(context: Context): ProductDb = instance ?: synchronized(this) {
-            instance ?: ProductDb(context.applicationContext).also { instance = it }
-        }
-    }
-}
-
-class SyncState {
-    var text by mutableStateOf("")
-    var busy by mutableStateOf(false)
-    var version by mutableIntStateOf(0)
-}
-
-object CatalogSync {
-    private const val PAGE = 10
-    private const val FULL_PAGE = 500
-    private const val MIN_INTERVAL_MS = 10 * 60 * 1000L
-    @Volatile private var lastSync = 0L
-
-    private suspend fun <T> Task<T>.result(): T = suspendCoroutine { c ->
-        addOnSuccessListener { c.resume(it) }
-        addOnFailureListener { c.resumeWithException(it) }
-    }
-
-    private fun DocumentSnapshot.toProduct(): Product? {
-        val name = getString("name") ?: return null
-        return Product(
-            id = id,
-            name = name,
-            article = get("article")?.toString() ?: "",
-            barcode = get("barcode")?.toString() ?: "",
-            updatedAt = getLong("updatedAt") ?: 0L
-        )
-    }
-
-    suspend fun run(db: ProductDb, st: SyncState, force: Boolean) {
-        if (st.busy) return
-        val empty = withContext(Dispatchers.IO) { db.count() } == 0
-        if (!force && !empty && System.currentTimeMillis() - lastSync < MIN_INTERVAL_MS) return
-        st.busy = true
-        try {
-            val col = FirebaseFirestore.getInstance().collection("products")
-            val added = if (empty) fullSync(db, col, st) else incrementalSync(db, col)
-            lastSync = System.currentTimeMillis()
-            val total = withContext(Dispatchers.IO) { db.count() }
-            st.text = if (empty) "Загружено товаров: $total"
-            else if (added > 0) "Обновлено: $added, всего $total" else "Каталог актуален ($total)"
-            st.version++
-        } catch (e: FirebaseFirestoreException) {
-            st.text = if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
-                "Нет доступа к Firebase (проверьте правила Firestore)"
-            else "Нет связи с Firebase: ${e.code}"
-        } catch (e: Exception) {
-            st.text = "Ошибка синхронизации: ${e.message}"
-        } finally {
-            st.busy = false
-        }
-    }
-
-    /** Первый запуск: вся коллекция страницами по 500. */
-    private suspend fun fullSync(db: ProductDb, col: com.google.firebase.firestore.CollectionReference, st: SyncState): Int {
-        var total = 0
-        var last: DocumentSnapshot? = null
-        while (true) {
-            var q: Query = col.orderBy(FieldPath.documentId()).limit(FULL_PAGE.toLong())
-            if (last != null) q = q.startAfter(last)
-            val docs = q.get().result().documents
-            if (docs.isEmpty()) break
-            val items = docs.mapNotNull { it.toProduct() }
-            withContext(Dispatchers.IO) { db.upsert(items) }
-            total += items.size
-            st.text = "Загрузка каталога… $total"
-            last = docs.last()
-            if (docs.size < FULL_PAGE) break
-        }
-        return total
-    }
-
-    /** Дальше: последние 10 по updatedAt; если среди них есть новые — ещё 10, и так далее. */
-    private suspend fun incrementalSync(db: ProductDb, col: com.google.firebase.firestore.CollectionReference): Int {
-        val localMax = withContext(Dispatchers.IO) { db.maxUpdated() }
-        var total = 0
-        var last: DocumentSnapshot? = null
-        while (true) {
-            var q: Query = col.orderBy("updatedAt", Query.Direction.DESCENDING).limit(PAGE.toLong())
-            if (last != null) q = q.startAfter(last)
-            val docs = q.get().result().documents
-            val fresh = docs.mapNotNull { it.toProduct() }.filter { it.updatedAt > localMax }
-            withContext(Dispatchers.IO) { db.upsert(fresh) }
-            total += fresh.size
-            if (fresh.size < docs.size || docs.size < PAGE) break
-            last = docs.last()
-        }
-        return total
-    }
-}
+private val UNITS = listOf("кг", "г", "т", "л", "мл", "шт")
+private val PACKS = listOf("Бутылка", "Коробка", "Мешок", "Банка", "Пачка")
 
 @Composable
-private fun rememberSync(db: ProductDb): SyncState {
-    val st = remember { SyncState() }
-    LaunchedEffect(Unit) { CatalogSync.run(db, st, false) }
-    return st
-}
-
-@Composable
-fun CatalogScreen(onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
-    val context = LocalContext.current
-    val db = remember { ProductDb.get(context) }
-    val sync = rememberSync(db)
-    var items by remember { mutableStateOf(emptyList<Product>()) }
-    LaunchedEffect(sync.version) { items = withContext(Dispatchers.IO) { db.all() } }
-
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("← Назад") }
-        }
-        Text("Каталог товаров", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (sync.busy && sync.text.isBlank()) "Проверка…" else sync.text,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f)
-            )
-            val scope = rememberCoroutineScope()
-            OutlinedButton(
-                onClick = { scope.launch { CatalogSync.run(db, sync, true) } },
-                enabled = !sync.busy
-            ) { Text("Обновить") }
-        }
-        Spacer(Modifier.height(8.dp))
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(items, key = { it.id }) { p ->
-                Text(p.name, modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp))
-                HorizontalDivider()
+fun DropdownField(value: String, options: List<String>, onSelect: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }) { Text(value) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { o ->
+                DropdownMenuItem(text = { Text(o) }, onClick = { onSelect(o); open = false })
             }
         }
     }
 }
 
 @Composable
-fun ManualReceiveScreen(prefs: Prefs, onBack: () -> Unit) {
-    val context = LocalContext.current
-    val db = remember { ProductDb.get(context) }
-    val sync = rememberSync(db)
-    var query by rememberSaveable { mutableStateOf("") }
-    var scanning by remember { mutableStateOf(false) }
-    var suggestions by remember { mutableStateOf(emptyList<Product>()) }
-    val received = remember { mutableStateListOf<Product>() }
+fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    val scope = rememberCoroutineScope()
+    val sync = remember { SyncState() }
+    var list by remember { mutableStateOf(emptyList<Product>()) }
+    var openId by rememberSaveable { mutableStateOf<String?>(null) }
+    var creating by rememberSaveable { mutableStateOf(false) }
+    var rows by remember { mutableStateOf<List<List<String>>?>(null) }
 
-    LaunchedEffect(query, sync.version) {
-        suggestions = if (query.isBlank()) emptyList()
-        else withContext(Dispatchers.IO) { db.search(query, 8) }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { Media.uploadPending(ctx, db) }
+        Cloud.runProducts(db, sync, false)
+    }
+    LaunchedEffect(sync.version) { list = withContext(Dispatchers.IO) { db.allProducts() } }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            val data = withContext(Dispatchers.IO) {
+                try { Xlsx.read(ctx, uri) } catch (e: Exception) { emptyList() }
+            }
+            if (data.isEmpty()) sync.text = "Не удалось прочитать файл (нужен .xlsx)" else rows = data
+        }
     }
 
-    if (scanning) {
-        ScannerScreen(
-            prefs = prefs,
-            onResult = { code ->
-                query = code
-                scanning = false
-            },
-            onClose = { scanning = false }
-        )
+    if (openId != null || creating) {
+        ProductCardScreen(openId, prefs) {
+            openId = null
+            creating = false
+            sync.version++
+        }
         return
     }
 
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         TextButton(onClick = onBack) { Text("← Назад") }
-        Text("Приём вручную", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Артикул, название или штрих-код") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
+        Text("Каталог товаров", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { creating = true }) { Text("+ Товар") }
+            OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("📥 Excel") }
+            OutlinedButton(
+                onClick = { scope.launch { Cloud.runProducts(db, sync, true) } },
+                enabled = !sync.busy
+            ) { Text("Обновить") }
+        }
+        if (sync.text.isNotBlank() || sync.busy) {
+            Text(
+                if (sync.busy && sync.text.isBlank()) "Проверка…" else sync.text,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 4.dp)
             )
-            Spacer(Modifier.width(8.dp))
-            FilledTonalButton(onClick = { scanning = true }) { Text("📷 Скан") }
         }
-        if (sync.text.isNotBlank() && (sync.busy || suggestions.isEmpty())) {
-            Text(sync.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-        }
-
-        if (suggestions.isNotEmpty()) {
-            Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                Column {
-                    suggestions.forEachIndexed { i, p ->
-                        Column(
-                            Modifier.fillMaxWidth()
-                                .clickable {
-                                    if (received.none { it.id == p.id }) received.add(0, p)
-                                    query = ""
-                                }
-                                .padding(12.dp)
-                        ) {
-                            Text(p.name, fontWeight = FontWeight.Medium)
-                            val sub = listOf(
-                                if (p.article.isNotBlank()) "арт. ${p.article}" else "",
-                                if (p.barcode.isNotBlank()) "ШК ${p.barcode}" else ""
-                            ).filter { it.isNotEmpty() }.joinToString(" · ")
-                            if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (i < suggestions.lastIndex) HorizontalDivider()
-                    }
-                }
-            }
-        } else if (query.isNotBlank() && !sync.busy) {
-            Text("Ничего не найдено", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
-        }
-
-        Spacer(Modifier.height(16.dp))
-        if (received.isNotEmpty()) {
-            Text("Принято: ${received.size}", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-        }
+        Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
-            items(received, key = { it.id }) { p ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(p.name, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { received.remove(p) }) { Text("✕") }
-                }
+            items(list, key = { it.id }) { p ->
+                Text(
+                    p.name,
+                    modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 12.dp)
+                )
                 HorizontalDivider()
             }
         }
+    }
+
+    rows?.let { data ->
+        ImportDialog(
+            rows = data,
+            onCancel = { rows = null },
+            onImport = { nc, bc, ac, header ->
+                rows = null
+                scope.launch {
+                    sync.busy = true
+                    val n = withContext(Dispatchers.IO) { importRows(db, data, nc, bc, ac, header) }
+                    sync.busy = false
+                    sync.text = "Импортировано: $n"
+                    sync.version++
+                }
+            }
+        )
+    }
+}
+
+private fun importRows(db: ProductDb, rows: List<List<String>>, nc: Int, bc: Int, ac: Int, header: Boolean): Int {
+    val out = LinkedHashMap<String, Product>()
+    val byBarcode = HashMap<String, Product>()
+    val byArticle = HashMap<String, Product>()
+    val now = System.currentTimeMillis()
+    for ((i, r) in rows.withIndex()) {
+        if (header && i == 0) continue
+        val name = r.getOrNull(nc)?.trim().orEmpty()
+        if (name.isEmpty()) continue
+        val barcode = if (bc >= 0) r.getOrNull(bc)?.trim().orEmpty() else ""
+        val article = if (ac >= 0) r.getOrNull(ac)?.trim().orEmpty() else ""
+        val existing = (if (barcode.isNotEmpty()) byBarcode[barcode] ?: db.findByBarcode(barcode) else null)
+            ?: (if (article.isNotEmpty()) byArticle[article] ?: db.findByArticle(article) else null)
+        val base = existing ?: Product(UUID.randomUUID().toString(), name, "", "", "", "", "", "", emptyList(), 0L)
+        val p = base.copy(
+            name = name,
+            article = if (article.isNotEmpty()) article else base.article,
+            barcode = if (barcode.isNotEmpty()) barcode else base.barcode,
+            updatedAt = now
+        )
+        out[p.id] = p
+        if (p.barcode.isNotEmpty()) byBarcode[p.barcode] = p
+        if (p.article.isNotEmpty()) byArticle[p.article] = p
+    }
+    val all = out.values.toList()
+    db.upsertProducts(all)
+    Cloud.pushProducts(all)
+    return all.size
+}
+
+private fun colName(i: Int): String {
+    var n = i
+    val sb = StringBuilder()
+    do {
+        sb.insert(0, 'A' + n % 26)
+        n = n / 26 - 1
+    } while (n >= 0)
+    return sb.toString()
+}
+
+@Composable
+private fun ColumnPicker(
+    label: String,
+    width: Int,
+    selected: Int,
+    allowNone: Boolean,
+    head: List<String>,
+    onSelect: (Int) -> Unit
+) {
+    fun lab(i: Int) = if (i < 0) "— не брать —" else "${colName(i)}: ${head.getOrElse(i) { "" }.take(16)}"
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f))
+        var open by remember { mutableStateOf(false) }
+        Box {
+            OutlinedButton(onClick = { open = true }) { Text(lab(selected)) }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                if (allowNone) DropdownMenuItem(text = { Text(lab(-1)) }, onClick = { onSelect(-1); open = false })
+                for (i in 0 until width) {
+                    DropdownMenuItem(text = { Text(lab(i)) }, onClick = { onSelect(i); open = false })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ImportDialog(
+    rows: List<List<String>>,
+    onCancel: () -> Unit,
+    onImport: (Int, Int, Int, Boolean) -> Unit
+) {
+    val ctx = LocalContext.current
+    val sp = remember { ctx.getSharedPreferences("import", Context.MODE_PRIVATE) }
+    val width = rows.maxOf { it.size }
+    var nameCol by remember { mutableIntStateOf(sp.getInt("name", 0).coerceAtMost(width - 1)) }
+    var barcodeCol by remember { mutableIntStateOf(sp.getInt("barcode", -1).coerceAtMost(width - 1)) }
+    var articleCol by remember { mutableIntStateOf(sp.getInt("article", -1).coerceAtMost(width - 1)) }
+    var header by remember { mutableStateOf(sp.getBoolean("header", true)) }
+    val head = rows.first()
+    val sample = rows.getOrNull(if (header) 1 else 0)
+
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Настройка таблицы") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Строк в файле: ${rows.size}", style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = header, onCheckedChange = { header = it })
+                    Text("Первая строка — заголовки")
+                }
+                ColumnPicker("Название *", width, nameCol, false, head) { nameCol = it }
+                ColumnPicker("Штрих-код", width, barcodeCol, true, head) { barcodeCol = it }
+                ColumnPicker("Артикул", width, articleCol, true, head) { articleCol = it }
+                if (sample != null) {
+                    Text(
+                        "Пример: " + listOf(nameCol, barcodeCol, articleCol)
+                            .filter { it >= 0 }.joinToString(" | ") { sample.getOrElse(it) { "" } },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                sp.edit().putInt("name", nameCol).putInt("barcode", barcodeCol)
+                    .putInt("article", articleCol).putBoolean("header", header).apply()
+                onImport(nameCol, barcodeCol, articleCol, header)
+            }) { Text("Импортировать") }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Отмена") } }
+    )
+}
+
+@Composable
+fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    val scope = rememberCoroutineScope()
+    var original by remember { mutableStateOf<Product?>(null) }
+    var name by remember { mutableStateOf("") }
+    var article by remember { mutableStateOf("") }
+    var barcode by remember { mutableStateOf("") }
+    var weight by remember { mutableStateOf("") }
+    var unit by remember { mutableStateOf("кг") }
+    var pack by remember { mutableStateOf("") }
+    var manufacturer by remember { mutableStateOf("") }
+    val photos = remember { mutableStateListOf<String>() }
+    var scanning by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+
+    LaunchedEffect(id) {
+        if (id != null) {
+            val p = withContext(Dispatchers.IO) { db.getProduct(id) }
+            if (p != null) {
+                original = p
+                name = p.name; article = p.article; barcode = p.barcode
+                weight = p.weight; unit = p.unit.ifBlank { "кг" }
+                pack = p.pack; manufacturer = p.manufacturer
+                photos.clear(); photos.addAll(p.photos)
+            }
+        }
+    }
+
+    if (scanning) {
+        ScannerScreen(prefs = prefs, onResult = { barcode = it; scanning = false }, onClose = { scanning = false })
+        return
+    }
+
+    BackHandler(onBack = onClose)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        TextButton(onClick = onClose) { Text("← Назад") }
+        Text(
+            if (id == null) "Новый товар" else "Карточка товара",
+            style = MaterialTheme.typography.headlineSmall
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                weight, { weight = it }, label = { Text("Вес / объём") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            DropdownField(unit, UNITS) { unit = it }
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(pack, { pack = it }, label = { Text("Тип (бутылка, коробка, мешок…)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            PACKS.forEach { p -> TextButton(onClick = { pack = p }) { Text(p) } }
+        }
+        OutlinedTextField(manufacturer, { manufacturer = it }, label = { Text("Производитель") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(article, { article = it }, label = { Text("Артикул") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(barcode, { barcode = it }, label = { Text("Штрих-код") },
+                singleLine = true, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            FilledTonalButton(onClick = { scanning = true }) { Text("📷 Скан") }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("Фото", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(4.dp))
+        MediaStrip(photos) { photos.remove(it) }
+        Spacer(Modifier.height(8.dp))
+        MediaButtons(allowFile = false) { photos.add(it) }
+
+        if (error.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(error, color = MaterialTheme.colorScheme.error)
+        }
+        Spacer(Modifier.height(20.dp))
+        Button(
+            onClick = {
+                if (name.isBlank()) {
+                    error = "Введите название"
+                } else {
+                    val cur = photos.toList()
+                    val old = original
+                    val p = Product(
+                        id = old?.id ?: UUID.randomUUID().toString(),
+                        name = name.trim(), article = article.trim(), barcode = barcode.trim(),
+                        weight = weight.trim().replace(',', '.'), unit = unit, pack = pack.trim(),
+                        manufacturer = manufacturer.trim(), photos = cur, updatedAt = 0L
+                    )
+                    scope.launch(Dispatchers.IO) {
+                        Cloud.saveProduct(db, p)
+                        Media.discard(ctx, db, (old?.photos ?: emptyList()).filter { it !in cur })
+                        Media.uploadPending(ctx, db)
+                        withContext(Dispatchers.Main) { onClose() }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Сохранить") }
+        if (id != null) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Удалить товар")
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Удалить товар?") },
+            text = { Text(name) },
+            confirmButton = {
+                Button(onClick = {
+                    confirmDelete = false
+                    val old = original
+                    scope.launch(Dispatchers.IO) {
+                        if (id != null) Cloud.deleteProduct(db, id)
+                        Media.discard(ctx, db, old?.photos ?: emptyList())
+                        withContext(Dispatchers.Main) { onClose() }
+                    }
+                }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } }
+        )
     }
 }
