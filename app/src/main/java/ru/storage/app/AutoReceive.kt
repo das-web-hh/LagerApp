@@ -134,9 +134,9 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
         running = true
         message = "Подготовка…"
         scope.launch {
-            var doc: PdfDoc? = null
+            var doc: PageSource? = null
             try {
-                doc = PdfDoc(File(file.path))
+                doc = openPageSource(File(file.path))
                 val n = doc.count
                 if (pages.size != n) {
                     pages.clear()
