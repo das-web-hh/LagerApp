@@ -61,12 +61,23 @@ fun AppRoot() {
     val prefs = remember { Prefs(context) }
     val profile = remember { UserProfile("Admin", "", "", "") }
     var loggedIn by rememberSaveable { mutableStateOf(false) }
+    var userLogin by rememberSaveable { mutableStateOf("admin") }
+    Session.login = userLogin
+    // после входа сверяем настройки аккаунта с Firebase
+    LaunchedEffect(loggedIn) {
+        if (loggedIn) {
+            try {
+                CloudSettings.pull(context, prefs)
+            } catch (e: Exception) {
+            }
+        }
+    }
     if (loggedIn) MainScreen(prefs = prefs, profile = profile, onLogout = { loggedIn = false })
-    else LoginScreen(onSuccess = { loggedIn = true })
+    else LoginScreen(onSuccess = { userLogin = it.lowercase(); loggedIn = true })
 }
 
 @Composable
-fun LoginScreen(onSuccess: () -> Unit) {
+fun LoginScreen(onSuccess: (String) -> Unit) {
     var login by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -101,7 +112,7 @@ fun LoginScreen(onSuccess: () -> Unit) {
         Spacer(Modifier.height(24.dp))
         Button(
             onClick = {
-                if (login.trim() == "admin" && password == "admin") onSuccess()
+                if (login.trim() == "admin" && password == "admin") onSuccess(login.trim())
                 else error = "Неверный логин или пароль"
             },
             modifier = Modifier.fillMaxWidth()
