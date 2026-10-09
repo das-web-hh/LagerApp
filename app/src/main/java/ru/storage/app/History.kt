@@ -55,7 +55,6 @@ fun HistoryScreen(onBack: () -> Unit) {
 
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        TextButton(onClick = onBack) { Text("← Назад") }
         Text("История приёмов", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -149,7 +148,6 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
 
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        TextButton(onClick = onClose) { Text("← Назад") }
         Text("Карточка приёма", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(sender, { sender = it }, label = { Text("Имя отправителя") },

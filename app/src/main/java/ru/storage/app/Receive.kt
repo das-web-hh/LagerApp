@@ -1,7 +1,14 @@
 package ru.storage.app
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -58,18 +65,13 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
 
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        TextButton(onClick = onBack) { Text("← Назад") }
         Text("Приём вручную", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = query, onValueChange = { query = it },
-                placeholder = { Text("Артикул, название или штрих-код") },
-                singleLine = true, modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            FilledTonalButton(onClick = { scanning = true }) { Text("📷 Скан") }
-        }
+        SearchBar(
+            query = query,
+            onChange = { query = it },
+            onScan = { scanning = true }
+        )
         if (message.isNotBlank()) {
             Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
         } else if (sync.text.isNotBlank() && (sync.busy || suggestions.isEmpty())) {
@@ -196,4 +198,42 @@ private fun SaveReceiptDialog(
         },
         dismissButton = { TextButton(onClick = { cancel() }) { Text("Отмена") } }
     )
+}
+
+/** Поисковая строка в стиле Google: скруглённая, невысокая, сканер справа внутри. */
+@Composable
+fun SearchBar(query: String, onChange: (String) -> Unit, onScan: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(start = 14.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            if (query.isEmpty()) {
+                Text(
+                    "Артикул, название или штрих-код",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (query.isNotEmpty()) {
+            TextButton(onClick = { onChange("") }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
+        }
+        TextButton(onClick = onScan, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("📷") }
+    }
 }

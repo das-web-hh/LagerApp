@@ -79,7 +79,6 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
 
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        TextButton(onClick = onBack) { Text("← Назад") }
         Text("Каталог товаров", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -279,7 +278,6 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
 
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        TextButton(onClick = onClose) { Text("← Назад") }
         Text(
             if (id == null) "Новый товар" else "Карточка товара",
             style = MaterialTheme.typography.headlineSmall

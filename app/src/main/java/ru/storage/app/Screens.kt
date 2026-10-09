@@ -80,7 +80,6 @@ fun HomeScreen(prefs: Prefs) {
 fun SectionScreen(title: String, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        TextButton(onClick = onBack) { Text("← Назад") }
         Spacer(Modifier.height(8.dp))
         Text(title, style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(16.dp))
@@ -137,7 +136,6 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
     ) {
-        TextButton(onClick = onBack) { Text("← Назад") }
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
 

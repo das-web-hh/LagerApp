@@ -1,6 +1,10 @@
 package ru.storage.app
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -116,6 +120,24 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
         Tab("Профиль", Icons.Default.Person)
     )
     var selected by rememberSaveable { mutableIntStateOf(0) }
+    val ctx = LocalContext.current
+    var lastBack by remember { mutableLongStateOf(0L) }
+    // Системная «Назад»: с других вкладок — на главную; с главной — выход только двойным нажатием
+    BackHandler {
+        if (selected != 0) {
+            selected = 0
+        } else {
+            val now = System.currentTimeMillis()
+            if (now - lastBack < 2000) {
+                var c: Context? = ctx
+                while (c is ContextWrapper && c !is Activity) c = c.baseContext
+                (c as? Activity)?.finish()
+            } else {
+                lastBack = now
+                Toast.makeText(ctx, "Нажмите ещё раз для выхода", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Scaffold(
         bottomBar = {
