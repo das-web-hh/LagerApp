@@ -186,10 +186,10 @@ private fun SaveReceiptDialog(
                     singleLine = true, modifier = Modifier.fillMaxWidth())
                 Text("Фото товара", style = MaterialTheme.typography.titleSmall)
                 MediaStrip(photos) { photos.remove(it) }
-                MediaButtons(allowFile = false) { photos.add(it) }
+                MediaButtons(kind = "RC", allowFile = false) { photos.add(it) }
                 Text("Накладные (фото или файл)", style = MaterialTheme.typography.titleSmall)
                 MediaStrip(invoices) { invoices.remove(it) }
-                MediaButtons(allowFile = true) { invoices.add(it) }
+                MediaButtons(kind = "IN", allowFile = true) { invoices.add(it) }
                 Text("Время приёма сохранится автоматически", style = MaterialTheme.typography.bodySmall)
             }
         },

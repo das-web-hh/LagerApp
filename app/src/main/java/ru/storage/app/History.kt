@@ -35,6 +35,7 @@ fun HistoryScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { Media.uploadPending(ctx, db) }
+        DriveSync.start(ctx, false)
         Cloud.runReceipts(db, sync, false)
     }
     LaunchedEffect(sync.version) {
@@ -63,9 +64,15 @@ fun HistoryScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)
             )
             OutlinedButton(
-                onClick = { scope.launch { Cloud.runReceipts(db, sync, true) } },
+                onClick = {
+                    DriveSync.start(ctx, true)
+                    scope.launch { Cloud.runReceipts(db, sync, true) }
+                },
                 enabled = !sync.busy
             ) { Text("Обновить") }
+        }
+        if (DriveSync.status.isNotBlank()) {
+            Text(DriveSync.status, style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(8.dp))
         if (list.isEmpty()) Text("Приёмов пока нет")
@@ -183,14 +190,14 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         Spacer(Modifier.height(4.dp))
         MediaStrip(photos) { photos.remove(it) }
         Spacer(Modifier.height(8.dp))
-        MediaButtons(allowFile = false) { photos.add(it) }
+        MediaButtons(kind = "RC", allowFile = false) { photos.add(it) }
 
         Spacer(Modifier.height(16.dp))
         Text("Накладные", style = MaterialTheme.typography.titleSmall)
         Spacer(Modifier.height(4.dp))
         MediaStrip(invoices) { invoices.remove(it) }
         Spacer(Modifier.height(8.dp))
-        MediaButtons(allowFile = true) { invoices.add(it) }
+        MediaButtons(kind = "IN", allowFile = true) { invoices.add(it) }
 
         if (error.isNotBlank()) {
             Spacer(Modifier.height(8.dp))

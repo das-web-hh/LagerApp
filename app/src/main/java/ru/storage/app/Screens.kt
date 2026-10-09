@@ -11,7 +11,11 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun Placeholder(title: String) {
@@ -131,6 +135,12 @@ fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
 fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
     var front by remember { mutableStateOf(prefs.useFront) }
     var formats by remember { mutableStateOf(prefs.formats) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var driveUrl by remember { mutableStateOf(DriveCfg.url(ctx)) }
+    var driveFolder by remember { mutableStateOf(DriveCfg.folder(ctx)) }
+    var driveToken by remember { mutableStateOf(DriveCfg.token(ctx)) }
+    var driveMsg by remember { mutableStateOf("") }
     BackHandler(onBack = onBack)
 
     Column(
@@ -138,6 +148,34 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
     ) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
+
+        Text("Google Диск (фото и накладные)", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(driveUrl, { driveUrl = it }, label = { Text("Адрес скрипта (…/exec)") },
+            modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(driveFolder, { driveFolder = it }, label = { Text("ID папки или ссылка на папку") },
+            modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(driveToken, { driveToken = it }, label = { Text("Токен (если задан в скрипте)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = {
+            DriveCfg.save(ctx, driveUrl, driveFolder, driveToken)
+            driveFolder = DriveCfg.folder(ctx)
+            driveMsg = "Проверка…"
+            scope.launch {
+                driveMsg = try {
+                    val n = withContext(Dispatchers.IO) { DriveApi.ping(ctx) }
+                    Media.uploadPending(ctx, ProductDb.get(ctx))
+                    "Подключено, папка: $n"
+                } catch (e: Exception) {
+                    "Ошибка: ${e.message}"
+                }
+            }
+        }) { Text("Сохранить и проверить") }
+        if (driveMsg.isNotBlank()) Text(driveMsg, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(24.dp))
 
         Text("Камера для сканера", style = MaterialTheme.typography.titleMedium)
         Row(verticalAlignment = Alignment.CenterVertically) {

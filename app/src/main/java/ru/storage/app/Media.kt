@@ -33,16 +33,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import com.google.firebase.storage.FirebaseStorage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-/** Файлы (фото, накладные): копия на телефоне + Firebase Storage (media/<имя>). */
+/**
+ * Файлы (фото, накладные): копия на телефоне + Google Диск (через Apps Script).
+ * Имя файла — код: PR- (фото товара), RC- (фото приёма), IN- (накладная) + случайный номер.
+ * Связь с товаром/партией хранится в Firebase (списки имён photos / invoices).
+ */
 object Media {
-    private val inFlight = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val bg = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val uploading = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun dir(ctx: Context): File = File(ctx.filesDir, "media").also { it.mkdirs() }
     fun file(ctx: Context, name: String): File = File(dir(ctx), name)
@@ -54,7 +60,7 @@ object Media {
 
     fun shownName(name: String): String = if (isImage(name)) name else name.substringAfter('_', name)
 
-    private fun newPhotoName() = UUID.randomUUID().toString().replace("-", "").take(14) + ".jpg"
+    private fun newPhotoName(kind: String) = kind + "-" + UUID.randomUUID().toString().replace("-", "").take(14) + ".jpg"
 
     private fun displayName(ctx: Context, uri: Uri): String? = try {
         ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
@@ -94,12 +100,12 @@ object Media {
     }
 
     /** Выбранный из галереи/памяти файл → копия в приложении. Возвращает имя или null. */
-    fun importUri(ctx: Context, uri: Uri, db: ProductDb): String? {
+    fun importUri(ctx: Context, uri: Uri, db: ProductDb, kind: String): String? {
         return try {
             val mime = ctx.contentResolver.getType(uri) ?: ""
             val isImg = mime.startsWith("image/")
-            val name = if (isImg) newPhotoName()
-            else UUID.randomUUID().toString().take(8) + "_" + safe(displayName(ctx, uri) ?: "file")
+            val name = if (isImg) newPhotoName(kind)
+            else kind + "-" + UUID.randomUUID().toString().take(8) + "_" + safe(displayName(ctx, uri) ?: "file")
             val target = file(ctx, name)
             val ins = ctx.contentResolver.openInputStream(uri) ?: return null
             ins.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
@@ -111,8 +117,8 @@ object Media {
         }
     }
 
-    fun cameraTarget(ctx: Context): Pair<String, Uri> {
-        val name = newPhotoName()
+    fun cameraTarget(ctx: Context, kind: String): Pair<String, Uri> {
+        val name = newPhotoName(kind)
         val f = file(ctx, name)
         f.createNewFile()
         return name to FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
@@ -123,40 +129,63 @@ object Media {
         db.addUpload(name)
     }
 
+    /** Отправка ожидающих файлов на Google Диск в фоне; при ошибке повторится при следующем вызове. */
     fun uploadPending(ctx: Context, db: ProductDb) {
-        val root = FirebaseStorage.getInstance().reference
-        for (name in db.pendingUploads()) {
-            val f = file(ctx, name)
-            if (!f.exists() || f.length() == 0L) {
-                db.removeUpload(name)
-                continue
-            }
-            if (!inFlight.add(name)) continue
-            root.child("media/$name").putFile(Uri.fromFile(f))
-                .addOnSuccessListener {
-                    db.removeUpload(name)
-                    inFlight.remove(name)
+        val app = ctx.applicationContext
+        if (!DriveCfg.ready(app)) return
+        if (!uploading.compareAndSet(false, true)) return
+        bg.launch {
+            try {
+                while (true) {
+                    val list = db.pendingUploads()
+                    if (list.isEmpty()) break
+                    var failed = false
+                    for (name in list) {
+                        val f = file(app, name)
+                        if (!f.exists() || f.length() == 0L) {
+                            db.removeUpload(name)
+                            continue
+                        }
+                        try {
+                            DriveApi.upload(app, name, f)
+                            db.removeUpload(name)
+                        } catch (e: Exception) {
+                            failed = true
+                            break
+                        }
+                    }
+                    if (failed) break
                 }
-                .addOnFailureListener { inFlight.remove(name) }
+            } finally {
+                uploading.set(false)
+            }
         }
     }
 
     fun discard(ctx: Context, db: ProductDb, names: Collection<String>) {
-        val root = FirebaseStorage.getInstance().reference
+        val app = ctx.applicationContext
+        val pending = db.pendingUploads().toSet()
         for (n in names) {
-            file(ctx, n).delete()
+            file(app, n).delete()
             db.removeUpload(n)
-            root.child("media/$n").delete()
+            if (n !in pending && DriveCfg.ready(app)) {
+                bg.launch {
+                    try {
+                        DriveApi.delete(app, n)
+                    } catch (e: Exception) {
+                    }
+                }
+            }
         }
     }
 
-    /** Локальный файл; если его нет на этом телефоне — скачивается из Storage. */
+    /** Локальный файл; если его нет на этом телефоне — скачивается с Google Диска. */
     suspend fun load(ctx: Context, name: String): File? = withContext(Dispatchers.IO) {
         val f = file(ctx, name)
         if (f.exists() && f.length() > 0) return@withContext f
+        if (!DriveCfg.ready(ctx)) return@withContext null
         try {
-            val bytes = FirebaseStorage.getInstance().reference.child("media/$name")
-                .getBytes(25L * 1024 * 1024).awaitIt()
+            val bytes = DriveApi.download(ctx, name) ?: return@withContext null
             f.writeBytes(bytes)
             f
         } catch (e: Exception) {
@@ -239,7 +268,7 @@ fun MediaStrip(names: List<String>, onRemove: ((String) -> Unit)?) {
 
 /** Кнопки «Снять», «Фото из галереи» и (если нужно) «Файл». Добавленное имя файла приходит в onAdded. */
 @Composable
-fun MediaButtons(allowFile: Boolean, onAdded: (String) -> Unit) {
+fun MediaButtons(kind: String, allowFile: Boolean, onAdded: (String) -> Unit) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     val scope = rememberCoroutineScope()
@@ -257,7 +286,7 @@ fun MediaButtons(allowFile: Boolean, onAdded: (String) -> Unit) {
         }
     }
     fun startCamera() {
-        val (name, uri) = Media.cameraTarget(ctx)
+        val (name, uri) = Media.cameraTarget(ctx, kind)
         pendingCam = name
         camLauncher.launch(uri)
     }
@@ -267,7 +296,7 @@ fun MediaButtons(allowFile: Boolean, onAdded: (String) -> Unit) {
     val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         scope.launch {
             uris.forEach { u ->
-                val n = withContext(Dispatchers.IO) { Media.importUri(ctx, u, db) }
+                val n = withContext(Dispatchers.IO) { Media.importUri(ctx, u, db, kind) }
                 if (n != null) cb(n)
             }
         }

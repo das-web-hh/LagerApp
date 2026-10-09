@@ -55,6 +55,7 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { Media.uploadPending(ctx, db) }
+        DriveSync.start(ctx, false)
         Cloud.runProducts(db, sync, false)
     }
     LaunchedEffect(sync.version) { list = withContext(Dispatchers.IO) { db.allProducts() } }
@@ -88,6 +89,9 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
                 onClick = { scope.launch { Cloud.runProducts(db, sync, true) } },
                 enabled = !sync.busy
             ) { Text("Обновить") }
+        }
+        if (DriveSync.status.isNotBlank()) {
+            Text(DriveSync.status, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
         }
         if (sync.text.isNotBlank() || sync.busy) {
             Text(
@@ -317,7 +321,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         Spacer(Modifier.height(4.dp))
         MediaStrip(photos) { photos.remove(it) }
         Spacer(Modifier.height(8.dp))
-        MediaButtons(allowFile = false) { photos.add(it) }
+        MediaButtons(kind = "PR", allowFile = false) { photos.add(it) }
 
         if (error.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
