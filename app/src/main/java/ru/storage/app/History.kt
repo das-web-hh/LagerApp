@@ -38,7 +38,7 @@ fun HistoryScreen(onBack: () -> Unit) {
         DriveSync.start(ctx, false)
         Cloud.runReceipts(db, sync, false)
     }
-    LaunchedEffect(sync.version) {
+    LaunchedEffect(sync.version, Media.version) {
         withContext(Dispatchers.IO) {
             list = db.allReceipts()
             pending = db.pendingUploads().toSet()
@@ -65,6 +65,7 @@ fun HistoryScreen(onBack: () -> Unit) {
             )
             OutlinedButton(
                 onClick = {
+                    Media.uploadPending(ctx, db)
                     DriveSync.start(ctx, true)
                     scope.launch { Cloud.runReceipts(db, sync, true) }
                 },
@@ -73,6 +74,9 @@ fun HistoryScreen(onBack: () -> Unit) {
         }
         if (DriveSync.status.isNotBlank()) {
             Text(DriveSync.status, style = MaterialTheme.typography.bodySmall)
+        }
+        if (Media.lastError.isNotBlank()) {
+            Text(Media.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(8.dp))
         if (list.isEmpty()) Text("Приёмов пока нет")

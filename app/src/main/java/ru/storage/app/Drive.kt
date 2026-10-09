@@ -41,29 +41,47 @@ object DriveApi {
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
+    /** GET/POST с ручным переходом по перенаправлениям (Apps Script отвечает на POST кодом 302). */
     private fun http(url: String, body: String?): JSONObject {
-        val c = URL(url).openConnection() as HttpURLConnection
-        try {
-            c.connectTimeout = 20000
-            c.readTimeout = 180000
-            c.instanceFollowRedirects = true
-            if (body != null) {
-                c.requestMethod = "POST"
-                c.doOutput = true
-                c.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
-                c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            }
-            val code = c.responseCode
-            val stream = if (code in 200..299) c.inputStream else c.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+        var target = url
+        var method = if (body != null) "POST" else "GET"
+        var payload = body
+        repeat(6) {
+            val c = URL(target).openConnection() as HttpURLConnection
             try {
-                return JSONObject(text)
-            } catch (e: Exception) {
-                throw RuntimeException("Скрипт Диска вернул не JSON (проверьте развёртывание: доступ «Все»)")
+                c.connectTimeout = 20000
+                c.readTimeout = 180000
+                c.instanceFollowRedirects = false
+                c.requestMethod = method
+                if (payload != null) {
+                    c.doOutput = true
+                    c.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+                    c.outputStream.use { it.write(payload!!.toByteArray(Charsets.UTF_8)) }
+                }
+                val code = c.responseCode
+                if (code in 301..303 || code == 307 || code == 308) {
+                    val loc = c.getHeaderField("Location")
+                        ?: throw RuntimeException("Перенаправление без адреса (HTTP $code)")
+                    target = URL(URL(target), loc).toString()
+                    if (code != 307 && code != 308) {
+                        method = "GET"
+                        payload = null
+                    }
+                    return@repeat
+                }
+                val stream = if (code in 200..299) c.inputStream else c.errorStream
+                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                try {
+                    return JSONObject(text)
+                } catch (e: Exception) {
+                    val snippet = text.replace(Regex("\\s+"), " ").take(120)
+                    throw RuntimeException("Скрипт Диска вернул не JSON (HTTP $code): $snippet")
+                }
+            } finally {
+                c.disconnect()
             }
-        } finally {
-            c.disconnect()
         }
+        throw RuntimeException("Слишком много перенаправлений")
     }
 
     private fun query(ctx: Context, action: String, vararg kv: Pair<String, String>): String {

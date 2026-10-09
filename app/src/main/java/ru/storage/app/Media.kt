@@ -47,6 +47,10 @@ import java.util.UUID
  * Связь с товаром/партией хранится в Firebase (списки имён photos / invoices).
  */
 object Media {
+    /** Последняя ошибка отправки на Диск (пусто, если всё хорошо) и счётчик изменений очереди. */
+    var lastError by mutableStateOf("")
+    var version by mutableIntStateOf(0)
+
     private val bg = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val uploading = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -149,7 +153,11 @@ object Media {
                         try {
                             DriveApi.upload(app, name, f)
                             db.removeUpload(name)
+                            lastError = ""
+                            version++
                         } catch (e: Exception) {
+                            lastError = "Ошибка отправки на Диск: " + (e.message ?: e.javaClass.simpleName)
+                            version++
                             failed = true
                             break
                         }

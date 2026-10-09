@@ -240,5 +240,18 @@ private fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text(msg, style = MaterialTheme.typography.bodySmall)
         }
+        var queued by remember { mutableIntStateOf(0) }
+        LaunchedEffect(Media.version, msg) {
+            queued = withContext(Dispatchers.IO) { ProductDb.get(ctx).pendingUploads().size }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Файлов в очереди на отправку: $queued", style = MaterialTheme.typography.bodySmall)
+        if (Media.lastError.isNotBlank()) {
+            Text(Media.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        if (queued > 0) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { Media.uploadPending(ctx, ProductDb.get(ctx)) }) { Text("Отправить файлы сейчас") }
+        }
     }
 }
