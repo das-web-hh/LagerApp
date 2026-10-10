@@ -45,6 +45,7 @@ private val homeSections = listOf(
     "Инвентаризация испорченных товаров",
     "Каталог товаров",
     "Задачи",
+    "Шаблоны накладных",
     "Инфо",
     "Чат"
 )
@@ -53,11 +54,17 @@ private val homeSections = listOf(
 fun HomeScreen(prefs: Prefs) {
     var section by rememberSaveable { mutableStateOf<String?>(null) }
     val current = section
+    val hctx = LocalContext.current
+    LaunchedEffect(Unit) {
+        InvoiceProfiles.load(hctx)
+        try { withContext(Dispatchers.IO) { InvoiceProfiles.refresh(hctx) } } catch (e: Exception) { }
+    }
 
     when {
         current == "Поиск" -> SearchScreen(prefs) { section = null }
         current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
         current == "История" -> HistoryScreen { section = null }
+        current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
@@ -66,7 +73,10 @@ fun HomeScreen(prefs: Prefs) {
                 FilledTonalButton(
                     onClick = { section = name },
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                ) { Text(name) }
+                ) {
+                    val n = if (name == "Шаблоны накладных") InvoiceProfiles.newCount else 0
+                    Text(if (n > 0) "$name ($n)" else name)
+                }
             }
         }
     }

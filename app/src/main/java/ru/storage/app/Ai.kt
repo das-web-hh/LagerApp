@@ -259,7 +259,7 @@ object Ai {
         }
     }
 
-    private fun prompt(page: Int, total: Int) = """
+    private fun prompt(page: Int, total: Int, rules: String = "") = """
         This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
         The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
         A warehouse worker has checked the printed lines with a pen (ticks, crosses, strike-throughs, handwritten numbers). Read these pen marks carefully: pen marks are often in blue (or other colored) ink, the printed text is black.
@@ -279,7 +279,7 @@ object Ai {
         - hand_qty: if a quantity is handwritten with a pen next to this line or its quantity (for example "9 stk", "15"), give that number only; otherwise "".
         - Ignore handwritten notes that do not belong to a line: names, dates, pallet counts like "6P" or "7P", signatures, scribbles, arrows.
         If the page has no goods lines, use an empty items array.
-    """.trimIndent()
+    """.trimIndent() + (if (rules.isBlank()) "" else "\nNotes about the layout of THIS supplier's documents (checked by the warehouse manager; they are more important than the general rules above):\n" + rules.trim())
 
     /** Достаём JSON из ответа; если ответ оборвался на длинной таблице — закрываем скобки. */
     private fun parseJson(text: String): JSONObject {
@@ -297,8 +297,8 @@ object Ai {
     }
 
     /** Распознать один лист. Бросает исключение при ошибке/таймауте — вызывающий повторит. */
-    fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int): PageResult {
-        val text = call(ctx, prompt(page, total), png)
+    fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int, rules: String = ""): PageResult {
+        val text = call(ctx, prompt(page, total, rules), png)
         val o = parseJson(text)
         val items = ArrayList<AiItem>()
         val arr = o.optJSONArray("items")

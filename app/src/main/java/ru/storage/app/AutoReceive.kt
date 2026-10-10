@@ -177,6 +177,28 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
 
     private val results = HashMap<Int, PageResult>()
     private val partsCache = HashMap<String, ProductParts>()
+    private var genSender: String? = null
+    private var genPng: ByteArray? = null
+
+    /** Поставщика ещё нет в реестре: ИИ описывает раскладку его накладной, шаблон попадает в «Шаблоны накладных» со статусом «Новый». */
+    private suspend fun createProfileIfNeeded() {
+        val sName = genSender ?: return
+        val png = genPng ?: return
+        genSender = null
+        genPng = null
+        if (items.isEmpty() || InvoiceProfiles.find(app, sName) != null) return
+        message = "Создаю шаблон накладной…"
+        val extracted = items.filter { !it.extra }.take(25).joinToString("\n") { "${it.name} | ${it.printed.ifEmpty { it.qty }}" }
+        val text = AutoReceiveHolder.aiLock.withLock {
+            withContext(Dispatchers.IO) { InvoiceProfiles.generate(app, sName, png, extracted) }
+        }
+        if (text.isNotBlank()) {
+            InvoiceProfiles.save(app, InvoiceProfile(InvoiceProfiles.key(sName), sName, text, "new", 0L))
+            newProfileName = sName
+        }
+    }
+    var newProfileName by mutableStateOf("")
+        private set
     var parsing by mutableStateOf(false)
         private set
 
@@ -243,6 +265,10 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     results.clear()
                 }
                 val attempts = AiCfg.attempts(app).coerceIn(1, 8)
+                // шаблоны накладных поставщиков (из Firebase, не чаще раза в 5 минут)
+                try { InvoiceProfiles.refresh(app) } catch (e: Exception) { }
+                var rules = ""
+                var rulesChecked = false
                 for (i in 0 until n) {
                     val st = pages[i]
                     if (onlyFailed && st.ok) continue
@@ -262,7 +288,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                             try {
                                 // со 2-й попытки — серая картинка покрупнее вместо чёрно-белой
                                 if (a == 2) png = try { doc.renderBw(i, 2200, false) } catch (e: Exception) { png }
-                                val r = Ai.recognize(app, png, i + 1, n)
+                                val r = Ai.recognize(app, png, i + 1, n, rules)
                                 // пустой лист — повтор; на первом листе без товаров тоже (там таблица почти всегда есть)
                                 val blank = r.items.isEmpty() && r.sender == "none" && r.order == "none"
                                 if ((blank || (i == 0 && r.items.isEmpty())) && a < attempts) {
@@ -271,6 +297,20 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                                 results[i] = r
                                 st.ok = true
                                 st.status = "готово"
+                                if (!rulesChecked && r.sender != "none") {
+                                    rulesChecked = true
+                                    val rl = InvoiceProfiles.confirmedRules(app, r.sender)
+                                    if (rl != null) {
+                                        // у поставщика есть подтверждённый шаблон: этот лист читаем ещё раз с правилами, остальные — сразу с ними
+                                        rules = rl
+                                        st.status = "уточнение по шаблону…"
+                                        try { results[i] = Ai.recognize(app, png, i + 1, n, rl) } catch (e: Exception) { }
+                                        st.status = "готово"
+                                    } else if (InvoiceProfiles.find(app, r.sender) == null && r.items.isNotEmpty()) {
+                                        genSender = r.sender
+                                        genPng = png
+                                    }
+                                }
                                 break
                             } catch (e: Exception) {
                                 st.status = "ошибка: " + (e.message ?: e.javaClass.simpleName)
@@ -288,6 +328,11 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     parseNewProducts()
                     if (failed == 0) message = "Готово: распознано листов — $n"
                 } catch (e: Exception) {
+                }
+                if (failed == 0) {
+                    try { createProfileIfNeeded() } catch (e: Exception) { }
+                    message = "Готово: распознано листов — $n" +
+                        if (newProfileName.isNotBlank()) ". Новый шаблон накладной: $newProfileName (Главная → Шаблоны накладных)" else ""
                 }
             } catch (e: Exception) {
                 message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
