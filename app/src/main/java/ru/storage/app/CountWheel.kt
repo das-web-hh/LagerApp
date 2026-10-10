@@ -31,6 +31,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -64,7 +65,7 @@ import kotlin.math.roundToInt
  *  - долгое нажатие на строку — правка названия и плана.
  */
 
-private val ROW_H = 66.dp
+private val ROW_H = 76.dp
 private val DIGIT_H = 46.dp
 private const val CYCLE_BASE = 1_000_000
 
@@ -146,6 +147,40 @@ private fun GraphicsLayerScope.applyWheel(
     rotationX = -d * tilt
     translationY = -d * info.size * pull
     cameraDistance = 14f * density
+}
+
+/**
+ * Колесо списка товаров: средняя строка в полном размере, остальные — вдвое меньше (середина в 2 раза крупнее и выше),
+ * дальше от середины — бледнее и сильнее наклонены.
+ */
+private fun GraphicsLayerScope.applyBigCenter(state: LazyListState, index: Int, tilt: Float) {
+    val li = state.layoutInfo
+    val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val half = (li.viewportEndOffset - li.viewportStartOffset) / 2f
+    if (half <= 0f) return
+    val center = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+    val dPx = info.offset + info.size / 2f - center
+    val k = dPx / info.size            // расстояние до середины в «строках», со знаком
+    val ak = abs(k)
+    val near = ak.coerceAtMost(1f)
+    val s = 1f - 0.5f * near           // середина 1.0, соседи и дальше 0.5
+    scaleX = s
+    scaleY = s
+    alpha = if (ak <= 1f) 1f - 0.3f * ak else (0.7f - 0.2f * (ak - 1f)).coerceAtLeast(0.3f)
+    // уменьшенные строки подтягиваем к середине, чтобы между ними не было больших дыр
+    val ideal = if (ak <= 1f) 0.25f * ak else 0.5f * ak - 0.25f
+    translationY = -Math.signum(k) * ideal * info.size * 0.7f
+    rotationX = -(dPx / half).coerceIn(-1f, 1f) * tilt
+    cameraDistance = 14f * density
+}
+
+/** 1 — строка ровно посередине, 0 — на расстоянии строки и дальше. */
+private fun centerness(state: LazyListState, index: Int): Float {
+    val li = state.layoutInfo
+    val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return 0f
+    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+    val k = abs(info.offset + info.size / 2f - c) / info.size
+    return (1f - k).coerceIn(0f, 1f)
 }
 
 @Composable
@@ -309,7 +344,11 @@ fun CountWheelList(
                             }
                         }
                     }
-                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        flingBehavior = rememberSnapFlingBehavior(listState),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
                         items(count = Int.MAX_VALUE) { index ->
                             val row = rows.getOrNull(index % cycle)
                             if (row == null) {
@@ -390,7 +429,7 @@ private fun WheelRow(
         Modifier.fillMaxWidth()
             .height(ROW_H)
             .padding(horizontal = 12.dp, vertical = 3.dp)
-            .graphicsLayer { applyWheel(listState, index, 0.5f, 0.35f, WHEEL_TILT, 0.22f) }
+            .graphicsLayer { applyBigCenter(listState, index, WHEEL_TILT) }
     ) {
         // кнопки справа (открываются свайпом справа налево)
         Row(
@@ -438,6 +477,11 @@ private fun WheelRow(
                 .fillMaxSize()
                 .clip(RoundedCornerShape(14.dp))
                 .background(scheme.surfaceVariant)
+                // средняя строка другого цвета: плавно «заливается» по мере подхода к середине колеса
+                .drawBehind {
+                    val t = centerness(listState, index)
+                    if (t > 0f) drawRect(scheme.primaryContainer.copy(alpha = t))
+                }
                 .background(scheme.primary.copy(alpha = 0.55f * blink.value))
                 .draggable(
                     orientation = Orientation.Horizontal,
