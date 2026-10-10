@@ -108,7 +108,16 @@ class PageState {
  * Строка списка. qty — количество по документу (в автоприёме — принятое, в приёме по имени — плановое).
  * fact и defect вводятся вручную в приёме по имени; extra — товар добавлен вручную (нет в плане).
  */
-class ItemRow(name: String, qty: String, val extra: Boolean = false, val productId: String = "") {
+class ItemRow(
+    name: String,
+    qty: String,
+    val extra: Boolean = false,
+    val productId: String = "",
+    /** только автоприём: "ok" (✓), "missing" (✕ не пришло), "changed" (другое кол-во), "nomark" (без отметки) */
+    val status: String = "",
+    /** печатное количество по документу (автоприём) */
+    val printed: String = ""
+) {
     var name by mutableStateOf(name)
     var qty by mutableStateOf(qty)
     var fact by mutableStateOf("")
@@ -129,6 +138,16 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
     val items = mutableStateListOf<ItemRow>()
     var saved by mutableStateOf(false)
     var saving by mutableStateOf(false)
+
+    /** true — приём по имени (все строки как есть, план = печатное количество); false — автоприём (по отметкам ручкой). */
+    var nameMode = false
+        private set
+
+    fun setMode(name: Boolean) {
+        if (nameMode == name) return
+        nameMode = name
+        if (results.isNotEmpty()) rebuild()
+    }
 
     private val results = HashMap<Int, PageResult>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -176,8 +195,10 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
                             // со 2-й попытки — серая картинка покрупнее вместо чёрно-белой
                             if (a == 2) png = try { doc.renderBw(i, 2200, false) } catch (e: Exception) { png }
                             val r = Ai.recognize(app, png, i + 1, n)
-                            if (r.items.isEmpty() && r.sender == "none" && r.order == "none" && a < attempts) {
-                                throw RuntimeException("лист пустой, пробую в другом виде")
+                            // пустой лист — повтор; на первом листе без товаров тоже (там таблица почти всегда есть)
+                            val blank = r.items.isEmpty() && r.sender == "none" && r.order == "none"
+                            if ((blank || (i == 0 && r.items.isEmpty())) && a < attempts) {
+                                throw RuntimeException("не нашёл товары, пробую в другом виде")
                             }
                             results[i] = r
                             st.ok = true
@@ -203,6 +224,19 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
         }
     }
 
+    private fun rowFor(it: AiItem): ItemRow {
+        val printed = cleanQty(it.qty)
+        if (nameMode) return ItemRow(it.name, printed)
+        val hand = cleanQty(it.handQty)
+        return when {
+            hand.isNotEmpty() -> ItemRow(it.name, hand, status = "changed", printed = printed)
+            it.qtyCrossed -> ItemRow(it.name, "", status = "changed", printed = printed)
+            it.mark == "cross" -> ItemRow(it.name, "0", status = "missing", printed = printed)
+            it.mark == "check" -> ItemRow(it.name, printed, status = "ok", printed = printed)
+            else -> ItemRow(it.name, printed, status = "nomark", printed = printed)
+        }
+    }
+
     private fun rebuild() {
         var s = "none"
         var o = "none"
@@ -211,7 +245,7 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
             val r = results[i] ?: continue
             if (s == "none" && r.sender != "none") s = r.sender
             if (o == "none" && r.order != "none") o = r.order
-            r.items.forEach { list.add(ItemRow(it.name, it.qty)) }
+            r.items.forEach { list.add(rowFor(it)) }
         }
         sender = s
         order = o
@@ -230,6 +264,13 @@ object AutoReceiveHolder {
         if (j != null && j.file.path == f.path) return j
         return AutoJob(ctx.applicationContext, f).also { job = it }
     }
+}
+
+/** Количество без хвоста ",00": "45,00" → "45", "2,5" → "2.5"; пусто, если числа нет. */
+fun cleanQty(q: String): String {
+    val n = normalizeQty(q)
+    val d = n.toDoubleOrNull() ?: return ""
+    return if (d == Math.floor(d) && d < 1e9) d.toLong().toString() else n
 }
 
 fun normalizeQty(q: String): String {
@@ -283,8 +324,15 @@ suspend fun saveJob(
             rows.add(ReceiptItem(pid, name, fact, plan, defect))
         } else {
             val qty = normalizeQty(r.qty)
-            if (qty.isEmpty() || !qtyValid(qty)) return "Укажите количество (число больше нуля) у каждого товара"
-            rows.add(ReceiptItem(pid, name, qty))
+            val printed = normalizeQty(r.printed)
+            // «не пришло» (✕): товар попадает в приём с количеством 0 и планом по документу
+            if (r.status == "missing" && (qty.isEmpty() || qty.toDoubleOrNull() == 0.0)) {
+                rows.add(ReceiptItem(pid, name, "0", printed.ifEmpty { "0" }))
+            } else {
+                if (qty.isEmpty() || !qtyValid(qty)) return "Укажите количество (число больше нуля) у товара: $name"
+                val plan = if (r.status == "changed" || r.status == "missing") printed else ""
+                rows.add(ReceiptItem(pid, name, qty, plan))
+            }
         }
     }
     if (rows.isEmpty()) return "Нет товаров для сохранения"
@@ -334,17 +382,30 @@ suspend fun saveJob(
 
 @Composable
 private fun AutoRowEditor(row: ItemRow, editable: Boolean, onRemove: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            row.name, { row.name = it }, enabled = editable,
-            label = { Text("Название") }, modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(6.dp))
-        OutlinedTextField(
-            row.qty, { row.qty = it }, enabled = editable, singleLine = true,
-            label = { Text("Кол-во") }, modifier = Modifier.width(88.dp)
-        )
-        TextButton(onClick = onRemove, enabled = editable) { Text("✕") }
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                row.name, { row.name = it }, enabled = editable,
+                label = { Text("Название") }, modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(6.dp))
+            OutlinedTextField(
+                row.qty, { row.qty = it }, enabled = editable, singleLine = true,
+                label = { Text("Кол-во") }, modifier = Modifier.width(88.dp),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+            TextButton(onClick = onRemove, enabled = editable) { Text("✕") }
+        }
+        val doc = if (row.printed.isNotEmpty()) " (в документе: ${row.printed})" else ""
+        when (row.status) {
+            "ok" -> Text("✓ пришло", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            "missing" -> Text("✕ не пришло$doc", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            "changed" -> Text(
+                if (row.qty.isBlank()) "✎ количество перечёркнуто — впишите$doc" else "✎ другое количество$doc",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary
+            )
+            "nomark" -> Text("без отметки — проверьте", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -455,6 +516,8 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     var error by remember { mutableStateOf("") }
     var showAdd by remember { mutableStateOf(false) }
 
+    LaunchedEffect(f.path, nameMode) { job.setMode(nameMode) }
+
     // До распознавания: не обрабатывался ли этот файл раньше (имя файла, затем дата и время)
     LaunchedEffect(f.path) {
         if (ready && !job.started) {
@@ -544,7 +607,12 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         Text("Товары: ${job.items.size}", style = MaterialTheme.typography.titleSmall)
         if (nameMode) {
             Text(
-                "План — по документу. Факт (сколько привезли) и брак введите вручную.",
+                "План — по документу (все строки подряд). Факт (сколько привезли) и брак введите вручную.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        } else {
+            Text(
+                "По отметкам ручкой: ✓ — пришло, ✕ — не пришло (сохранится с количеством 0), ✎ — другое количество, дописанное ручкой.",
                 style = MaterialTheme.typography.bodySmall
             )
         }

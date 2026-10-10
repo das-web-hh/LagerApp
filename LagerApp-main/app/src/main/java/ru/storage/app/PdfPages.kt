@@ -41,7 +41,7 @@ class PdfDoc(file: File) : PageSource {
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bmp.eraseColor(Color.WHITE)
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            return if (bw) bitmapToBwPng(bmp) else bitmapToGrayJpeg(bmp)
+            return if (bw) bitmapToCleanJpeg(bmp) else bitmapToGrayJpeg(bmp)
         } finally {
             page.close()
         }
@@ -87,7 +87,7 @@ class ImageDoc(private val file: File) : PageSource {
         val flat = Bitmap.createBitmap(bmp.width, bmp.height, Bitmap.Config.ARGB_8888)
         flat.eraseColor(Color.WHITE)
         android.graphics.Canvas(flat).drawBitmap(bmp, 0f, 0f, null)
-        return if (bw) bitmapToBwPng(flat) else bitmapToGrayJpeg(flat)
+        return if (bw) bitmapToCleanJpeg(flat) else bitmapToGrayJpeg(flat)
     }
 
     override fun close() {}
@@ -148,6 +148,59 @@ fun bitmapToGrayJpeg(bmp: Bitmap): ByteArray {
     val out = ByteArrayOutputStream()
     gray.compress(Bitmap.CompressFormat.JPEG, 88, out)
     gray.recycle()
+    bmp.recycle()
+    return out.toByteArray()
+}
+
+/**
+ * Серая картинка без теней: оцениваем «фон» (бумагу) блоками и делим на него.
+ * Тень от руки/телефона на фото перестаёт заливать текст чёрным (глобальный порог Оцу так и делал).
+ */
+fun bitmapToCleanJpeg(bmp: Bitmap): ByteArray {
+    val w = bmp.width
+    val h = bmp.height
+    val px = IntArray(w * h)
+    bmp.getPixels(px, 0, w, 0, 0, w, h)
+    val gray = IntArray(px.size)
+    for (i in px.indices) {
+        val c = px[i]
+        gray[i] = (((c shr 16) and 0xFF) * 299 + ((c shr 8) and 0xFF) * 587 + (c and 0xFF) * 114) / 1000
+    }
+    val b = 32
+    val gw = (w + b - 1) / b
+    val gh = (h + b - 1) / b
+    val bg = FloatArray(gw * gh)
+    for (by in 0 until gh) for (bx in 0 until gw) {
+        var m = 0
+        for (y in by * b until minOf(h, (by + 1) * b)) {
+            val row = y * w
+            for (x in bx * b until minOf(w, (bx + 1) * b)) {
+                if (gray[row + x] > m) m = gray[row + x]
+            }
+        }
+        bg[by * gw + bx] = m.toFloat()
+    }
+    for (y in 0 until h) {
+        val fy = ((y + 0.5f) / b - 0.5f).coerceIn(0f, (gh - 1).toFloat())
+        val y0 = fy.toInt()
+        val y1 = minOf(y0 + 1, gh - 1)
+        val ty = fy - y0
+        for (x in 0 until w) {
+            val fx = ((x + 0.5f) / b - 0.5f).coerceIn(0f, (gw - 1).toFloat())
+            val x0 = fx.toInt()
+            val x1 = minOf(x0 + 1, gw - 1)
+            val tx = fx - x0
+            val top = bg[y0 * gw + x0] * (1 - tx) + bg[y0 * gw + x1] * tx
+            val bot = bg[y1 * gw + x0] * (1 - tx) + bg[y1 * gw + x1] * tx
+            val back = maxOf(top * (1 - ty) + bot * ty, 1f)
+            val v = gray[y * w + x] * 255f / back
+            val o = ((v - 60f) * 255f / 175f).coerceIn(0f, 255f).toInt()
+            px[y * w + x] = Color.rgb(o, o, o)
+        }
+    }
+    bmp.setPixels(px, 0, w, 0, 0, w, h)
+    val out = ByteArrayOutputStream()
+    bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
     bmp.recycle()
     return out.toByteArray()
 }

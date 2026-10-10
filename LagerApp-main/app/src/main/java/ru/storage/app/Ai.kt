@@ -35,7 +35,17 @@ object AiCfg {
     }
 }
 
-data class AiItem(val name: String, val qty: String)
+/**
+ * qty — печатное количество; mark — отметка ручкой слева: "check" (галочка) / "cross" (крестик или вычеркнуто) / "none";
+ * qtyCrossed — печатное количество перечёркнуто; handQty — количество, дописанное ручкой.
+ */
+data class AiItem(
+    val name: String,
+    val qty: String,
+    val mark: String = "none",
+    val handQty: String = "",
+    val qtyCrossed: Boolean = false
+)
 data class PageResult(val sender: String, val order: String, val items: List<AiItem>)
 
 object Ai {
@@ -140,14 +150,23 @@ object Ai {
     }
 
     private fun prompt(page: Int, total: Int) = """
-        This is page $page of $total of a scanned goods-receipt document (delivery note / packing slip / order). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
+        This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
         The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
+        A warehouse worker has checked the printed lines with a pen (ticks, crosses, strike-throughs, handwritten numbers). Read these pen marks carefully.
         Extract data from THIS page only and answer with JSON only (no markdown, no comments):
-        {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "..."}]}
+        {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "...", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
         Rules:
-        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead or in the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger). Company name only, without street or city. If it is not on this page, use "none".
-        - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567) and may be anywhere on the page, also in a reference / note / barcode caption. If it is not on this page, use "none".
-        - items: every product line of this page. name = product name exactly as written (keep the original language). qty = the delivered / shipped number of units, as a number (columns like Menge, Anzahl, Stück, Liefermenge, Množství, Počet, ks, Aantal, Stuks). Do not use weight, price, article number, EAN or pallet number as qty. Skip table headers, subtotals, totals, addresses, footers and pallet / packaging summary lines. If the page has no products, use an empty array.
+        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. If it is not on this page, use "none".
+        - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"); then use it as order_number and do NOT list that line as an item. If it is not on this page, use "none".
+        - items: every GOODS line of this page, in the order of the page. Lines that are crossed out, struck through or have quantity 0 must be included too — never skip a goods line.
+          Skip lines that are not goods: freight (Frachtkosten, Fracht), pallets and pallet deposits (Euro-Palette, EW Pallets, Leihgebühr, Gutschrift), packaging, totals, weight summaries, table headers, addresses, footers.
+        - name: the product name exactly as written (keep the original language). If the name continues on the next line (for example "Nachfüller") or a size line follows (for example "20 kg", "500 ml", "2,5 Lt"), append it to the name. Do not include article number, expiry date (Verfallsdatum) or batch (Charge) in the name.
+        - qty: the PRINTED number of delivered units of this line (columns like Stück, Anz., Anzahl, Menge with unit ST / PCE / Sack / Eimer / Dose / Kan / Fla, aktuelle Liefermenge / Liefermenge, Množství, Počet, ks, Aantal, Stuks). Number only. Do not use the weight per unit, total weight (Gesamt in kg), price, article number, batch number, "bestellt" (ordered) or "offen" (open) columns when a delivered piece count exists.
+        - mark: the pen mark that belongs to this line (usually at the left of the line): "check" = a tick (✓, √ or a slash-like tick); "cross" = a hand-drawn X, or the whole line struck through with a pen (goods did not arrive); "none" = no pen mark.
+        - qty_crossed: true only if the printed quantity itself is crossed out or marked with an X / correction while the rest of the line is not struck through; otherwise false.
+        - hand_qty: if a quantity is handwritten with a pen next to this line or its quantity (for example "9 stk", "15"), give that number only; otherwise "".
+        - Ignore handwritten notes that do not belong to a line: names, dates, pallet counts like "6P" or "7P", signatures, scribbles, arrows.
+        If the page has no goods lines, use an empty items array.
     """.trimIndent()
 
     /** Достаём JSON из ответа; если ответ оборвался на длинной таблице — закрываем скобки. */
@@ -176,7 +195,14 @@ object Ai {
                 val it = arr.optJSONObject(i) ?: continue
                 val name = it.optString("name").trim()
                 if (name.isEmpty()) continue
-                items.add(AiItem(name, (it.opt("qty")?.toString() ?: "").trim()))
+                val q = (it.opt("qty")?.toString() ?: "").trim()
+                val hand = (it.opt("hand_qty")?.toString() ?: "").trim().let { h -> if (h.equals("null", true)) "" else h }
+                val mark = when (it.optString("mark").trim().lowercase()) {
+                    "check", "tick", "ok" -> "check"
+                    "cross", "x" -> "cross"
+                    else -> "none"
+                }
+                items.add(AiItem(name, q, mark, hand, it.optBoolean("qty_crossed", false)))
             }
         }
         val sender = o.optString("sender", "none").trim().ifBlank { "none" }
