@@ -53,6 +53,7 @@ object CloudSettings {
                 "driveToken" to DriveCfg.token(ctx),
                 "useFront" to prefs.useFront,
                 "formats" to prefs.formats.toList(),
+                "theme" to Ui.mode,
                 "updatedAt" to ts
             ),
             SetOptions.merge()
@@ -78,6 +79,7 @@ object CloudSettings {
             prefs.useFront = snap.getBoolean("useFront") ?: false
             prefs.formats = (snap.get("formats") as? List<*>)
                 ?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
+            snap.getString("theme")?.let { Ui.set(ctx, it) }
             sp(ctx).edit().putLong("updated", remote).apply()
             return true
         }
@@ -90,6 +92,7 @@ object CloudSettings {
 fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
     var section by rememberSaveable { mutableStateOf<String?>(null) }
     when (section) {
+        "Оформление" -> ThemeSettings(prefs) { section = null }
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
         "Распознавание документов" -> AiSettings { section = null }
@@ -101,6 +104,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
 private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
     BackHandler(onBack = onBack)
     val sections = listOf(
+        "Оформление" to "Светлая, тёмная или как в системе",
         "Сканер" to "Камера, типы штрих-кодов",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
         "Распознавание документов" to "ИИ для автоприёма: провайдер, ключ, модель, время ожидания"
@@ -347,6 +351,44 @@ private fun AiSettings(onBack: () -> Unit) {
         if (msg.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(msg, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun ThemeSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    BackHandler(onBack = onBack)
+    val options = listOf("light" to "Светлая", "dark" to "Тёмная", "system" to "Как в системе")
+
+    LaunchedEffect(Unit) {
+        try {
+            CloudSettings.pull(ctx, prefs)
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Оформление", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Тема сохраняется в аккаунте и на других устройствах.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        options.forEach { (key, label) ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    Ui.set(ctx, key)
+                    CloudSettings.save(ctx, prefs)
+                }.padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(selected = Ui.mode == key, onClick = {
+                    Ui.set(ctx, key)
+                    CloudSettings.save(ctx, prefs)
+                })
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+            }
         }
     }
 }

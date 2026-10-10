@@ -29,10 +29,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
+        Ui.load(applicationContext)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) { AppRoot() }
-            }
+            AppTheme { AppRoot() }
         }
     }
 
@@ -68,9 +67,11 @@ fun AppRoot() {
     val context = LocalContext.current
     val prefs = remember { Prefs(context) }
     val profile = remember { UserProfile("Admin", "", "", "") }
-    var loggedIn by rememberSaveable { mutableStateOf(false) }
-    var userLogin by rememberSaveable { mutableStateOf("admin") }
-    Session.login = userLogin
+    // вход запоминается до выхода из аккаунта (кнопка в Профиле)
+    val sessionSp = remember { context.getSharedPreferences("session", Context.MODE_PRIVATE) }
+    var userLogin by rememberSaveable { mutableStateOf(sessionSp.getString("login", "") ?: "") }
+    var loggedIn by rememberSaveable { mutableStateOf(userLogin.isNotEmpty()) }
+    Session.login = userLogin.ifBlank { "admin" }
     // после входа сверяем настройки аккаунта с Firebase
     LaunchedEffect(loggedIn) {
         if (loggedIn) {
@@ -88,56 +89,20 @@ fun AppRoot() {
             ) { Incoming.clear() }
             inc != null && Incoming.mode == "name" -> NameReceiveScreen(inc) { Incoming.clear() }
             else -> {
-                MainScreen(prefs = prefs, profile = profile, onLogout = { loggedIn = false })
+                MainScreen(prefs = prefs, profile = profile, onLogout = {
+                    sessionSp.edit().remove("login").apply()
+                    loggedIn = false
+                })
                 if (inc != null) IncomingChoiceDialog(inc)
             }
         }
     } else {
-        LoginScreen(onSuccess = { userLogin = it.lowercase(); loggedIn = true })
-    }
-}
-
-@Composable
-fun LoginScreen(onSuccess: (String) -> Unit) {
-    var login by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Lager", style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.height(32.dp))
-        OutlinedTextField(
-            value = login,
-            onValueChange = { login = it },
-            label = { Text("Логин") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Пароль") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth()
-        )
-        error?.let {
-            Spacer(Modifier.height(12.dp))
-            Text(it, color = MaterialTheme.colorScheme.error)
-        }
-        Spacer(Modifier.height(24.dp))
-        Button(
-            onClick = {
-                if (login.trim() == "admin" && password == "admin") onSuccess(login.trim())
-                else error = "Неверный логин или пароль"
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Войти") }
+        LoginScreen(onSuccess = {
+            val l = it.lowercase()
+            sessionSp.edit().putString("login", l).apply()
+            userLogin = l
+            loggedIn = true
+        })
     }
 }
 
