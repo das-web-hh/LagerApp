@@ -152,8 +152,10 @@ fun bitmapToGrayJpeg(bmp: Bitmap): ByteArray {
     return out.toByteArray()
 }
 
+private fun stretchCh(v: Int, k: Float): Int = ((v * k - 60f) * 255f / 175f).coerceIn(0f, 255f).toInt()
+
 /**
- * Серая картинка без теней: оцениваем «фон» (бумагу) блоками и делим на него.
+ * Картинка без теней (цвет сохраняется — пометки ручкой обычно синие, печать чёрная): оцениваем «фон» (бумагу) блоками и делим на него.
  * Тень от руки/телефона на фото перестаёт заливать текст чёрным (глобальный порог Оцу так и делал).
  */
 fun bitmapToCleanJpeg(bmp: Bitmap): ByteArray {
@@ -193,9 +195,13 @@ fun bitmapToCleanJpeg(bmp: Bitmap): ByteArray {
             val top = bg[y0 * gw + x0] * (1 - tx) + bg[y0 * gw + x1] * tx
             val bot = bg[y1 * gw + x0] * (1 - tx) + bg[y1 * gw + x1] * tx
             val back = maxOf(top * (1 - ty) + bot * ty, 1f)
-            val v = gray[y * w + x] * 255f / back
-            val o = ((v - 60f) * 255f / 175f).coerceIn(0f, 255f).toInt()
-            px[y * w + x] = Color.rgb(o, o, o)
+            val c = px[y * w + x]
+            val k = 255f / back
+            px[y * w + x] = Color.rgb(
+                stretchCh((c shr 16) and 0xFF, k),
+                stretchCh((c shr 8) and 0xFF, k),
+                stretchCh(c and 0xFF, k)
+            )
         }
     }
     bmp.setPixels(px, 0, w, 0, 0, w, h)

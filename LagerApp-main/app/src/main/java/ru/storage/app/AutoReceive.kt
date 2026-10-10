@@ -289,8 +289,7 @@ fun checkFacts(job: AutoJob): String? {
     val rows = job.items.filter { it.name.trim().isNotEmpty() }
     if (rows.isEmpty()) return "Нет товаров"
     for (r in rows) {
-        val fact = normalizeQty(r.fact)
-        if (fact.isEmpty()) return "Укажите фактическое количество: ${r.name.trim()} (0 — если не привезли)"
+        val fact = normalizeQty(r.fact).ifEmpty { "0" }
         val defect = normalizeQty(r.defect).ifEmpty { "0" }
         if (defect.toDouble() > fact.toDouble()) return "Брак больше фактического количества: ${r.name.trim()}"
     }
@@ -316,8 +315,7 @@ suspend fun saveJob(
         if (name.isEmpty()) continue
         val pid = withContext(Dispatchers.IO) { r.productId.ifEmpty { db.findByName(name)?.id ?: "" } }
         if (nameMode) {
-            val fact = normalizeQty(r.fact)
-            if (fact.isEmpty()) return "Укажите фактическое количество: $name (0 — если не привезли)"
+            val fact = normalizeQty(r.fact).ifEmpty { "0" }
             val defect = normalizeQty(r.defect).ifEmpty { "0" }
             if (defect.toDouble() > fact.toDouble()) return "Брак больше фактического количества: $name"
             val plan = if (r.extra) "0" else normalizeQty(r.qty).ifEmpty { "0" }
@@ -396,49 +394,54 @@ private fun AutoRowEditor(row: ItemRow, editable: Boolean, onRemove: () -> Unit)
             )
             TextButton(onClick = onRemove, enabled = editable) { Text("✕") }
         }
-        val doc = if (row.printed.isNotEmpty()) " (в документе: ${row.printed})" else ""
+        val bold = MaterialTheme.typography.bodyMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+        val doc = if (row.printed.isNotEmpty()) row.printed else "—"
         when (row.status) {
-            "ok" -> Text("✓ пришло", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-            "missing" -> Text("✕ не пришло$doc", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            "ok" -> Text("✓ ПРИШЛО · по документу $doc", style = bold, color = MaterialTheme.colorScheme.primary)
+            "missing" -> Text("✕ НЕ ПРИШЛО · по документу $doc · принято 0", style = bold, color = MaterialTheme.colorScheme.error)
             "changed" -> Text(
-                if (row.qty.isBlank()) "✎ количество перечёркнуто — впишите$doc" else "✎ другое количество$doc",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary
+                if (row.qty.isBlank()) "✎ количество перечёркнуто — впишите · по документу $doc"
+                else "✎ ДРУГОЕ КОЛИЧЕСТВО · по документу $doc · принято ${row.qty}",
+                style = bold, color = MaterialTheme.colorScheme.tertiary
             )
-            "nomark" -> Text("без отметки — проверьте", style = MaterialTheme.typography.bodySmall)
+            "nomark" -> Text("без отметки — проверьте · по документу $doc", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
-/** Строка приёма по имени: название, план (из документа), факт и брак — вручную. */
 @Composable
-private fun NameRowEditor(row: ItemRow, editable: Boolean, onRemove: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                row.name, { row.name = it }, enabled = editable,
-                label = { Text(if (row.extra) "Название (нет в плане)" else "Название") },
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(onClick = onRemove, enabled = editable) { Text("✕") }
-        }
-        Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedTextField(
-                row.qty, { row.qty = it }, enabled = editable && !row.extra, singleLine = true,
-                label = { Text("План") }, modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-            )
-            OutlinedTextField(
-                row.fact, { row.fact = it }, enabled = editable, singleLine = true,
-                label = { Text("Факт") }, modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-            )
-            OutlinedTextField(
-                row.defect, { row.defect = it }, enabled = editable, singleLine = true,
-                label = { Text("Брак") }, modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-            )
-        }
+private fun DocFields(job: AutoJob, editable: Boolean) {
+    OutlinedTextField(
+        job.sender, { job.sender = it }, label = { Text("Отправитель (организация)") },
+        enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        job.order, { job.order = it }, label = { Text("Номер заказа (ЕБ + 7 цифр)") },
+        enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        job.stamp, { job.stamp = it }, label = { Text("Дата и время (из имени файла)") },
+        enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
+    )
+}
+
+/** В приёме по имени данные документа свёрнуты в одну строку, чтобы колесу хватало места. */
+@Composable
+private fun CollapsedDocFields(job: AutoJob, editable: Boolean) {
+    var open by remember { mutableStateOf(false) }
+    val sum = listOf(job.sender, job.order, job.stamp).map { it.trim() }
+        .filter { it.isNotEmpty() && !it.equals("none", true) }.joinToString(" · ")
+    OutlinedButton(onClick = { open = !open }, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            if (open) "Скрыть данные документа" else "Данные: ${sum.ifEmpty { "заполнить" }}",
+            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+    }
+    if (open) {
+        Spacer(Modifier.height(8.dp))
+        DocFields(job, editable)
     }
 }
 
@@ -515,6 +518,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     var forced by remember(f.path) { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var showAdd by remember { mutableStateOf(false) }
+    var addTick by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(f.path, nameMode) { job.setMode(nameMode) }
 
@@ -532,7 +536,11 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         checked = true
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+    Column(
+        Modifier.fillMaxSize()
+            .then(if (nameMode) Modifier else Modifier.verticalScroll(rememberScrollState()))
+            .padding(16.dp)
+    ) {
         Text(if (nameMode) "Приём по имени" else "Автоприём", style = MaterialTheme.typography.headlineSmall)
         Text(f.name, style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(12.dp))
@@ -578,7 +586,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         }
         Spacer(Modifier.height(8.dp))
         job.pages.forEachIndexed { i, p ->
-            Text(
+            if (!nameMode || p.status.startsWith("ошибка")) Text(
                 "Лист ${i + 1} из ${job.pages.size} — ${p.status}",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (p.status.startsWith("ошибка")) MaterialTheme.colorScheme.error
@@ -588,26 +596,13 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
 
         val editable = !job.running && !job.saved && !job.saving
         Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
-            job.sender, { job.sender = it }, label = { Text("Отправитель (организация)") },
-            enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            job.order, { job.order = it }, label = { Text("Номер заказа (ЕБ + 7 цифр)") },
-            enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            job.stamp, { job.stamp = it }, label = { Text("Дата и время (из имени файла)") },
-            enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
-        )
+        if (nameMode) CollapsedDocFields(job, editable) else DocFields(job, editable)
 
         Spacer(Modifier.height(16.dp))
         Text("Товары: ${job.items.size}", style = MaterialTheme.typography.titleSmall)
         if (nameMode) {
             Text(
-                "План — по документу (все строки подряд). Факт (сколько привезли) и брак введите вручную.",
+                "Тап по строке — +1 к факту, тап по числу справа — ввод барабаном, свайп влево — «Брак» и «Удалить», долгое нажатие — правка.",
                 style = MaterialTheme.typography.bodySmall
             )
         } else {
@@ -616,15 +611,17 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
                 style = MaterialTheme.typography.bodySmall
             )
         }
-        job.items.toList().forEach { row ->
-            key(row) {
-                if (nameMode) NameRowEditor(row, editable) { job.items.remove(row) }
-                else AutoRowEditor(row, editable) { job.items.remove(row) }
+        if (nameMode) {
+            CountWheelList(job.items, editable, Modifier.weight(1f), addTick)
+            if (editable) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("+ Добавить товар")
+                }
             }
-        }
-        if (nameMode && editable) {
-            OutlinedButton(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("+ Добавить товар")
+        } else {
+            job.items.toList().forEach { row ->
+                key(row) { AutoRowEditor(row, editable) { job.items.remove(row) } }
             }
         }
 
@@ -677,6 +674,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             onDismiss = { showAdd = false },
             onAdd = { name, pid ->
                 job.items.add(ItemRow(name, "0", extra = true, productId = pid))
+                addTick++
                 showAdd = false
             }
         )
