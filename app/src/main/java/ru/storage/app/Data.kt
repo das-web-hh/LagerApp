@@ -23,7 +23,14 @@ data class Product(
     val updatedAt: Long
 )
 
-data class ReceiptItem(val productId: String, val name: String, val qty: String)
+/** qty — фактическое количество; plan — по документу ("" если плана нет), defect — брак ("" если нет). */
+data class ReceiptItem(
+    val productId: String,
+    val name: String,
+    val qty: String,
+    val plan: String = "",
+    val defect: String = ""
+)
 
 data class Receipt(
     val id: String,
@@ -65,7 +72,12 @@ fun jsonToList(s: String?): List<String> {
 
 fun itemsToJson(l: List<ReceiptItem>): String {
     val a = JSONArray()
-    l.forEach { a.put(JSONObject().put("id", it.productId).put("name", it.name).put("qty", it.qty)) }
+    l.forEach {
+        a.put(
+            JSONObject().put("id", it.productId).put("name", it.name).put("qty", it.qty)
+                .put("plan", it.plan).put("defect", it.defect)
+        )
+    }
     return a.toString()
 }
 
@@ -75,7 +87,10 @@ fun jsonToItems(s: String?): List<ReceiptItem> {
         val a = JSONArray(s)
         List(a.length()) {
             val o = a.getJSONObject(it)
-            ReceiptItem(o.optString("id"), o.optString("name"), o.optString("qty"))
+            ReceiptItem(
+                o.optString("id"), o.optString("name"), o.optString("qty"),
+                o.optString("plan"), o.optString("defect")
+            )
         }
     } catch (e: Exception) {
         emptyList()

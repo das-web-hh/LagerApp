@@ -151,7 +151,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
             original = r
             sender = r.sender; order = r.orderNo; receiver = r.receiver
             time = fmtTime(r.receivedAt)
-            items.clear(); items.addAll(r.items.map { EditItem(it.productId, it.name, it.qty) })
+            items.clear(); items.addAll(r.items.map { EditItem(it.productId, it.name, it.qty, it.plan, it.defect) })
             photos.clear(); photos.addAll(r.photos)
             invoices.clear(); invoices.addAll(r.invoices)
         }
@@ -177,7 +177,15 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         Text("Товары", style = MaterialTheme.typography.titleSmall)
         items.toList().forEach { l ->
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(l.name, modifier = Modifier.weight(1f))
+                Column(Modifier.weight(1f)) {
+                    Text(l.name)
+                    if (l.plan.isNotBlank()) {
+                        Text(
+                            "план ${l.plan}" + if (l.defect.isNotBlank() && l.defect != "0") " · брак ${l.defect}" else "",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = l.qty, onValueChange = { l.qty = it }, singleLine = true,
                     label = { Text("Кол-во") },
@@ -226,7 +234,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
                     val r = old.copy(
                         sender = sender.trim(), orderNo = order.trim(), receiver = receiver.trim(),
                         receivedAt = t,
-                        items = items.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.')) },
+                        items = items.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.'), it.plan, it.defect) },
                         photos = ph, invoices = inv
                     )
                     scope.launch(Dispatchers.IO) {

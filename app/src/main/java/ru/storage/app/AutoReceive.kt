@@ -2,14 +2,17 @@ package ru.storage.app
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -101,9 +104,15 @@ class PageState {
     var ok by mutableStateOf(false)
 }
 
-class ItemRow(name: String, qty: String) {
+/**
+ * Строка списка. qty — количество по документу (в автоприёме — принятое, в приёме по имени — плановое).
+ * fact и defect вводятся вручную в приёме по имени; extra — товар добавлен вручную (нет в плане).
+ */
+class ItemRow(name: String, qty: String, val extra: Boolean = false, val productId: String = "") {
     var name by mutableStateOf(name)
     var qty by mutableStateOf(qty)
+    var fact by mutableStateOf("")
+    var defect by mutableStateOf("")
 }
 
 /**
@@ -200,8 +209,10 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
         }
         sender = s
         order = o
+        val extras = items.filter { it.extra }
         items.clear()
         items.addAll(list)
+        items.addAll(extras)
     }
 }
 
@@ -226,18 +237,217 @@ fun stampMillis(stamp: String): Long? = when (stamp.length) {
     else -> null
 }
 
+/** Проверка ввода в приёме по имени: факт указан у каждой позиции, брак не больше факта. */
+fun checkFacts(job: AutoJob): String? {
+    val rows = job.items.filter { it.name.trim().isNotEmpty() }
+    if (rows.isEmpty()) return "Нет товаров"
+    for (r in rows) {
+        val fact = normalizeQty(r.fact)
+        if (fact.isEmpty()) return "Укажите фактическое количество: ${r.name.trim()} (0 — если не привезли)"
+        val defect = normalizeQty(r.defect).ifEmpty { "0" }
+        if (defect.toDouble() > fact.toDouble()) return "Брак больше фактического количества: ${r.name.trim()}"
+    }
+    return null
+}
+
+/**
+ * Сохранение приёма: товары — в историю/Firebase, исходный файл (сырой, без обработки) — на Google Диск.
+ * Возвращает текст ошибки или null, если всё сохранено.
+ */
+suspend fun saveJob(
+    ctx: Context,
+    db: ProductDb,
+    job: AutoJob,
+    f: IncomingFile,
+    receiver: String,
+    nameMode: Boolean
+): String? {
+    if (job.saved || job.saving) return null
+    val rows = ArrayList<ReceiptItem>()
+    for (r in job.items) {
+        val name = r.name.trim()
+        if (name.isEmpty()) continue
+        val pid = withContext(Dispatchers.IO) { r.productId.ifEmpty { db.findByName(name)?.id ?: "" } }
+        if (nameMode) {
+            val fact = normalizeQty(r.fact)
+            if (fact.isEmpty()) return "Укажите фактическое количество: $name (0 — если не привезли)"
+            val defect = normalizeQty(r.defect).ifEmpty { "0" }
+            if (defect.toDouble() > fact.toDouble()) return "Брак больше фактического количества: $name"
+            val plan = if (r.extra) "0" else normalizeQty(r.qty).ifEmpty { "0" }
+            rows.add(ReceiptItem(pid, name, fact, plan, defect))
+        } else {
+            val qty = normalizeQty(r.qty)
+            if (qty.isEmpty() || !qtyValid(qty)) return "Укажите количество (число больше нуля) у каждого товара"
+            rows.add(ReceiptItem(pid, name, qty))
+        }
+    }
+    if (rows.isEmpty()) return "Нет товаров для сохранения"
+
+    val order = Ai.normalizeOrder(job.order)
+    job.saving = true
+    try {
+        // Номер заказа — главный признак: тот же заказ второй раз не сохраняем
+        if (order != "none") {
+            val d2 = try {
+                Cloud.findDuplicate(db, order, "", "")
+            } catch (e: Exception) {
+                null
+            }
+            if (d2 != null) {
+                return "Заказ $order уже принят ${fmtTime(d2.receipt.receivedAt)} — повторно не сохраняю."
+            }
+        }
+        val now = System.currentTimeMillis()
+        val at = stampMillis(job.stamp.trim()) ?: now
+        val sender = job.sender.trim().let { if (it.equals("none", true)) "" else it }
+        val stamp = job.stamp.trim().let { if (it.length == 16) it else "" }
+        withContext(Dispatchers.IO) {
+            val inv = Media.importFile(ctx, File(f.path), db, "IN")
+            val r = Receipt(
+                id = UUID.randomUUID().toString(),
+                sender = sender,
+                orderNo = if (order == "none") "" else order,
+                receivedAt = at,
+                receiver = receiver,
+                items = rows,
+                photos = emptyList(),
+                invoices = listOfNotNull(inv),
+                updatedAt = now,
+                fileName = f.name,
+                stamp = stamp
+            )
+            Cloud.saveReceipt(db, r)
+            Media.uploadPending(ctx, db)
+        }
+        job.saved = true
+        return null
+    } finally {
+        job.saving = false
+    }
+}
+
 @Composable
-fun AutoReceiveScreen(f: IncomingFile, receiver: String, onClose: () -> Unit) {
+private fun AutoRowEditor(row: ItemRow, editable: Boolean, onRemove: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            row.name, { row.name = it }, enabled = editable,
+            label = { Text("Название") }, modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(6.dp))
+        OutlinedTextField(
+            row.qty, { row.qty = it }, enabled = editable, singleLine = true,
+            label = { Text("Кол-во") }, modifier = Modifier.width(88.dp)
+        )
+        TextButton(onClick = onRemove, enabled = editable) { Text("✕") }
+    }
+}
+
+/** Строка приёма по имени: название, план (из документа), факт и брак — вручную. */
+@Composable
+private fun NameRowEditor(row: ItemRow, editable: Boolean, onRemove: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                row.name, { row.name = it }, enabled = editable,
+                label = { Text(if (row.extra) "Название (нет в плане)" else "Название") },
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onRemove, enabled = editable) { Text("✕") }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(
+                row.qty, { row.qty = it }, enabled = editable && !row.extra, singleLine = true,
+                label = { Text("План") }, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+            OutlinedTextField(
+                row.fact, { row.fact = it }, enabled = editable, singleLine = true,
+                label = { Text("Факт") }, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+            OutlinedTextField(
+                row.defect, { row.defect = it }, enabled = editable, singleLine = true,
+                label = { Text("Брак") }, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddItemDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
+    val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    var name by remember { mutableStateOf("") }
+    var pid by remember { mutableStateOf("") }
+    var sugg by remember { mutableStateOf(emptyList<Product>()) }
+
+    LaunchedEffect(name) {
+        sugg = if (name.trim().length < MIN_SEARCH_CHARS || pid.isNotEmpty()) emptyList()
+        else withContext(Dispatchers.IO) { db.search(name, 6) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Добавить товар") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    name, { name = it; pid = "" }, label = { Text("Название товара") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Введите от $MIN_SEARCH_CHARS символов, чтобы найти товар в каталоге, или впишите новое название.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                sugg.forEach { p ->
+                    Text(
+                        p.name,
+                        Modifier.fillMaxWidth().clickable {
+                            name = p.name
+                            pid = p.id
+                            sugg = emptyList()
+                        }.padding(vertical = 10.dp)
+                    )
+                    HorizontalDivider()
+                }
+            }
+        },
+        confirmButton = {
+            Button(enabled = name.isNotBlank(), onClick = { onAdd(name.trim(), pid) }) { Text("Добавить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
+}
+
+/**
+ * mode = "auto" — автоприём (сохранение сразу после распознавания);
+ * mode = "name" — приём по имени: распознанное количество = план, факт и брак вводятся вручную,
+ * кнопка «Далее» ведёт на итоговое окно (печать и сохранение).
+ */
+@Composable
+fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     val scope = rememberCoroutineScope()
+    val nameMode = mode == "name"
+    val job = remember(f.path) { AutoReceiveHolder.get(ctx, f) }
+    var step by remember(f.path) { mutableIntStateOf(0) }
+
+    if (nameMode && step == 1) {
+        NameSummaryScreen(job, f, receiver, onBack = { step = 0 }, onClose = onClose)
+        return
+    }
+
     BackHandler(onBack = onClose)
     val ready = AiCfg.ready(ctx)
-    val job = remember(f.path) { AutoReceiveHolder.get(ctx, f) }
     var checked by remember(f.path) { mutableStateOf(false) }
     var dup by remember(f.path) { mutableStateOf<Dup?>(null) }
     var forced by remember(f.path) { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var showAdd by remember { mutableStateOf(false) }
 
     // До распознавания: не обрабатывался ли этот файл раньше (имя файла, затем дата и время)
     LaunchedEffect(f.path) {
@@ -254,7 +464,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, onClose: () -> Unit) {
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Автоприём", style = MaterialTheme.typography.headlineSmall)
+        Text(if (nameMode) "Приём по имени" else "Автоприём", style = MaterialTheme.typography.headlineSmall)
         Text(f.name, style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(12.dp))
 
@@ -326,20 +536,21 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, onClose: () -> Unit) {
 
         Spacer(Modifier.height(16.dp))
         Text("Товары: ${job.items.size}", style = MaterialTheme.typography.titleSmall)
+        if (nameMode) {
+            Text(
+                "План — по документу. Факт (сколько привезли) и брак введите вручную.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
         job.items.toList().forEach { row ->
             key(row) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        row.name, { row.name = it }, enabled = editable,
-                        label = { Text("Название") }, modifier = Modifier.weight(1f)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    OutlinedTextField(
-                        row.qty, { row.qty = it }, enabled = editable, singleLine = true,
-                        label = { Text("Кол-во") }, modifier = Modifier.width(88.dp)
-                    )
-                    TextButton(onClick = { job.items.remove(row) }, enabled = editable) { Text("✕") }
-                }
+                if (nameMode) NameRowEditor(row, editable) { job.items.remove(row) }
+                else AutoRowEditor(row, editable) { job.items.remove(row) }
+            }
+        }
+        if (nameMode && editable) {
+            OutlinedButton(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("+ Добавить товар")
             }
         }
 
@@ -350,70 +561,31 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, onClose: () -> Unit) {
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.height(8.dp))
-        } else if (!job.running && job.pages.isNotEmpty() && job.items.isNotEmpty()) {
+        } else if (!job.running && job.pages.isNotEmpty() && (job.items.isNotEmpty() || nameMode)) {
             if (error.isNotBlank()) {
                 Text(error, color = MaterialTheme.colorScheme.error)
                 Spacer(Modifier.height(8.dp))
             }
-            Button(
-                enabled = !job.saving,
-                modifier = Modifier.fillMaxWidth(),
-                onClick = {
-                    scope.launch {
-                        error = ""
-                        val rows = job.items.map { it.name.trim() to normalizeQty(it.qty) }.filter { it.first.isNotEmpty() }
-                        if (rows.isEmpty()) {
-                            error = "Нет товаров для сохранения"
-                            return@launch
-                        }
-                        if (rows.any { it.second.isEmpty() || !qtyValid(it.second) }) {
-                            error = "Укажите количество (число больше нуля) у каждого товара"
-                            return@launch
-                        }
-                        val order = Ai.normalizeOrder(job.order)
-                        job.saving = true
-                        try {
-                            // Номер заказа — главный признак: тот же заказ второй раз не сохраняем
-                            if (order != "none") {
-                                val d2 = try {
-                                    Cloud.findDuplicate(db, order, "", "")
-                                } catch (e: Exception) {
-                                    null
-                                }
-                                if (d2 != null) {
-                                    error = "Заказ $order уже принят ${fmtTime(d2.receipt.receivedAt)} — повторно не сохраняю."
-                                    return@launch
-                                }
-                            }
-                            val now = System.currentTimeMillis()
-                            val at = stampMillis(job.stamp.trim()) ?: now
-                            val sender = job.sender.trim().let { if (it.equals("none", true)) "" else it }
-                            val stamp = job.stamp.trim().let { if (it.length == 16) it else "" }
-                            withContext(Dispatchers.IO) {
-                                val inv = Media.importFile(ctx, File(f.path), db, "IN")
-                                val r = Receipt(
-                                    id = UUID.randomUUID().toString(),
-                                    sender = sender,
-                                    orderNo = if (order == "none") "" else order,
-                                    receivedAt = at,
-                                    receiver = receiver,
-                                    items = rows.map { ReceiptItem(db.findByName(it.first)?.id ?: "", it.first, it.second) },
-                                    photos = emptyList(),
-                                    invoices = listOfNotNull(inv),
-                                    updatedAt = now,
-                                    fileName = f.name,
-                                    stamp = stamp
-                                )
-                                Cloud.saveReceipt(db, r)
-                                Media.uploadPending(ctx, db)
-                            }
-                            job.saved = true
-                        } finally {
-                            job.saving = false
+            if (nameMode) {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        val e = checkFacts(job)
+                        if (e != null) error = e else {
+                            error = ""
+                            step = 1
                         }
                     }
-                }
-            ) { Text(if (job.saving) "Сохранение…" else "Сохранить приём") }
+                ) { Text("Далее") }
+            } else {
+                Button(
+                    enabled = !job.saving,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        scope.launch { error = saveJob(ctx, db, job, f, receiver, false) ?: "" }
+                    }
+                ) { Text(if (job.saving) "Сохранение…" else "Сохранить приём") }
+            }
             Spacer(Modifier.height(8.dp))
         }
 
@@ -424,5 +596,15 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, onClose: () -> Unit) {
             Spacer(Modifier.height(8.dp))
         }
         OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
+    }
+
+    if (showAdd) {
+        AddItemDialog(
+            onDismiss = { showAdd = false },
+            onAdd = { name, pid ->
+                job.items.add(ItemRow(name, "0", extra = true, productId = pid))
+                showAdd = false
+            }
+        )
     }
 }

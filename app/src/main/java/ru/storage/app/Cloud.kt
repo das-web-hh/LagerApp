@@ -91,7 +91,10 @@ object Cloud {
         "receivedAt" to r.receivedAt,
         "receiver" to r.receiver,
         "items" to r.items.map {
-            hashMapOf("productId" to it.productId, "name" to it.name, "qty" to it.qty)
+            hashMapOf(
+                "productId" to it.productId, "name" to it.name, "qty" to it.qty,
+                "plan" to it.plan, "defect" to it.defect
+            )
         },
         "photos" to r.photos,
         "invoices" to r.invoices,
@@ -143,7 +146,9 @@ object Cloud {
                 ReceiptItem(
                     m["productId"]?.toString() ?: "",
                     m["name"]?.toString() ?: "",
-                    m["qty"]?.toString() ?: ""
+                    m["qty"]?.toString() ?: "",
+                    m["plan"]?.toString() ?: "",
+                    m["defect"]?.toString() ?: ""
                 )
             }
         } ?: emptyList()

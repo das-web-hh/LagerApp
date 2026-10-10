@@ -30,7 +30,13 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 /** Позиция приёмки: товар + количество (используется и при приёме, и в карточке партии). */
-class EditItem(val productId: String, val name: String, initial: String) {
+class EditItem(
+    val productId: String,
+    val name: String,
+    initial: String,
+    val plan: String = "",
+    val defect: String = ""
+) {
     var qty by mutableStateOf(initial)
 }
 
@@ -141,7 +147,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                 val r = Receipt(
                     id = UUID.randomUUID().toString(),
                     sender = sender.trim(), orderNo = order.trim(), receivedAt = now, receiver = receiver,
-                    items = lines.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.')) },
+                    items = lines.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.'), it.plan, it.defect) },
                     photos = photos, invoices = invoices, updatedAt = now
                 )
                 scope.launch(Dispatchers.IO) {

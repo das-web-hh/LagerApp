@@ -121,15 +121,16 @@ object Media {
         }
     }
 
-    /** Файл из кэша приложения (например, присланный скан) → в медиа-папку, в очередь отправки на Диск. */
+    /** Файл из кэша приложения (присланный скан) → в медиа-папку «как есть», без сжатия; в очередь на Диск. */
     fun importFile(ctx: Context, src: File, db: ProductDb, kind: String): String? {
         return try {
-            val isImg = isImage(src.name)
-            val name = if (isImg) newPhotoName(kind)
-            else kind + "-" + UUID.randomUUID().toString().take(8) + "_" + safe(src.name)
-            val target = file(ctx, name)
-            src.copyTo(target, overwrite = true)
-            if (isImg) shrink(target)
+            val name = if (isImage(src.name)) {
+                kind + "-" + UUID.randomUUID().toString().replace("-", "").take(14) + "." +
+                    src.extension.lowercase().ifBlank { "jpg" }
+            } else {
+                kind + "-" + UUID.randomUUID().toString().take(8) + "_" + safe(src.name)
+            }
+            src.copyTo(file(ctx, name), overwrite = true)
             db.addUpload(name)
             name
         } catch (e: Exception) {

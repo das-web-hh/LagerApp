@@ -35,7 +35,7 @@ object Incoming {
     } ?: uri.lastPathSegment?.substringAfterLast('/')
 
     /** Копия файла во внутреннем кэше (доступ по content:// может пропасть). Вызывать не в главном потоке. */
-    fun accept(ctx: Context, uri: Uri) {
+    fun accept(ctx: Context, uri: Uri, startMode: String? = null) {
         try {
             val app = ctx.applicationContext
             val name = displayName(app, uri) ?: "file.pdf"
@@ -43,7 +43,7 @@ object Incoming {
             val target = File(dir, name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
             val ins = app.contentResolver.openInputStream(uri) ?: return
             ins.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
-            mode = null
+            mode = startMode
             file = IncomingFile(name, target.path)
         } catch (e: Exception) {
         }

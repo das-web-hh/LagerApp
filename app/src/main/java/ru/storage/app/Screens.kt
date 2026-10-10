@@ -119,8 +119,10 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     var mode by rememberSaveable { mutableStateOf<String?>(null) }
     val current = mode
     val ctx = LocalContext.current
+    var pickMode by remember { mutableStateOf("auto") }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) thread { Incoming.accept(ctx, uri) }
+        val m = pickMode
+        if (uri != null) thread { Incoming.accept(ctx, uri, m) }
     }
 
     if (current == "Ручной") {
@@ -140,7 +142,17 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         listOf("Ручной", "По наименованию", "Автоприём").forEach { name ->
             FilledTonalButton(
                 onClick = {
-                    if (name == "Автоприём") pdfPicker.launch(arrayOf("application/pdf")) else mode = name
+                    when (name) {
+                        "Автоприём" -> {
+                            pickMode = "auto"
+                            pdfPicker.launch(arrayOf("application/pdf", "image/jpeg", "image/png"))
+                        }
+                        "По наименованию" -> {
+                            pickMode = "name"
+                            pdfPicker.launch(arrayOf("application/pdf", "image/jpeg", "image/png"))
+                        }
+                        else -> mode = name
+                    }
                 },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             ) { Text(name) }

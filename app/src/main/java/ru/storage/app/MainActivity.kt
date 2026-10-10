@@ -85,9 +85,11 @@ fun AppRoot() {
         val inc = Incoming.file
         when {
             inc != null && Incoming.mode == "auto" -> AutoReceiveScreen(
-                inc, "${profile.firstName} ${profile.lastName}".trim()
+                inc, "${profile.firstName} ${profile.lastName}".trim(), "auto"
             ) { Incoming.clear() }
-            inc != null && Incoming.mode == "name" -> NameReceiveScreen(inc) { Incoming.clear() }
+            inc != null && Incoming.mode == "name" -> AutoReceiveScreen(
+                inc, "${profile.firstName} ${profile.lastName}".trim(), "name"
+            ) { Incoming.clear() }
             else -> {
                 MainScreen(prefs = prefs, profile = profile, onLogout = {
                     sessionSp.edit().remove("login").apply()
