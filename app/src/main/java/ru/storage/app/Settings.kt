@@ -109,7 +109,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Оформление" to "Светлая, тёмная или как в системе",
         "Сканер" to "Камера, типы штрих-кодов",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
-        "Распознавание документов" to "ИИ для автоприёма: провайдер, ключ, модель, время ожидания",
+        "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
         "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
         "Вибрация" to "Тап и прокрутка: сила и длительность"
     )
@@ -273,20 +273,20 @@ private fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
 private fun AiSettings(onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val labels = listOf("Claude (Anthropic)", "Gemini (Google)", "OpenAI-совместимый")
-    val keys = listOf("claude", "gemini", "openai")
-    var provider by remember { mutableStateOf(AiCfg.provider(ctx)) }
-    var key by remember { mutableStateOf(AiCfg.key(ctx)) }
-    var model by remember { mutableStateOf(AiCfg.rawModel(ctx)) }
-    var base by remember { mutableStateOf(AiCfg.baseUrl(ctx)) }
+    var tick by remember { mutableIntStateOf(0) }
+    val keys = remember(tick) { AiKeys.list(ctx) }
+    val activeId = remember(tick) { AiKeys.activeId(ctx) }
+    var editing by remember { mutableStateOf<AiKey?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<AiKey?>(null) }
     var timeout by remember { mutableStateOf(AiCfg.timeoutSec(ctx).toString()) }
     var attempts by remember { mutableStateOf(AiCfg.attempts(ctx).toString()) }
     var msg by remember { mutableStateOf("") }
     BackHandler(onBack = onBack)
 
     fun save() {
-        AiCfg.save(
-            ctx, provider, key, model, base,
+        AiCfg.saveCommon(
+            ctx,
             timeout.toIntOrNull()?.coerceIn(5, 600) ?: 60,
             attempts.toIntOrNull()?.coerceIn(1, 8) ?: 3
         )
@@ -295,33 +295,38 @@ private fun AiSettings(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Распознавание документов", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Ключ хранится только на этом телефоне и в Firebase не отправляется.",
+            "Ключи хранятся только на этом телефоне и в Firebase не отправляются.",
             style = MaterialTheme.typography.bodySmall
         )
         Spacer(Modifier.height(16.dp))
-        Text("Провайдер ИИ", style = MaterialTheme.typography.titleSmall)
-        DropdownField(labels[keys.indexOf(provider).coerceAtLeast(0)], labels) { l ->
-            provider = keys[labels.indexOf(l)]
+        Text("API-ключи", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Отмеченный ключ используется для распознавания. Если на листе ошибка, кнопка «Повторить» предложит другой ключ.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(4.dp))
+        if (keys.isEmpty()) {
+            Text("Ключей пока нет.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 8.dp))
+        }
+        keys.forEach { k ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = k.id == activeId, onClick = { AiKeys.setActive(ctx, k.id); tick++ })
+                Column(Modifier.weight(1f).clickable { AiKeys.setActive(ctx, k.id); tick++ }) {
+                    Text(AiKeys.describe(k), style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        AiKeys.providerName(k.provider) + " · " + k.model.ifBlank { AiCfg.defaultModel(k.provider) },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                TextButton(onClick = { editing = k }) { Text("✎") }
+                TextButton(onClick = { deleting = k }) { Text("✕") }
+            }
+            HorizontalDivider()
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            key, { key = it }, label = { Text("API-ключ") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            model, { model = it }, singleLine = true,
-            label = { Text("Модель (по умолчанию: ${AiCfg.defaultModel(provider)})") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        if (provider == "openai") {
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                base, { base = it }, singleLine = true, label = { Text("Адрес API (…/v1)") },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("＋ Добавить ключ") }
+
+        Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 timeout, { timeout = it.filter { c -> c.isDigit() } }, singleLine = true,
@@ -339,7 +344,7 @@ private fun AiSettings(onBack: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { save(); msg = "Сохранено" }) { Text("Сохранить") }
-            OutlinedButton(onClick = {
+            OutlinedButton(enabled = keys.isNotEmpty(), onClick = {
                 save()
                 msg = "Проверка…"
                 scope.launch {
@@ -350,12 +355,36 @@ private fun AiSettings(onBack: () -> Unit) {
                         "Ошибка: " + (e.message ?: e.javaClass.simpleName)
                     }
                 }
-            }) { Text("Проверить") }
+            }) { Text("Проверить активный ключ") }
         }
         if (msg.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(msg, style = MaterialTheme.typography.bodySmall)
         }
+    }
+
+    if (adding) {
+        AiKeyDialog(
+            initial = null, title = "Новый API-ключ", confirmText = "Добавить",
+            onDismiss = { adding = false },
+            onSave = { AiKeys.add(ctx, it, makeActive = keys.isEmpty()); adding = false; tick++ }
+        )
+    }
+    editing?.let { k ->
+        AiKeyDialog(
+            initial = k, title = "Правка ключа", confirmText = "Сохранить",
+            onDismiss = { editing = null },
+            onSave = { AiKeys.update(ctx, it); editing = null; tick++ }
+        )
+    }
+    deleting?.let { k ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Удалить ключ?") },
+            text = { Text(AiKeys.describe(k)) },
+            confirmButton = { Button(onClick = { AiKeys.remove(ctx, k.id); deleting = null; tick++ }) { Text("Удалить") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Отмена") } }
+        )
     }
 }
 

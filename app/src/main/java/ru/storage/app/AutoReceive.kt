@@ -2,7 +2,13 @@ package ru.storage.app
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -171,6 +177,19 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         private set
 
     val hasFailed: Boolean get() = pages.isNotEmpty() && pages.any { !it.ok }
+
+    /** Распознавание закончилось с ошибкой (не все листы или сбой до начала) — вместо «Далее» показываем «Повторить». */
+    val failedState: Boolean
+        get() = !running && !saved && started && (hasFailed || message.startsWith("Ошибка"))
+
+    /** Текст ошибки для показа под строкой заказа. */
+    val errorText: String
+        get() = pages.firstOrNull { !it.ok && it.status.startsWith("ошибка") }?.status
+            ?: if (message.startsWith("Ошибка")) message else ""
+
+    /** Что делается прямо сейчас (для мигающей строки): состояние текущего листа. */
+    val liveStatus: String
+        get() = pages.firstOrNull { !it.ok && it.status != "ожидает" }?.status ?: ""
 
     fun startOnce() {
         if (started) return
@@ -457,7 +476,25 @@ private fun DocFields(job: AutoJob, editable: Boolean) {
     )
 }
 
-/** Верх экрана «Приём по имени»: кнопки, отправитель и заказ, ниже — колесо с поиском. Ничего лишнего. */
+/** Мигающая строка: показывает, что идёт распознавание. */
+@Composable
+private fun BlinkText(text: String) {
+    val tr = rememberInfiniteTransition(label = "blink")
+    val a by tr.animateFloat(
+        initialValue = 0.2f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse), label = "alpha"
+    )
+    Text(
+        text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
+        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = a }.padding(top = 2.dp)
+    )
+}
+
+/**
+ * Верх экрана «Приём по имени»: 1-я строка — отправитель, 2-я — заказ слева и «Далее» справа
+ * (при ошибке распознавания вместо «Далее» — «Повторить»), ниже — колесо с поиском.
+ */
 @Composable
 private fun ColumnScope.NameModeMain(
     job: AutoJob,
@@ -468,22 +505,36 @@ private fun ColumnScope.NameModeMain(
     onAdd: () -> Unit
 ) {
     val editable = !job.running && !job.saved && !job.saving
-    val failed = job.pages.count { !it.ok }
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Button(
-            onClick = onNext,
-            enabled = editable && job.pages.isNotEmpty(),
-            modifier = Modifier.weight(1f)
-        ) { Text("Далее") }
-        if (!job.running && !job.saved && failed > 0) {
-            OutlinedButton(onClick = onRetry, modifier = Modifier.weight(1f)) {
-                Text("Повторить листы ($failed)", maxLines = 1)
-            }
+    var editDoc by remember { mutableStateOf(false) }
+    var retryDlg by remember { mutableStateOf(false) }
+    val senderText = job.sender.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
+    val orderText = job.order.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
+
+    // отправитель и заказ — только значения, без подписей; тап открывает правку
+    Text(
+        senderText, style = MaterialTheme.typography.titleMedium,
+        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth().clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp)
+    )
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            orderText, style = MaterialTheme.typography.titleMedium, maxLines = 1,
+            modifier = Modifier.weight(1f).clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp)
+        )
+        if (job.failedState) {
+            Button(onClick = { retryDlg = true }) { Text("Повторить") }
+        } else {
+            Button(onClick = onNext, enabled = editable && job.pages.isNotEmpty()) { Text("Далее") }
         }
+    }
+
+    if (job.running) {
+        BlinkText(listOf(job.message, job.liveStatus).filter { it.isNotBlank() }.joinToString(" · "))
+    }
+    val err = if (job.failedState) job.errorText else ""
+    if (err.isNotBlank()) {
+        Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 3,
+            modifier = Modifier.padding(top = 2.dp))
     }
     if (error.isNotBlank()) {
         Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
@@ -494,30 +545,15 @@ private fun ColumnScope.NameModeMain(
             modifier = Modifier.padding(top = 4.dp))
     }
     Spacer(Modifier.height(8.dp))
-    // Отправитель и заказ — обычный текст в одну строку; тап открывает правку
-    var editDoc by remember { mutableStateOf(false) }
-    val senderText = job.sender.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
-    val orderText = job.order.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
-    Row(
-        Modifier.fillMaxWidth().clickable(enabled = editable) { editDoc = true }.padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            "Отправитель: $senderText", style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        Text("Заказ: $orderText", style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-    }
-    if (editDoc) {
-        EditDocDialog(job, onDismiss = { editDoc = false })
-    }
-    Spacer(Modifier.height(8.dp))
     CountWheelList(
         job.items, editable, Modifier.weight(1f), addTick, onAdd,
-        if (job.running) job.message else "Список пуст"
+        if (job.running) "" else "Список пуст"
     )
+
+    if (editDoc) EditDocDialog(job, onDismiss = { editDoc = false })
+    if (retryDlg) {
+        RetryKeyDialog(onDismiss = { retryDlg = false }, onRetry = { retryDlg = false; onRetry() })
+    }
 }
 
 @Composable
@@ -620,6 +656,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     var forced by remember(f.path) { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var showAdd by remember { mutableStateOf(false) }
+    var retryDlg by remember { mutableStateOf(false) }
     var addTick by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(f.path, nameMode) { job.setMode(nameMode) }
@@ -754,7 +791,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         }
 
         if (!job.running && !job.saved && job.hasFailed) {
-            Button(onClick = { job.start(true) }, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { retryDlg = true }, modifier = Modifier.fillMaxWidth()) {
                 Text("Повторить нераспознанные листы")
             }
             Spacer(Modifier.height(8.dp))
@@ -762,6 +799,10 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         OutlinedButton(onClick = finish, modifier = Modifier.fillMaxWidth()) {
             Text(if (job.saved) "Закрыть" else "Свернуть (партия останется в работе)")
         }
+    }
+
+    if (retryDlg) {
+        RetryKeyDialog(onDismiss = { retryDlg = false }, onRetry = { retryDlg = false; job.start(true) })
     }
 
     if (showAdd) {

@@ -3,6 +3,7 @@
 package ru.storage.app
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -241,6 +242,8 @@ fun CountWheelList(
     var picking by remember { mutableStateOf<Pair<ItemRow, Boolean>?>(null) } // true — факт, false — брак
     var editing by remember { mutableStateOf<ItemRow?>(null) }
     var focusRow by remember { mutableStateOf<ItemRow?>(null) }
+    var blinkRow by remember { mutableStateOf<ItemRow?>(null) }
+    var blinkTick by remember { mutableIntStateOf(0) }
     val memo = remember { arrayOfNulls<ItemRow>(1) } // строка, стоявшая посередине (чтобы не терять место)
     val focusManager = LocalFocusManager.current
     val appCtx = LocalContext.current
@@ -288,7 +291,12 @@ fun CountWheelList(
                         val fr = focusRow
                         if (fr != null) {
                             val k = rows.indexOf(fr)
-                            if (k >= 0) scrollToRow(listState, k, cycle, rowPx, true)
+                            if (k >= 0) {
+                                scrollToRow(listState, k, cycle, rowPx, true)
+                                // строка встала на середину — мигнуть два раза
+                                blinkRow = fr
+                                blinkTick++
+                            }
                             focusRow = null
                         }
                     }
@@ -309,6 +317,7 @@ fun CountWheelList(
                             } else {
                                 WheelRow(
                                     row = row,
+                                    blinkKey = if (row === blinkRow) blinkTick else 0,
                                     index = index,
                                     listState = listState,
                                     editable = editable,
@@ -348,6 +357,7 @@ fun CountWheelList(
 @Composable
 private fun WheelRow(
     row: ItemRow,
+    blinkKey: Int,
     index: Int,
     listState: LazyListState,
     editable: Boolean,
@@ -361,6 +371,15 @@ private fun WheelRow(
     val btnW = 76.dp
     val maxPx = with(density) { (btnW * 2).toPx() }
     val anim = remember(row) { Animatable(0f) }
+    val blink = remember(row) { Animatable(0f) }
+    LaunchedEffect(blinkKey) {
+        if (blinkKey > 0) {
+            repeat(2) {
+                blink.animateTo(1f, tween(170))
+                blink.animateTo(0f, tween(170))
+            }
+        }
+    }
     val scope = rememberCoroutineScope()
     val scheme = MaterialTheme.colorScheme
     val factD = parseQ(row.fact)
@@ -419,6 +438,7 @@ private fun WheelRow(
                 .fillMaxSize()
                 .clip(RoundedCornerShape(14.dp))
                 .background(scheme.surfaceVariant)
+                .background(scheme.primary.copy(alpha = 0.55f * blink.value))
                 .draggable(
                     orientation = Orientation.Horizontal,
                     enabled = editable,

@@ -8,17 +8,129 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-/** Настройки ИИ — только на этом телефоне (ключ в Firebase не отправляется). */
+/** Один сохранённый API-ключ (провайдер + ключ + при необходимости модель и адрес). */
+data class AiKey(
+    val id: String,
+    val label: String,
+    val provider: String,
+    val key: String,
+    val model: String = "",
+    val base: String = ""
+)
+
+/** Список ключей ИИ — только на этом телефоне. Один из них активный: им идёт распознавание. */
+object AiKeys {
+    private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("ai", Context.MODE_PRIVATE)
+
+    fun newId(): String = java.util.UUID.randomUUID().toString()
+
+    fun providerName(p: String): String = when (p) {
+        "gemini" -> "Gemini (Google)"
+        "openai" -> "OpenAI-совместимый"
+        else -> "Claude (Anthropic)"
+    }
+
+    /** Подпись для списков: название (или провайдер) и последние 4 символа ключа. */
+    fun describe(k: AiKey): String {
+        val name = k.label.ifBlank { providerName(k.provider) }
+        val tail = if (k.key.length >= 4) " ···" + k.key.takeLast(4) else ""
+        return name + tail
+    }
+
+    private fun toJson(l: List<AiKey>): String {
+        val arr = JSONArray()
+        l.forEach {
+            arr.put(
+                JSONObject().put("id", it.id).put("label", it.label).put("provider", it.provider)
+                    .put("key", it.key).put("model", it.model).put("base", it.base)
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun fromJson(s: String?): List<AiKey> {
+        if (s.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = JSONArray(s)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val k = o.optString("key").trim()
+                if (k.isEmpty()) null
+                else AiKey(
+                    o.optString("id").ifBlank { newId() }, o.optString("label"),
+                    o.optString("provider", "claude"), k, o.optString("model"), o.optString("base")
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Старая одиночная настройка (provider/key/model/base) превращается в первый ключ списка. */
+    private fun migrate(ctx: Context) {
+        val p = sp(ctx)
+        if (p.contains("keys")) return
+        val old = (p.getString("key", "") ?: "").trim()
+        if (old.isEmpty()) {
+            p.edit().putString("keys", "[]").apply()
+            return
+        }
+        val k = AiKey(
+            newId(), "", p.getString("provider", "claude") ?: "claude", old,
+            (p.getString("model", "") ?: "").trim(), (p.getString("base", "") ?: "").trim()
+        )
+        p.edit().putString("keys", toJson(listOf(k))).putString("active", k.id).apply()
+    }
+
+    fun list(ctx: Context): List<AiKey> {
+        migrate(ctx)
+        return fromJson(sp(ctx).getString("keys", "[]"))
+    }
+
+    fun active(ctx: Context): AiKey? {
+        val l = list(ctx)
+        val id = sp(ctx).getString("active", "") ?: ""
+        return l.firstOrNull { it.id == id } ?: l.firstOrNull()
+    }
+
+    fun activeId(ctx: Context): String = active(ctx)?.id ?: ""
+
+    fun setActive(ctx: Context, id: String) {
+        sp(ctx).edit().putString("active", id).apply()
+    }
+
+    /** Добавить ключ в настройки (по умолчанию сразу сделать активным). */
+    fun add(ctx: Context, k: AiKey, makeActive: Boolean = true) {
+        val l = list(ctx) + k
+        val e = sp(ctx).edit().putString("keys", toJson(l))
+        if (makeActive || l.size == 1) e.putString("active", k.id)
+        e.apply()
+    }
+
+    fun update(ctx: Context, k: AiKey) {
+        val l = list(ctx).map { if (it.id == k.id) k else it }
+        sp(ctx).edit().putString("keys", toJson(l)).apply()
+    }
+
+    fun remove(ctx: Context, id: String) {
+        val l = list(ctx).filter { it.id != id }
+        val e = sp(ctx).edit().putString("keys", toJson(l))
+        if (activeId(ctx) == id) e.putString("active", l.firstOrNull()?.id ?: "")
+        e.apply()
+    }
+}
+
+/** Настройки ИИ — только на этом телефоне (ключи в Firebase не отправляются). */
 object AiCfg {
     private fun sp(ctx: Context) = ctx.getSharedPreferences("ai", Context.MODE_PRIVATE)
 
-    fun provider(ctx: Context): String = sp(ctx).getString("provider", "claude") ?: "claude"
-    fun key(ctx: Context): String = (sp(ctx).getString("key", "") ?: "").trim()
+    fun provider(ctx: Context): String = AiKeys.active(ctx)?.provider ?: "claude"
+    fun key(ctx: Context): String = AiKeys.active(ctx)?.key?.trim() ?: ""
     fun baseUrl(ctx: Context): String =
-        (sp(ctx).getString("base", "") ?: "").trim().ifBlank { "https://api.openai.com/v1" }
+        (AiKeys.active(ctx)?.base ?: "").trim().ifBlank { "https://api.openai.com/v1" }
     fun timeoutSec(ctx: Context): Int = sp(ctx).getInt("timeout", 60)
     fun attempts(ctx: Context): Int = sp(ctx).getInt("attempts", 3)
-    fun rawModel(ctx: Context): String = (sp(ctx).getString("model", "") ?: "").trim()
+    fun rawModel(ctx: Context): String = (AiKeys.active(ctx)?.model ?: "").trim()
     fun model(ctx: Context): String = rawModel(ctx).ifBlank { defaultModel(provider(ctx)) }
     fun ready(ctx: Context): Boolean = key(ctx).isNotEmpty()
 
@@ -28,10 +140,8 @@ object AiCfg {
         else -> "claude-haiku-5-5"
     }
 
-    fun save(ctx: Context, provider: String, key: String, model: String, base: String, timeout: Int, attempts: Int) {
-        sp(ctx).edit().putString("provider", provider).putString("key", key.trim())
-            .putString("model", model.trim()).putString("base", base.trim())
-            .putInt("timeout", timeout).putInt("attempts", attempts).apply()
+    fun saveCommon(ctx: Context, timeout: Int, attempts: Int) {
+        sp(ctx).edit().putInt("timeout", timeout).putInt("attempts", attempts).apply()
     }
 }
 
