@@ -293,7 +293,13 @@ fun CountWheelList(
                         }
                     }
                     LaunchedEffect(Unit) {
-                        snapshotFlow { centerRow(listState, rows, cycle) }.collect { if (it != null) memo[0] = it }
+                        snapshotFlow { centerRow(listState, rows, cycle) }.collect {
+                            if (it != null) {
+                                // импульс, когда на середину пришла другая строка (первое значение — просто запоминаем)
+                                if (memo[0] != null && memo[0] !== it) Haptics.pulse(appCtx, Haptics.LIST)
+                                memo[0] = it
+                            }
+                        }
                     }
                     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                         items(count = Int.MAX_VALUE) { index ->
@@ -431,6 +437,7 @@ private fun WheelRow(
                         if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
                         else {
                             row.fact = fmtQ(parseQ(row.fact) + 1)
+                            Haptics.pulse(ctx, Haptics.TAP)
                             CountAnnouncer.tap(ctx, row)
                         }
                     },
@@ -534,6 +541,14 @@ private fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Uni
     val scrolling = state.isScrollInProgress
     var touched by remember { mutableStateOf(false) }
     LaunchedEffect(scrolling) { if (scrolling) touched = true }
+    val vibCtx = LocalContext.current
+    LaunchedEffect(Unit) {
+        // импульс на каждое новое число в середине (первое значение пропускаем)
+        var first = true
+        snapshotFlow { value }.collect {
+            if (first) first = false else Haptics.pulse(vibCtx, Haptics.PICKER)
+        }
+    }
     LaunchedEffect(value, scrolling, touched) {
         if (touched && !scrolling) {
             delay(3000)
