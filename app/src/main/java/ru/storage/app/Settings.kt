@@ -96,6 +96,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
         "Распознавание документов" -> AiSettings { section = null }
+        "Голос и подсчёт" -> VoiceSettings { section = null }
         else -> SettingsHome(onBack) { section = it }
     }
 }
@@ -107,7 +108,8 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Оформление" to "Светлая, тёмная или как в системе",
         "Сканер" to "Камера, типы штрих-кодов",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
-        "Распознавание документов" to "ИИ для автоприёма: провайдер, ключ, модель, время ожидания"
+        "Распознавание документов" to "ИИ для автоприёма: провайдер, ключ, модель, время ожидания",
+        "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза"
     )
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)

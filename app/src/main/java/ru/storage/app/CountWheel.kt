@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
@@ -56,7 +57,8 @@ import kotlin.math.roundToInt
  *  - поиск сверху ищет по этому списку с первого символа и показывает подсказки под полем;
  *    тап по подсказке прокручивает колесо так, что товар оказывается посередине; «+» в поле — добавить товар;
  *  - тап по строке = +1 к факту; тап по числу справа — барабан цифр 0…9999 (как в будильнике),
- *    через 3 секунды после остановки значение применяется само;
+ *    (одно колесо 0…9999) через 3 секунды после остановки значение применяется само;
+ *  - после тапа и после выбора барабаном крупная цифра плавно появляется/гаснет, затем голос называет число (Настройки → Голос и подсчёт);
  *  - свайп справа налево открывает две кнопки: «Брак» (барабан цифр) и «Удалить»; свайп вправо закрывает;
  *  - долгое нажатие на строку — правка названия и плана.
  */
@@ -241,6 +243,7 @@ fun CountWheelList(
     var focusRow by remember { mutableStateOf<ItemRow?>(null) }
     val memo = remember { arrayOfNulls<ItemRow>(1) } // строка, стоявшая посередине (чтобы не терять место)
     val focusManager = LocalFocusManager.current
+    val appCtx = LocalContext.current
     val density = LocalDensity.current
     val rowPx = with(density) { ROW_H.roundToPx() }
 
@@ -316,6 +319,7 @@ fun CountWheelList(
             if (query.isNotBlank()) {
                 SuggestionsCard(hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter))
             }
+            CountOverlay()
         }
     }
 
@@ -326,6 +330,8 @@ fun CountWheelList(
             onApply = { v ->
                 if (isFact) row.fact = v.toString() else row.defect = v.toString()
                 picking = null
+                if (isFact) CountAnnouncer.picked(appCtx, v.toString(), v.toString())
+                else CountAnnouncer.picked(appCtx, "Брак $v", "брак $v")
             },
             onDismiss = { picking = null }
         )
@@ -344,6 +350,7 @@ private fun WheelRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val ctx = LocalContext.current
     val density = LocalDensity.current
     val btnW = 76.dp
     val maxPx = with(density) { (btnW * 2).toPx() }
@@ -422,7 +429,10 @@ private fun WheelRow(
                     enabled = editable,
                     onClick = {
                         if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
-                        else row.fact = fmtQ(parseQ(row.fact) + 1)
+                        else {
+                            row.fact = fmtQ(parseQ(row.fact) + 1)
+                            CountAnnouncer.tap(ctx, row)
+                        }
                     },
                     onLongClick = onEdit
                 )
@@ -469,17 +479,21 @@ private fun WheelRow(
     }
 }
 
-/** Цифра в середине барабана. */
-private fun selectedDigit(state: LazyListState, fallback: Int): Int {
+private const val MAX_COUNT = 9999
+private const val PAD_ITEMS = 2 // пустые строки сверху и снизу, чтобы 0 и 9999 тоже вставали в середину
+
+/** Число в середине колеса (индекс списка минус пустые строки сверху). */
+private fun selectedCount(state: LazyListState, fallback: Int): Int {
     val li = state.layoutInfo
     val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
     val best = li.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - c) } ?: return fallback
-    return best.index % 10
+    return (best.index - PAD_ITEMS).coerceIn(0, MAX_COUNT)
 }
 
+/** Одно колесо: все числа 0…9999 подряд, начинается с 0. */
 @Composable
-private fun DigitWheel(state: LazyListState) {
-    Box(Modifier.width(60.dp).height(DIGIT_H * 5)) {
+private fun CountWheel(state: LazyListState) {
+    Box(Modifier.width(180.dp).height(DIGIT_H * 5)) {
         Box(
             Modifier.align(Alignment.Center)
                 .fillMaxWidth()
@@ -492,14 +506,15 @@ private fun DigitWheel(state: LazyListState) {
             flingBehavior = rememberSnapFlingBehavior(state),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(count = Int.MAX_VALUE) { i ->
+            items(count = MAX_COUNT + 1 + PAD_ITEMS * 2) { i ->
+                val v = i - PAD_ITEMS
                 Box(
                     Modifier.fillMaxWidth()
                         .height(DIGIT_H)
                         .graphicsLayer { applyWheel(state, i, 0.55f, 0.25f, 30f, 0.12f) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text((i % 10).toString(), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                    if (v in 0..MAX_COUNT) Text(v.toString(), fontSize = 32.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -507,26 +522,16 @@ private fun DigitWheel(state: LazyListState) {
 }
 
 /**
- * Барабан цифр как в будильнике: 4 колеса (0…9999). Значение применяется само через 3 секунды
- * после того, как все колёса остановились; кнопка «Готово» — сразу.
+ * Барабан количества как в будильнике, но одно колесо 0…9999. Значение применяется само через 3 секунды
+ * после остановки колеса; кнопка «Готово» — сразу.
  */
 @Composable
 private fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit, onDismiss: () -> Unit) {
-    val digits = listOf(initial / 1000 % 10, initial / 100 % 10, initial / 10 % 10, initial % 10)
-    val s0 = rememberLazyListState(initialFirstVisibleItemIndex = CYCLE_BASE + digits[0] - 2)
-    val s1 = rememberLazyListState(initialFirstVisibleItemIndex = CYCLE_BASE + digits[1] - 2)
-    val s2 = rememberLazyListState(initialFirstVisibleItemIndex = CYCLE_BASE + digits[2] - 2)
-    val s3 = rememberLazyListState(initialFirstVisibleItemIndex = CYCLE_BASE + digits[3] - 2)
-    val states = listOf(s0, s1, s2, s3)
-
-    val value by remember {
-        derivedStateOf {
-            var v = 0
-            for (i in 0..3) v = v * 10 + selectedDigit(states[i], digits[i])
-            v
-        }
-    }
-    val scrolling = states.any { it.isScrollInProgress }
+    val start = initial.coerceIn(0, MAX_COUNT)
+    // первый видимый индекс = число; число стоит третьим сверху, то есть посередине
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = start)
+    val value by remember { derivedStateOf { selectedCount(state, start) } }
+    val scrolling = state.isScrollInProgress
     var touched by remember { mutableStateOf(false) }
     LaunchedEffect(scrolling) { if (scrolling) touched = true }
     LaunchedEffect(value, scrolling, touched) {
@@ -541,9 +546,7 @@ private fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Uni
             Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    states.forEach { DigitWheel(it) }
-                }
+                CountWheel(state)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Выбрано: $value · применится само через 3 секунды",
