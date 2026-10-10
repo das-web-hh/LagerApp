@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -75,8 +76,21 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         SearchBar(
             query = query,
-            onChange = { query = it },
-            onScan = { scanning = true }
+            onChange = { v ->
+                if (AiImport.looksLike(v)) {
+                    // вставлен ответ ИИ (отправитель/заказ/время + товары) — сразу принимаем
+                    query = ""
+                    val res = AiImport.parse(v)
+                    scope.launch {
+                        message = if (res == null) "Не удалось разобрать вставленный текст"
+                        else AiImport.save(ctx, db, res, receiver)
+                    }
+                } else {
+                    query = v
+                }
+            },
+            onScan = { scanning = true },
+            multilinePaste = true
         )
         if (message.isNotBlank()) {
             Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
@@ -212,7 +226,9 @@ fun SearchBar(
     query: String,
     onChange: (String) -> Unit,
     onScan: () -> Unit,
-    placeholder: String = "Артикул, название или штрих-код"
+    placeholder: String = "Артикул, название или штрих-код",
+    /** true — поле принимает вставку из нескольких строк (приём из ИИ); выглядит так же, Enter не делает перенос */
+    multilinePaste: Boolean = false
 ) {
     Row(
         Modifier.fillMaxWidth()
@@ -236,7 +252,9 @@ fun SearchBar(
             BasicTextField(
                 value = query,
                 onValueChange = onChange,
-                singleLine = true,
+                singleLine = !multilinePaste,
+                maxLines = if (multilinePaste) 1 else Int.MAX_VALUE,
+                keyboardOptions = if (multilinePaste) KeyboardOptions(imeAction = ImeAction.Search) else KeyboardOptions.Default,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth()
