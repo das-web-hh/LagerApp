@@ -78,4 +78,51 @@ object ProductParse {
             pack = packRu(clean(o.optString("pack")))
         )
     }
+
+    private fun promptMany(lines: List<String>, hint: String) = """
+        You split product lines from ONE goods-receipt / delivery note into fields. The text may be German, English, Czech, Dutch or mixed. Do NOT translate product names.
+        Answer with JSON only (no markdown, no comments), one object per input line, in the same order, exactly ${lines.size} objects:
+        {"items": [{"manufacturer": "", "name": "", "size": "", "unit": "", "pack": ""}]}
+        Rules:
+        - manufacturer: the brand / producer if it is in the line (for example "DERBY", "marstall", "Keralit", "EQUIPUR", "AG", "bitopEQUI"). If the line has none but the document hint below is clearly the producer of these goods, use the hint. Otherwise "".
+        - name: the product name WITHOUT manufacturer, size, unit, package word, article number, batch (Charge), expiry (MHD) and price. Keep the original language and spelling.
+        - size: ONE number: weight or volume of ONE package, dot as decimal separator ("15", "2.5", "500"). Multipacks like "2x5 kg" or "28 x 40g": the size of one piece. No size in the line: "".
+        - unit: exactly one of: kg, g, t, l, ml, pcs (pcs only if counted in pieces, e.g. "90 Kapseln"). Lt / ltr / Liter / L = l. No size: "".
+        - pack: exactly one of: sack, bucket, bottle, can, canister, box, pack, bag, bale, tube, other, none. Sack = sack; Eimer = bucket; Flasche / Fla = bottle; Dose = can; Kanister / Kan = canister; Karton = box; Beutel / Tüte = bag; Ballen = bale; Packung = pack. Not stated: "none".
+        - Never invent values that are not in the line. Never use article numbers as size.
+        Document hint (sender, may be empty): $hint
+        Lines:
+        ${lines.mapIndexed { i, l -> "${i + 1}. $l" }.joinToString("\n")}
+    """.trimIndent()
+
+    private fun fromJson(o: JSONObject): ProductParts {
+        val size = clean(o.opt("size")?.toString()).replace(',', '.')
+            .let { if (it.toDoubleOrNull() == null) "" else it.removeSuffix(".0") }
+        return ProductParts(
+            manufacturer = clean(o.optString("manufacturer")),
+            name = clean(o.optString("name")),
+            size = size,
+            unit = if (size.isEmpty()) "" else unitRu(clean(o.optString("unit"))),
+            pack = packRu(clean(o.optString("pack")))
+        )
+    }
+
+    /** Разбор сразу многих строк одним запросом (по 40 штук). Результат — в том же порядке; null — строку не удалось разобрать. */
+    fun parseMany(ctx: Context, names: List<String>, hint: String = ""): List<ProductParts?> {
+        val out = ArrayList<ProductParts?>()
+        for (chunk in names.chunked(40)) {
+            val res: List<ProductParts?> = try {
+                val answer = Ai.call(ctx, promptMany(chunk.map { it.trim() }, hint.ifBlank { "-" }), null)
+                val s = answer.indexOf('{')
+                val e = answer.lastIndexOf('}')
+                val arr = JSONObject(answer.substring(s, e + 1)).optJSONArray("items")
+                if (arr == null || arr.length() != chunk.size) List(chunk.size) { null }
+                else List(chunk.size) { i -> arr.optJSONObject(i)?.let { fromJson(it) } }
+            } catch (ex: Exception) {
+                List(chunk.size) { null }
+            }
+            out.addAll(res)
+        }
+        return out
+    }
 }

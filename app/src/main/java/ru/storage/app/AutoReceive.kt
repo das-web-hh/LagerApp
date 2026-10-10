@@ -130,6 +130,9 @@ class ItemRow(
     var qty by mutableStateOf(qty)
     var fact by mutableStateOf("")
     var defect by mutableStateOf("")
+
+    /** Поля карточки (производитель, вес, тип), разобранные ИИ; только для товаров, которых нет в каталоге. */
+    var parts by mutableStateOf<ProductParts?>(null)
 }
 
 /**
@@ -146,6 +149,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     val items = mutableStateListOf<ItemRow>()
     var saved by mutableStateOf(false)
     var saving by mutableStateOf(false)
+    var newProductCount by mutableIntStateOf(0)
 
     /** true — приём по имени (все строки как есть, план = печатное количество); false — автоприём (по отметкам ручкой). */
     var nameMode = startNameMode
@@ -172,6 +176,33 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     }
 
     private val results = HashMap<Int, PageResult>()
+    private val partsCache = HashMap<String, ProductParts>()
+    var parsing by mutableStateOf(false)
+        private set
+
+    /** Автоприём: для товаров, которых нет в каталоге, ИИ разбирает название на поля карточки (один запрос на ~40 строк). */
+    private suspend fun parseNewProducts() {
+        if (nameMode) return
+        val db = ProductDb.get(app)
+        val todo = items.filter { !it.extra && it.parts == null && it.name.isNotBlank() }
+            .filter { partsCache[it.name.trim()] == null }
+            .filter { r -> withContext(Dispatchers.IO) { r.productId.isEmpty() && db.findByName(r.name.trim()) == null } }
+            .map { it.name.trim() }.distinct()
+        if (todo.isNotEmpty()) {
+            parsing = true
+            message = "Разбор товаров…"
+            try {
+                val hint = sender.takeIf { !it.equals("none", true) } ?: ""
+                val res = AutoReceiveHolder.aiLock.withLock {
+                    withContext(Dispatchers.IO) { ProductParse.parseMany(app, todo, hint) }
+                }
+                todo.forEachIndexed { i, n -> res.getOrNull(i)?.let { partsCache[n] = it } }
+            } finally {
+                parsing = false
+            }
+        }
+        items.forEach { r -> if (r.parts == null) partsCache[r.name.trim()]?.let { r.parts = it } }
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var started = false
         private set
@@ -253,6 +284,11 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 val failed = pages.count { !it.ok }
                 message = if (failed == 0) "Готово: распознано листов — $n"
                 else "Не распознано листов: $failed из $n"
+                try {
+                    parseNewProducts()
+                    if (failed == 0) message = "Готово: распознано листов — $n"
+                } catch (e: Exception) {
+                }
             } catch (e: Exception) {
                 message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
             } finally {
@@ -288,6 +324,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         sender = s
         order = o
         val extras = items.filter { it.extra }
+        list.forEach { r -> partsCache[r.name.trim()]?.let { r.parts = it } }
         items.clear()
         items.addAll(list)
         items.addAll(extras)
@@ -359,10 +396,22 @@ suspend fun saveJob(
 ): String? {
     if (job.saved || job.saving) return null
     val rows = ArrayList<ReceiptItem>()
+    val newProducts = LinkedHashMap<String, Product>()
     for (r in job.items) {
         val name = r.name.trim()
         if (name.isEmpty()) continue
-        val pid = withContext(Dispatchers.IO) { r.productId.ifEmpty { db.findByName(name)?.id ?: "" } }
+        var pid = withContext(Dispatchers.IO) { r.productId.ifEmpty { db.findByName(name)?.id ?: "" } }
+        val pt = r.parts
+        if (pid.isEmpty() && !nameMode && !r.extra && pt != null) {
+            // нового товара в каталоге нет — заводим карточку по разобранным полям (имя оставляем как в накладной, чтобы в следующий раз найти его по имени)
+            pid = newProducts.getOrPut(name.lowercase()) {
+                Product(
+                    id = UUID.randomUUID().toString(), name = name, article = "", barcode = "",
+                    weight = pt.size, unit = pt.unit, pack = pt.pack, manufacturer = pt.manufacturer,
+                    photos = emptyList(), updatedAt = 0L
+                )
+            }.id
+        }
         if (nameMode) {
             val fact = normalizeQty(r.fact).ifEmpty { "0" }
             val defect = normalizeQty(r.defect).ifEmpty { "0" }
@@ -403,6 +452,7 @@ suspend fun saveJob(
         val sender = job.sender.trim().let { if (it.equals("none", true)) "" else it }
         val stamp = job.stamp.trim().let { if (it.length == 16) it else "" }
         withContext(Dispatchers.IO) {
+            newProducts.values.forEach { Cloud.saveProduct(db, it) }
             val inv = Media.importFile(ctx, File(f.path), db, "IN")
             val r = Receipt(
                 id = UUID.randomUUID().toString(),
@@ -420,6 +470,7 @@ suspend fun saveJob(
             Cloud.saveReceipt(db, r)
             Media.uploadPending(ctx, db)
         }
+        job.newProductCount = newProducts.size
         job.saved = true
         return null
     } finally {
@@ -430,6 +481,11 @@ suspend fun saveJob(
 @Composable
 private fun AutoRowEditor(row: ItemRow, editable: Boolean, onRemove: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        row.parts?.let { p ->
+            val line = listOf(p.manufacturer, p.name, listOf(p.size, p.unit).filter { it.isNotBlank() }.joinToString(" "), p.pack)
+                .filter { it.isNotBlank() }.joinToString(" · ")
+            if (line.isNotBlank()) Text("➜ $line", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 row.name, { row.name = it }, enabled = editable,
@@ -771,7 +827,8 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         Spacer(Modifier.height(16.dp))
         if (job.saved) {
             Text(
-                "Приём сохранён в историю. Файл отправляется на Google Диск.",
+                "Приём сохранён в историю. Файл отправляется на Google Диск." +
+                    if (job.newProductCount > 0) " Новых товаров в каталоге: ${job.newProductCount}." else "",
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.height(8.dp))
