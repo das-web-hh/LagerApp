@@ -152,7 +152,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     var newProductCount by mutableIntStateOf(0)
 
     /** true — приём по имени (все строки как есть, план = печатное количество); false — автоприём (по отметкам ручкой). */
-    var nameMode = startNameMode
+    var nameMode by mutableStateOf(startNameMode)
         private set
 
     /** Шаг приёма по имени: 0 — ввод количества, 1 — итог. Хранится в партии, чтобы «свёрнутая» партия открывалась там же, где её оставили. */
@@ -166,13 +166,57 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             running -> message.ifBlank { "Распознавание…" }
             !started -> "Ожидает открытия"
             hasFailed -> "Не все листы распознаны"
+            !nameMode && autoState == "unmarked" -> "Нет галочек/крестиков — откройте в «Приём по имени»"
+            !nameMode && autoState == "error" -> "Не сохранено: $autoError"
             else -> if (nameMode) "Идёт подсчёт · позиций: ${items.size}" else "Проверьте и сохраните · позиций: ${items.size}"
         }
+
+    /**
+     * Автоприём: "" — ещё не решали; "unmarked" — на накладной нет отметок (✓/✕), не сохранена;
+     * "error" — сохранить не получилось (текст в autoError); "saved" — сохранена автоматически.
+     */
+    var autoState by mutableStateOf("")
+    var autoError by mutableStateOf("")
 
     fun setMode(name: Boolean) {
         if (nameMode == name) return
         nameMode = name
+        autoState = ""
         if (results.isNotEmpty()) rebuild()
+    }
+
+    /** «Открыть в приёме по имени»: партия переключается в ручной режим, экран открывается тем же файлом. */
+    fun openInNameMode() {
+        step = 0
+        setMode(true)
+    }
+
+    /** Все позиции с отметкой: ✓, ✕ или вписанное ручкой количество. Без отметки хотя бы у одной — автоприём не сохраняет. */
+    fun markedComplete(): Boolean = items.isNotEmpty() && items.all {
+        it.status == "ok" || it.status == "missing" || (it.status == "changed" && it.qty.isNotBlank())
+    }
+
+    /** Автоприём: если все позиции отмечены — сохраняем сразу (история, Firebase, локальная база, накладная); иначе не сохраняем. */
+    suspend fun autoFinish() {
+        if (nameMode || saved || saving || items.isEmpty()) return
+        if (!markedComplete()) {
+            autoState = "unmarked"
+            return
+        }
+        autoError = ""
+        message = "Сохраняю приём…"
+        val err = try {
+            saveJob(app, ProductDb.get(app), this, file, AutoReceiveHolder.receiver, false)
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
+        }
+        if (err == null) {
+            autoState = "saved"
+            message = "Приём сохранён автоматически"
+        } else {
+            autoState = "error"
+            autoError = err
+        }
     }
 
     private val results = HashMap<Int, PageResult>()
@@ -254,6 +298,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     fun start(onlyFailed: Boolean) {
         if (running) return
         running = true
+        if (!saved) autoState = ""
         message = "Подготовка…"
         scope.launch {
             var doc: PageSource? = null
@@ -351,6 +396,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     }
                 }
                 message = "Готово: распознано листов — $n. $profileNote"
+                if (failed == 0 && !nameMode) autoFinish()
             } catch (e: Exception) {
                 message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
             } finally {
@@ -397,6 +443,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
 object AutoReceiveHolder {
     val jobs = mutableStateListOf<AutoJob>()
     val aiLock = Mutex()
+
+    /** Кто принимает (имя из профиля); задаётся при входе, нужен автоприёму, который сохраняет без участия экрана. */
+    @Volatile var receiver: String = ""
 
     fun find(path: String): AutoJob? = jobs.firstOrNull { it.file.path == path }
 
@@ -541,57 +590,37 @@ suspend fun saveJob(
 }
 
 @Composable
-private fun AutoRowEditor(row: ItemRow, editable: Boolean, onRemove: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+private fun AutoRowView(row: ItemRow) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         row.parts?.let { p ->
             val line = listOf(p.manufacturer, p.name, listOf(p.size, p.unit).filter { it.isNotBlank() }.joinToString(" "), p.pack)
                 .filter { it.isNotBlank() }.joinToString(" · ")
             if (line.isNotBlank()) Text("➜ $line", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                row.name, { row.name = it }, enabled = editable,
-                label = { Text("Название") }, modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(6.dp))
-            OutlinedTextField(
-                row.qty, { row.qty = it }, enabled = editable, singleLine = true,
-                label = { Text("Кол-во") }, modifier = Modifier.width(88.dp),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-            )
-            TextButton(onClick = onRemove, enabled = editable) { Text("✕") }
-        }
+        Text(row.name, style = MaterialTheme.typography.bodyLarge)
         val bold = MaterialTheme.typography.bodyMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
         val doc = if (row.printed.isNotEmpty()) row.printed else "—"
         when (row.status) {
-            "ok" -> Text("✓ ПРИШЛО · по документу $doc", style = bold, color = MaterialTheme.colorScheme.primary)
+            "ok" -> Text("✓ ПРИШЛО · ${row.qty} · по документу $doc", style = bold, color = MaterialTheme.colorScheme.primary)
             "missing" -> Text("✕ НЕ ПРИШЛО · по документу $doc · принято 0", style = bold, color = MaterialTheme.colorScheme.error)
             "changed" -> Text(
-                if (row.qty.isBlank()) "✎ количество перечёркнуто — впишите · по документу $doc"
+                if (row.qty.isBlank()) "✎ количество перечёркнуто, число не вписано · по документу $doc"
                 else "✎ ДРУГОЕ КОЛИЧЕСТВО · по документу $doc · принято ${row.qty}",
                 style = bold, color = MaterialTheme.colorScheme.tertiary
             )
-            "nomark" -> Text("без отметки — проверьте · по документу $doc", style = MaterialTheme.typography.bodySmall)
+            else -> Text("без отметки · по документу $doc", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
+        HorizontalDivider(Modifier.padding(top = 6.dp))
     }
 }
 
+/** Данные накладной в автоприёме — только текст: править нельзя, всё берётся с проверенной бумаги. */
 @Composable
-private fun DocFields(job: AutoJob, editable: Boolean) {
-    OutlinedTextField(
-        job.sender, { job.sender = it }, label = { Text("Отправитель (организация)") },
-        enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
-    )
-    Spacer(Modifier.height(8.dp))
-    OutlinedTextField(
-        job.order, { job.order = it }, label = { Text("Номер заказа (ЕБ + 7 цифр)") },
-        enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
-    )
-    Spacer(Modifier.height(8.dp))
-    OutlinedTextField(
-        job.stamp, { job.stamp = it }, label = { Text("Дата и время (из имени файла)") },
-        enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
-    )
+private fun DocInfo(job: AutoJob) {
+    fun v(s: String) = if (s.equals("none", true) || s.isBlank()) "—" else s
+    Text("Отправитель: ${v(job.sender)}", style = MaterialTheme.typography.bodyLarge)
+    Text("Номер заказа: ${v(job.order)}", style = MaterialTheme.typography.bodyLarge)
+    Text("Дата и время: ${v(job.stamp)}", style = MaterialTheme.typography.bodyLarge)
 }
 
 /** Мигающая строка: показывает, что идёт распознавание. */
@@ -872,41 +901,51 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             )
         }
 
-        val editable = !job.running && !job.saved && !job.saving
         Spacer(Modifier.height(16.dp))
-        DocFields(job, editable)
+        DocInfo(job)
 
         Spacer(Modifier.height(16.dp))
         Text("Товары: ${job.items.size}", style = MaterialTheme.typography.titleSmall)
         Text(
-            "По отметкам ручкой: ✓ — пришло, ✕ — не пришло (сохранится с количеством 0), ✎ — другое количество, дописанное ручкой.",
+            "По отметкам ручкой: ✓ — пришло, ✕ — не пришло (сохранится с количеством 0), ✎ — другое количество, дописанное ручкой. " +
+                "Количество здесь не меняется: оно берётся с проверенной накладной.",
             style = MaterialTheme.typography.bodySmall
         )
         job.items.toList().forEach { row ->
-            key(row) { AutoRowEditor(row, editable) { job.items.remove(row) } }
+            key(row) { AutoRowView(row) }
         }
 
         Spacer(Modifier.height(16.dp))
-        if (job.saved) {
-            Text(
-                "Приём сохранён в историю. Файл отправляется на Google Диск." +
-                    if (job.newProductCount > 0) " Новых товаров в каталоге: ${job.newProductCount}." else "",
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(8.dp))
-        } else if (!job.running && job.pages.isNotEmpty() && job.items.isNotEmpty()) {
-            if (error.isNotBlank()) {
-                Text(error, color = MaterialTheme.colorScheme.error)
+        when {
+            job.saved -> {
+                Text(
+                    "Приём сохранён автоматически: история, Firebase и локальная база. Накладная отправляется на Google Диск." +
+                        if (job.newProductCount > 0) " Новых товаров в каталоге: ${job.newProductCount}." else "",
+                    color = MaterialTheme.colorScheme.primary
+                )
                 Spacer(Modifier.height(8.dp))
             }
-            Button(
-                enabled = !job.saving,
-                modifier = Modifier.fillMaxWidth(),
-                onClick = {
-                    scope.launch { error = saveJob(ctx, db, job, f, receiver, false) ?: "" }
+            job.saving -> {
+                Text("Сохранение…", color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(8.dp))
+            }
+            job.autoState == "error" -> {
+                Text(job.autoError, color = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { scope.launch { job.autoFinish() } }
+                ) { Text("Повторить сохранение") }
+                Spacer(Modifier.height(8.dp))
+            }
+            !job.running && job.pages.isNotEmpty() && !job.hasFailed && job.items.isEmpty() -> {
+                Text("Товары на накладной не найдены.", color = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { job.openInNameMode() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Открыть в «Приём по имени»")
                 }
-            ) { Text(if (job.saving) "Сохранение…" else "Сохранить приём") }
-            Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(8.dp))
+            }
         }
 
         if (!job.running && !job.saved && job.hasFailed) {
@@ -922,6 +961,23 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
 
     if (retryDlg) {
         RetryKeyDialog(onDismiss = { retryDlg = false }, onRetry = { retryDlg = false; job.start(true) })
+    }
+
+    if (!nameMode && job.autoState == "unmarked") {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Накладная без отметок") },
+            text = {
+                Text(
+                    "На этой накладной нет галочек и крестиков (или отмечены не все позиции), " +
+                        "поэтому автоприём её не сохранил. Откройте её в «Приём по имени» и посчитайте вручную."
+                )
+            },
+            confirmButton = {
+                Button(onClick = { job.openInNameMode() }) { Text("Открыть в «Приём по имени»") }
+            },
+            dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } }
+        )
     }
 
     if (showAdd) {

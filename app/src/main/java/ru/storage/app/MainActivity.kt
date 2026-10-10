@@ -84,6 +84,7 @@ fun AppRoot() {
     }
     if (loggedIn) {
         val receiver = "${profile.firstName} ${profile.lastName}".trim()
+        AutoReceiveHolder.receiver = receiver
         val openJob = Incoming.openPath?.let { AutoReceiveHolder.find(it) }
         if (openJob != null) {
             // свёрнутые партии остаются в AutoReceiveHolder и продолжают работать

@@ -74,7 +74,8 @@ fun SearchScreen(prefs: Prefs, onBack: () -> Unit) {
     }
     val id = openId
     if (id != null) {
-        ProductCardScreen(id, prefs) {
+        // в поиске — только история приёма товара, без правки; карточка товара открывается в каталоге
+        ProductHistoryScreen(id) {
             openId = null
             sync.version++
         }

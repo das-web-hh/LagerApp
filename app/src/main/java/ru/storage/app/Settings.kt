@@ -98,6 +98,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Распознавание документов" -> AiSettings { section = null }
         "Голос и подсчёт" -> VoiceSettings { section = null }
         "Вибрация" -> VibrationSettings { section = null }
+        "Просмотр накладных" -> ViewerSettings { section = null }
         else -> SettingsHome(onBack) { section = it }
     }
 }
@@ -111,7 +112,8 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
         "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
-        "Вибрация" to "Тап и прокрутка: сила и длительность"
+        "Вибрация" to "Тап и прокрутка: сила и длительность",
+        "Просмотр накладных" to "Листать сверху вниз или слева направо"
     )
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
@@ -128,6 +130,28 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
                 Text("›", style = MaterialTheme.typography.headlineSmall)
             }
             HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun ViewerSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var vertical by remember { mutableStateOf(ViewerPrefs.vertical(ctx)) }
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Просмотр накладных", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text("Как листать страницы накладных и фото в карточке истории товара. Переключить можно и прямо в просмотре (кнопка ↕ / ↔).",
+            style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = vertical, onClick = { vertical = true; ViewerPrefs.setVertical(ctx, true) })
+            Text("Сверху вниз")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = !vertical, onClick = { vertical = false; ViewerPrefs.setVertical(ctx, false) })
+            Text("Слева направо")
         }
     }
 }

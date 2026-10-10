@@ -281,6 +281,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var parsing by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) {
         if (id != null) {
@@ -299,6 +300,10 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         ScannerScreen(prefs = prefs, onResult = { barcode = it; scanning = false }, onClose = { scanning = false })
         return
     }
+    if (showHistory && id != null) {
+        ProductHistoryScreen(id) { showHistory = false }
+        return
+    }
 
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -306,6 +311,12 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
             if (id == null) "Новый товар" else "Карточка товара",
             style = MaterialTheme.typography.headlineSmall
         )
+        if (id != null) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { showHistory = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("История приёма товара")
+            }
+        }
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(4.dp))
