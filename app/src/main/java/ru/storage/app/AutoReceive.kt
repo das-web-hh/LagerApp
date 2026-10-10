@@ -177,6 +177,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
 
     private val results = HashMap<Int, PageResult>()
     private val partsCache = HashMap<String, ProductParts>()
+    private var seenSender: String? = null
     private var genSender: String? = null
     private var genPng: ByteArray? = null
 
@@ -299,6 +300,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                                 st.status = "готово"
                                 if (!rulesChecked && r.sender != "none") {
                                     rulesChecked = true
+                                    seenSender = r.sender
                                     val rl = InvoiceProfiles.confirmedRules(app, r.sender)
                                     if (rl != null) {
                                         // у поставщика есть подтверждённый шаблон: этот лист читаем ещё раз с правилами, остальные — сразу с ними
@@ -329,11 +331,26 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     if (failed == 0) message = "Готово: распознано листов — $n"
                 } catch (e: Exception) {
                 }
-                if (failed == 0) {
-                    try { createProfileIfNeeded() } catch (e: Exception) { }
-                    message = "Готово: распознано листов — $n" +
-                        if (newProfileName.isNotBlank()) ". Новый шаблон накладной: $newProfileName (Главная → Шаблоны накладных)" else ""
+                var profileNote: String
+                if (failed != 0) {
+                    profileNote = "Шаблон не создан: не все листы распознаны"
+                } else {
+                    profileNote = try {
+                        createProfileIfNeeded()
+                        val sn = seenSender
+                        when {
+                            newProfileName.isNotBlank() -> "Новый шаблон накладной: $newProfileName (Главная → Шаблоны накладных)"
+                            sn == null -> "Шаблон не создан: поставщик на листах не определён"
+                            else -> InvoiceProfiles.find(app, sn)?.let {
+                                if (it.status == "new") "Шаблон поставщика «$sn» уже создан и ждёт подтверждения"
+                                else "Использован подтверждённый шаблон поставщика «$sn»"
+                            } ?: "Шаблон не создан"
+                        }
+                    } catch (e: Exception) {
+                        "Шаблон не создан: " + (e.message ?: e.javaClass.simpleName)
+                    }
                 }
+                message = "Готово: распознано листов — $n. $profileNote"
             } catch (e: Exception) {
                 message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
             } finally {

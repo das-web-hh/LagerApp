@@ -190,7 +190,7 @@ object Ai {
     }
 
     /** Один запрос к ИИ: текст + (необязательно) картинка. Возвращает текст ответа. */
-    fun call(ctx: Context, prompt: String, png: ByteArray?): String {
+    fun call(ctx: Context, prompt: String, png: ByteArray?, json: Boolean = png != null): String {
         val provider = AiCfg.provider(ctx)
         val key = AiCfg.key(ctx)
         val model = AiCfg.model(ctx)
@@ -204,7 +204,7 @@ object Ai {
                     parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", b64)))
                 }
                 val cfg = JSONObject().put("temperature", 0)
-                if (png != null) cfg.put("responseMimeType", "application/json")
+                if (json) cfg.put("responseMimeType", "application/json")
                 val body = JSONObject()
                     .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
                     .put("generationConfig", cfg)

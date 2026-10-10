@@ -139,7 +139,7 @@ object InvoiceProfiles {
 
     /** Один запрос к ИИ (с картинкой первого листа) — текст правил. Вызывать не в главном потоке. */
     fun generate(ctx: Context, sender: String, png: ByteArray, extracted: String): String =
-        Ai.call(ctx, prompt(sender, extracted), png).trim().take(1500)
+        Ai.call(ctx, prompt(sender, extracted), png, false).trim().take(1500)
 }
 
 @Composable
