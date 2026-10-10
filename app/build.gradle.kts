@@ -13,29 +13,26 @@ android {
         applicationId = "ru.storage.app"
         minSdk = 26
         targetSdk = 34
-        // номер сборки GitHub Actions: каждая следующая сборка новее предыдущей
-        val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionCode = runNumber
-        versionName = "1.0.$runNumber"
+        // versionCode = минуты с 1970 года: каждая следующая сборка всегда новее предыдущей
+        // (даже если репозиторий создан заново и счётчик запусков GitHub начался с 1)
+        versionCode = (System.currentTimeMillis() / 60000L).toInt()
+        versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
 
-    // Постоянный ключ подписи берётся из секретов GitHub (см. README → «Подпись APK»).
-    // Без ключа собирается обычная debug-версия.
-    val keystorePath = System.getenv("KEYSTORE_FILE")
+    // Один и тот же постоянный ключ для каждой сборки → Android обновляет приложение поверх старого.
     signingConfigs {
-        if (keystorePath != null && file(keystorePath).exists()) {
-            create("release") {
-                storeFile = file(keystorePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
-            }
+        create("lager") {
+            storeFile = file("lager.jks")
+            storePassword = "lager2026"
+            keyAlias = "lager"
+            keyPassword = "lager2026"
         }
     }
     buildTypes {
+        debug { signingConfig = signingConfigs.getByName("lager") }
         release {
             isMinifyEnabled = false
-            signingConfigs.findByName("release")?.let { signingConfig = it }
+            signingConfig = signingConfigs.getByName("lager")
         }
     }
     lint {

@@ -35,7 +35,17 @@ object AiCfg {
     }
 }
 
-data class AiItem(val name: String, val qty: String)
+/**
+ * qty — печатное количество; mark — отметка ручкой слева: "check" (галочка) / "cross" (крестик или вычеркнуто) / "none";
+ * qtyCrossed — печатное количество перечёркнуто; handQty — количество, дописанное ручкой.
+ */
+data class AiItem(
+    val name: String,
+    val qty: String,
+    val mark: String = "none",
+    val handQty: String = "",
+    val qtyCrossed: Boolean = false
+)
 data class PageResult(val sender: String, val order: String, val items: List<AiItem>)
 
 object Ai {
@@ -76,11 +86,12 @@ object Ai {
         val model = AiCfg.model(ctx)
         val timeout = AiCfg.timeoutSec(ctx).coerceIn(5, 600) * 1000
         val b64 = png?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
+        val mime = if (png != null && png.size > 2 && png[0] == 0xFF.toByte()) "image/jpeg" else "image/png"
         return when (provider) {
             "gemini" -> {
                 val parts = JSONArray().put(JSONObject().put("text", prompt))
                 if (b64 != null) {
-                    parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/png").put("data", b64)))
+                    parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", b64)))
                 }
                 val cfg = JSONObject().put("temperature", 0)
                 if (png != null) cfg.put("responseMimeType", "application/json")
@@ -98,7 +109,7 @@ object Ai {
                 if (b64 != null) {
                     content.put(
                         JSONObject().put("type", "image_url")
-                            .put("image_url", JSONObject().put("url", "data:image/png;base64,$b64"))
+                            .put("image_url", JSONObject().put("url", "data:$mime;base64,$b64"))
                     )
                 }
                 val body = JSONObject().put("model", model).put(
@@ -114,12 +125,12 @@ object Ai {
                     content.put(
                         JSONObject().put("type", "image").put(
                             "source",
-                            JSONObject().put("type", "base64").put("media_type", "image/png").put("data", b64)
+                            JSONObject().put("type", "base64").put("media_type", mime).put("data", b64)
                         )
                     )
                 }
                 content.put(JSONObject().put("type", "text").put("text", prompt))
-                val body = JSONObject().put("model", model).put("max_tokens", 2000).put(
+                val body = JSONObject().put("model", model).put("max_tokens", 4096).put(
                     "messages", JSONArray().put(JSONObject().put("role", "user").put("content", content))
                 )
                 val r = post(
@@ -139,22 +150,46 @@ object Ai {
     }
 
     private fun prompt(page: Int, total: Int) = """
-        This is page $page of $total of a scanned goods-receipt document (delivery note / order), black and white.
-        Extract data from THIS page only and answer with JSON only, no other text:
-        {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "..."}]}
+        This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
+        The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
+        A warehouse worker has checked the printed lines with a pen (ticks, crosses, strike-throughs, handwritten numbers). Read these pen marks carefully: pen marks are often in blue (or other colored) ink, the printed text is black.
+        A mark belongs to the table row it is vertically aligned with (usually drawn in the left margin, left of the position number). Marks of neighbouring rows can touch or overlap: decide for each row separately by where the center of the mark lies, and never give one mark to two rows.
+        Extract data from THIS page only and answer with JSON only (no markdown, no comments):
+        {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "...", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
         Rules:
-        - sender: the name of the company or organization that sent the goods (supplier / shipper). If it is not on this page, use "none".
-        - order_number: a code that starts with ЕБ (Cyrillic) or EB followed by exactly 7 digits, for example ЕБ1234567. If it is not on this page, use "none".
-        - items: every product line on this page. name = product name exactly as written; qty = the ordered/delivered quantity of units as written (number only if possible). If the page has no products, use an empty array.
+        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. If it is not on this page, use "none".
+        - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"); then use it as order_number and do NOT list that line as an item. If it is not on this page, use "none".
+        - The document may also be an invoice (Rechnung) or an order confirmation instead of a delivery note: treat its goods table the same way. Prices (Einzelpreis, Gesamtpreis, Preis, EUR) are never a quantity; the position number (Pos) is not part of the name.
+        - items: every GOODS line of this page, in the order of the page. Lines that are crossed out, struck through or have quantity 0 must be included too — never skip a goods line.
+          Skip lines that are not goods: freight (Frachtkosten, Fracht), pallets and pallet deposits (Euro-Palette, EW Pallets, Leihgebühr, Gutschrift), packaging, totals, weight summaries, table headers, addresses, footers.
+        - name: the product name exactly as written (keep the original language). If the name continues on the next line (for example "Nachfüller") or a size line follows (for example "20 kg", "500 ml", "2,5 Lt"), append it to the name. Do not include article number, expiry date (Verfallsdatum) or batch (Charge) in the name.
+        - qty: the PRINTED number of delivered units of this line (columns like Stück, Anz., Anzahl, Menge (if a small extra column with 1 or a unit code follows Menge, the quantity is the Menge number) with unit ST / PCE / Sack / Eimer / Dose / Kan / Fla, aktuelle Liefermenge / Liefermenge, Množství, Počet, ks, Aantal, Stuks). Number only. Do not use the weight per unit, total weight (Gesamt in kg), price, article number, batch number, "bestellt" (ordered) or "offen" (open) columns when a delivered piece count exists.
+        - mark: the pen mark that belongs to this line (usually at the left of the line): "check" = a tick (✓, √ or a slash-like tick); "cross" = a hand-drawn X, or the whole line struck through with a pen (goods did not arrive); "none" = no pen mark.
+        - qty_crossed: true only if the printed quantity itself is crossed out or marked with an X / correction while the rest of the line is not struck through; otherwise false.
+        - hand_qty: if a quantity is handwritten with a pen next to this line or its quantity (for example "9 stk", "15"), give that number only; otherwise "".
+        - Ignore handwritten notes that do not belong to a line: names, dates, pallet counts like "6P" or "7P", signatures, scribbles, arrows.
+        If the page has no goods lines, use an empty items array.
     """.trimIndent()
+
+    /** Достаём JSON из ответа; если ответ оборвался на длинной таблице — закрываем скобки. */
+    private fun parseJson(text: String): JSONObject {
+        val s = text.indexOf('{')
+        val e = text.lastIndexOf('}')
+        if (s < 0 || e <= s) throw RuntimeException("ИИ вернул ответ без JSON")
+        val cut = text.substring(s, e + 1)
+        for (tail in listOf("", "]}", "}")) {
+            try {
+                return JSONObject(cut + tail)
+            } catch (ex: Exception) {
+            }
+        }
+        throw RuntimeException("ИИ вернул неполный JSON")
+    }
 
     /** Распознать один лист. Бросает исключение при ошибке/таймауте — вызывающий повторит. */
     fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int): PageResult {
         val text = call(ctx, prompt(page, total), png)
-        val s = text.indexOf('{')
-        val e = text.lastIndexOf('}')
-        if (s < 0 || e <= s) throw RuntimeException("ИИ вернул ответ без JSON")
-        val o = JSONObject(text.substring(s, e + 1))
+        val o = parseJson(text)
         val items = ArrayList<AiItem>()
         val arr = o.optJSONArray("items")
         if (arr != null) {
@@ -162,7 +197,14 @@ object Ai {
                 val it = arr.optJSONObject(i) ?: continue
                 val name = it.optString("name").trim()
                 if (name.isEmpty()) continue
-                items.add(AiItem(name, (it.opt("qty")?.toString() ?: "").trim()))
+                val q = (it.opt("qty")?.toString() ?: "").trim()
+                val hand = (it.opt("hand_qty")?.toString() ?: "").trim().let { h -> if (h.equals("null", true)) "" else h }
+                val mark = when (it.optString("mark").trim().lowercase()) {
+                    "check", "tick", "ok" -> "check"
+                    "cross", "x" -> "cross"
+                    else -> "none"
+                }
+                items.add(AiItem(name, q, mark, hand, it.optBoolean("qty_crossed", false)))
             }
         }
         val sender = o.optString("sender", "none").trim().ifBlank { "none" }

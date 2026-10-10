@@ -226,7 +226,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
                     error = "Время в формате дд.мм.гггг чч:мм"
                 } else if (items.isEmpty()) {
                     error = "В партии нет товаров — удалите партию целиком"
-                } else if (items.any { !qtyValid(it.qty) }) {
+                } else if (items.any { !qtyValid(it.qty) && !(it.plan.isNotBlank() && it.qty.trim().replace(',', '.').toDoubleOrNull() == 0.0) }) {
                     error = "Количество должно быть больше нуля"
                 } else {
                     val ph = photos.toList()
