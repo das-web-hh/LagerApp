@@ -16,6 +16,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.UUID
 import java.io.File
 import java.util.Locale
 
@@ -116,10 +118,13 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
     var order by mutableStateOf("none")
     var stamp by mutableStateOf(Stamp.parse(file.name))
     val items = mutableStateListOf<ItemRow>()
+    var saved by mutableStateOf(false)
+    var saving by mutableStateOf(false)
 
     private val results = HashMap<Int, PageResult>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var started = false
+    var started = false
+        private set
 
     val hasFailed: Boolean get() = pages.isNotEmpty() && pages.any { !it.ok }
 
@@ -210,13 +215,43 @@ object AutoReceiveHolder {
     }
 }
 
+fun normalizeQty(q: String): String {
+    val m = Regex("\\d+(?:[.,]\\d+)?").find(q) ?: return ""
+    return m.value.replace(',', '.')
+}
+
+fun stampMillis(stamp: String): Long? = when (stamp.length) {
+    16 -> parseTime(stamp)
+    10 -> parseTime("$stamp 00:00")
+    else -> null
+}
+
 @Composable
-fun AutoReceiveScreen(f: IncomingFile, onClose: () -> Unit) {
+fun AutoReceiveScreen(f: IncomingFile, receiver: String, onClose: () -> Unit) {
     val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    val scope = rememberCoroutineScope()
     BackHandler(onBack = onClose)
     val ready = AiCfg.ready(ctx)
     val job = remember(f.path) { AutoReceiveHolder.get(ctx, f) }
-    LaunchedEffect(f.path) { if (ready) job.startOnce() }
+    var checked by remember(f.path) { mutableStateOf(false) }
+    var dup by remember(f.path) { mutableStateOf<Dup?>(null) }
+    var forced by remember(f.path) { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+
+    // До распознавания: не обрабатывался ли этот файл раньше (имя файла, затем дата и время)
+    LaunchedEffect(f.path) {
+        if (ready && !job.started) {
+            val d = try {
+                Cloud.findDuplicate(db, "", f.name, job.stamp)
+            } catch (e: Exception) {
+                null
+            }
+            dup = d
+            if (d == null) job.startOnce()
+        }
+        checked = true
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Автоприём", style = MaterialTheme.typography.headlineSmall)
@@ -230,6 +265,28 @@ fun AutoReceiveScreen(f: IncomingFile, onClose: () -> Unit) {
             )
             Spacer(Modifier.height(16.dp))
             Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
+            return@Column
+        }
+        if (!checked) {
+            Text("Проверка: не обрабатывался ли файл раньше…")
+            return@Column
+        }
+        val d = dup
+        if (d != null && !forced) {
+            Text("Этот файл уже обработан", style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error)
+            Text("Совпало: ${d.by}. На распознавание не отправлен.")
+            Spacer(Modifier.height(8.dp))
+            Text("Приём: ${fmtTime(d.receipt.receivedAt)}")
+            if (d.receipt.sender.isNotBlank()) Text("Отправитель: ${d.receipt.sender}")
+            if (d.receipt.orderNo.isNotBlank()) Text("Номер заказа: ${d.receipt.orderNo}")
+            Text("Товаров: ${d.receipt.items.size}")
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = { forced = true; job.startOnce() }, modifier = Modifier.fillMaxWidth()) {
+                Text("Обработать всё равно")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
             return@Column
         }
 
@@ -250,20 +307,21 @@ fun AutoReceiveScreen(f: IncomingFile, onClose: () -> Unit) {
             )
         }
 
+        val editable = !job.running && !job.saved && !job.saving
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(
             job.sender, { job.sender = it }, label = { Text("Отправитель (организация)") },
-            enabled = !job.running, singleLine = true, modifier = Modifier.fillMaxWidth()
+            enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             job.order, { job.order = it }, label = { Text("Номер заказа (ЕБ + 7 цифр)") },
-            enabled = !job.running, singleLine = true, modifier = Modifier.fillMaxWidth()
+            enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             job.stamp, { job.stamp = it }, label = { Text("Дата и время (из имени файла)") },
-            enabled = !job.running, singleLine = true, modifier = Modifier.fillMaxWidth()
+            enabled = editable, singleLine = true, modifier = Modifier.fillMaxWidth()
         )
 
         Spacer(Modifier.height(16.dp))
@@ -272,21 +330,94 @@ fun AutoReceiveScreen(f: IncomingFile, onClose: () -> Unit) {
             key(row) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
-                        row.name, { row.name = it }, enabled = !job.running,
+                        row.name, { row.name = it }, enabled = editable,
                         label = { Text("Название") }, modifier = Modifier.weight(1f)
                     )
                     Spacer(Modifier.width(6.dp))
                     OutlinedTextField(
-                        row.qty, { row.qty = it }, enabled = !job.running, singleLine = true,
+                        row.qty, { row.qty = it }, enabled = editable, singleLine = true,
                         label = { Text("Кол-во") }, modifier = Modifier.width(88.dp)
                     )
-                    TextButton(onClick = { job.items.remove(row) }, enabled = !job.running) { Text("✕") }
+                    TextButton(onClick = { job.items.remove(row) }, enabled = editable) { Text("✕") }
                 }
             }
         }
 
         Spacer(Modifier.height(16.dp))
-        if (!job.running && job.hasFailed) {
+        if (job.saved) {
+            Text(
+                "Приём сохранён в историю. Файл отправляется на Google Диск.",
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(8.dp))
+        } else if (!job.running && job.pages.isNotEmpty() && job.items.isNotEmpty()) {
+            if (error.isNotBlank()) {
+                Text(error, color = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.height(8.dp))
+            }
+            Button(
+                enabled = !job.saving,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    scope.launch {
+                        error = ""
+                        val rows = job.items.map { it.name.trim() to normalizeQty(it.qty) }.filter { it.first.isNotEmpty() }
+                        if (rows.isEmpty()) {
+                            error = "Нет товаров для сохранения"
+                            return@launch
+                        }
+                        if (rows.any { it.second.isEmpty() || !qtyValid(it.second) }) {
+                            error = "Укажите количество (число больше нуля) у каждого товара"
+                            return@launch
+                        }
+                        val order = Ai.normalizeOrder(job.order)
+                        job.saving = true
+                        try {
+                            // Номер заказа — главный признак: тот же заказ второй раз не сохраняем
+                            if (order != "none") {
+                                val d2 = try {
+                                    Cloud.findDuplicate(db, order, "", "")
+                                } catch (e: Exception) {
+                                    null
+                                }
+                                if (d2 != null) {
+                                    error = "Заказ $order уже принят ${fmtTime(d2.receipt.receivedAt)} — повторно не сохраняю."
+                                    return@launch
+                                }
+                            }
+                            val now = System.currentTimeMillis()
+                            val at = stampMillis(job.stamp.trim()) ?: now
+                            val sender = job.sender.trim().let { if (it.equals("none", true)) "" else it }
+                            val stamp = job.stamp.trim().let { if (it.length == 16) it else "" }
+                            withContext(Dispatchers.IO) {
+                                val inv = Media.importFile(ctx, File(f.path), db, "IN")
+                                val r = Receipt(
+                                    id = UUID.randomUUID().toString(),
+                                    sender = sender,
+                                    orderNo = if (order == "none") "" else order,
+                                    receivedAt = at,
+                                    receiver = receiver,
+                                    items = rows.map { ReceiptItem(db.findByName(it.first)?.id ?: "", it.first, it.second) },
+                                    photos = emptyList(),
+                                    invoices = listOfNotNull(inv),
+                                    updatedAt = now,
+                                    fileName = f.name,
+                                    stamp = stamp
+                                )
+                                Cloud.saveReceipt(db, r)
+                                Media.uploadPending(ctx, db)
+                            }
+                            job.saved = true
+                        } finally {
+                            job.saving = false
+                        }
+                    }
+                }
+            ) { Text(if (job.saving) "Сохранение…" else "Сохранить приём") }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        if (!job.running && !job.saved && job.hasFailed) {
             Button(onClick = { job.start(true) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Повторить нераспознанные листы")
             }

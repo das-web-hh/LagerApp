@@ -29,6 +29,9 @@ class SyncState {
     var version by mutableIntStateOf(0)
 }
 
+/** Найденная ранее приёмка: by — по какому признаку совпало. */
+class Dup(val by: String, val receipt: Receipt)
+
 /*
  * Firestore:
  *  products/{id}: name, article, barcode, weight, unit, pack, manufacturer, photos[], updatedAt, deleted
@@ -92,6 +95,8 @@ object Cloud {
         },
         "photos" to r.photos,
         "invoices" to r.invoices,
+        "fileName" to r.fileName,
+        "stamp" to r.stamp,
         "updatedAt" to r.updatedAt,
         "deleted" to false
     )
@@ -151,7 +156,9 @@ object Cloud {
             items = items,
             photos = strList(get("photos")),
             invoices = strList(get("invoices")),
-            updatedAt = getLong("updatedAt") ?: 0L
+            updatedAt = getLong("updatedAt") ?: 0L,
+            fileName = get("fileName")?.toString() ?: "",
+            stamp = get("stamp")?.toString() ?: ""
         )
     }
 
@@ -258,5 +265,36 @@ object Cloud {
         } finally {
             st.busy = false
         }
+    }
+
+    /**
+     * Проверка на повторную обработку. Приоритет признаков: 1) номер заказа, 2) имя файла, 3) дата и время.
+     * Пустые значения пропускаются. Сначала локальная история, потом Firebase (1 чтение на признак).
+     */
+    suspend fun findDuplicate(db: ProductDb, order: String, fileName: String, stamp: String): Dup? {
+        val checks = ArrayList<Triple<String, String, String>>() // подпись, поле Firestore, значение
+        if (order.isNotBlank() && order != "none") checks.add(Triple("номер заказа", "orderNo", order))
+        if (fileName.isNotBlank()) checks.add(Triple("имя файла", "fileName", fileName))
+        if (stamp.length == 16) checks.add(Triple("дата и время", "stamp", stamp))
+        for ((label, field, value) in checks) {
+            val column = when (field) {
+                "orderNo" -> "order_no"
+                "fileName" -> "file_name"
+                else -> "stamp"
+            }
+            val local = withContext(Dispatchers.IO) { db.findReceiptBy(column, value) }
+            if (local != null) return Dup(label, local)
+            try {
+                val docs = fs.collection("receipts").whereEqualTo(field, value).limit(5).get().awaitIt().documents
+                val r = docs.firstOrNull { it.getBoolean("deleted") != true }?.toReceipt()
+                if (r != null) {
+                    withContext(Dispatchers.IO) { db.upsertReceipts(listOf(r)) }
+                    return Dup(label, r)
+                }
+            } catch (e: Exception) {
+                // нет связи — остаёмся с проверкой по локальной истории
+            }
+        }
+        return null
     }
 }

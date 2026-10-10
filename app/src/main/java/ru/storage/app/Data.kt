@@ -34,7 +34,9 @@ data class Receipt(
     val items: List<ReceiptItem>,
     val photos: List<String>,
     val invoices: List<String>,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val fileName: String = "",
+    val stamp: String = ""
 ) {
     fun allMedia(): List<String> = photos + invoices
 }
@@ -81,7 +83,7 @@ fun jsonToItems(s: String?): List<ReceiptItem> {
 }
 
 class ProductDb private constructor(context: Context) :
-    SQLiteOpenHelper(context, "catalog.db", null, 2) {
+    SQLiteOpenHelper(context, "catalog.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -103,6 +105,9 @@ class ProductDb private constructor(context: Context) :
             }
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name_lc)")
             createExtra(db)
+        } else if (oldVersion == 2) {
+            db.execSQL("ALTER TABLE receipts ADD COLUMN file_name TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE receipts ADD COLUMN stamp TEXT NOT NULL DEFAULT ''")
         }
     }
 
@@ -113,7 +118,8 @@ class ProductDb private constructor(context: Context) :
             "CREATE TABLE IF NOT EXISTS receipts (" +
                 "id TEXT PRIMARY KEY, sender TEXT NOT NULL, order_no TEXT NOT NULL, " +
                 "received_at INTEGER NOT NULL, receiver TEXT NOT NULL, items TEXT NOT NULL, " +
-                "photos TEXT NOT NULL, invoices TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+                "photos TEXT NOT NULL, invoices TEXT NOT NULL, updated_at INTEGER NOT NULL, " +
+                "file_name TEXT NOT NULL DEFAULT '', stamp TEXT NOT NULL DEFAULT '')"
         )
         db.execSQL("CREATE TABLE IF NOT EXISTS uploads (name TEXT PRIMARY KEY)")
     }
@@ -212,7 +218,7 @@ class ProductDb private constructor(context: Context) :
 
     // ---------- приёмки ----------
 
-    private val rcols = "id, sender, order_no, received_at, receiver, items, photos, invoices, updated_at"
+    private val rcols = "id, sender, order_no, received_at, receiver, items, photos, invoices, updated_at, file_name, stamp"
 
     private fun readReceipts(sql: String, args: Array<String>): List<Receipt> =
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -222,7 +228,7 @@ class ProductDb private constructor(context: Context) :
                     Receipt(
                         c.getString(0), c.getString(1), c.getString(2), c.getLong(3), c.getString(4),
                         jsonToItems(c.getString(5)), jsonToList(c.getString(6)),
-                        jsonToList(c.getString(7)), c.getLong(8)
+                        jsonToList(c.getString(7)), c.getLong(8), c.getString(9), c.getString(10)
                     )
                 )
             }
@@ -254,6 +260,8 @@ class ProductDb private constructor(context: Context) :
                     put("photos", listToJson(r.photos))
                     put("invoices", listToJson(r.invoices))
                     put("updated_at", r.updatedAt)
+                    put("file_name", r.fileName)
+                    put("stamp", r.stamp)
                 }
                 db.insertWithOnConflict("receipts", null, v, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -269,6 +277,15 @@ class ProductDb private constructor(context: Context) :
 
     fun getReceipt(id: String): Receipt? =
         readReceipts("SELECT $rcols FROM receipts WHERE id = ?", arrayOf(id)).firstOrNull()
+
+    /** column: order_no, file_name или stamp — внутренние имена столбцов. */
+    fun findReceiptBy(column: String, value: String): Receipt? =
+        readReceipts("SELECT $rcols FROM receipts WHERE $column = ? ORDER BY received_at DESC LIMIT 1", arrayOf(value))
+            .firstOrNull()
+
+    fun findByName(name: String): Product? =
+        readProducts("SELECT $pcols FROM products WHERE name_lc = ? LIMIT 1", arrayOf(name.trim().lowercase()))
+            .firstOrNull()
 
     fun allReceipts(): List<Receipt> =
         readReceipts("SELECT $rcols FROM receipts ORDER BY received_at DESC", emptyArray())

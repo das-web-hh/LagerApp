@@ -83,7 +83,9 @@ fun AppRoot() {
     if (loggedIn) {
         val inc = Incoming.file
         when {
-            inc != null && Incoming.mode == "auto" -> AutoReceiveScreen(inc) { Incoming.clear() }
+            inc != null && Incoming.mode == "auto" -> AutoReceiveScreen(
+                inc, "${profile.firstName} ${profile.lastName}".trim()
+            ) { Incoming.clear() }
             inc != null && Incoming.mode == "name" -> NameReceiveScreen(inc) { Incoming.clear() }
             else -> {
                 MainScreen(prefs = prefs, profile = profile, onLogout = { loggedIn = false })

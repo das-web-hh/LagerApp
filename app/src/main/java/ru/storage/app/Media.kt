@@ -121,6 +121,22 @@ object Media {
         }
     }
 
+    /** Файл из кэша приложения (например, присланный скан) → в медиа-папку, в очередь отправки на Диск. */
+    fun importFile(ctx: Context, src: File, db: ProductDb, kind: String): String? {
+        return try {
+            val isImg = isImage(src.name)
+            val name = if (isImg) newPhotoName(kind)
+            else kind + "-" + UUID.randomUUID().toString().take(8) + "_" + safe(src.name)
+            val target = file(ctx, name)
+            src.copyTo(target, overwrite = true)
+            if (isImg) shrink(target)
+            db.addUpload(name)
+            name
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun cameraTarget(ctx: Context, kind: String): Pair<String, Uri> {
         val name = newPhotoName(kind)
         val f = file(ctx, name)
