@@ -427,22 +427,60 @@ private fun DocFields(job: AutoJob, editable: Boolean) {
     )
 }
 
-/** В приёме по имени данные документа свёрнуты в одну строку, чтобы колесу хватало места. */
+/** Верх экрана «Приём по имени»: кнопки, отправитель и заказ, ниже — колесо с поиском. Ничего лишнего. */
 @Composable
-private fun CollapsedDocFields(job: AutoJob, editable: Boolean) {
-    var open by remember { mutableStateOf(false) }
-    val sum = listOf(job.sender, job.order, job.stamp).map { it.trim() }
-        .filter { it.isNotEmpty() && !it.equals("none", true) }.joinToString(" · ")
-    OutlinedButton(onClick = { open = !open }, modifier = Modifier.fillMaxWidth()) {
-        Text(
-            if (open) "Скрыть данные документа" else "Данные: ${sum.ifEmpty { "заполнить" }}",
-            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+private fun ColumnScope.NameModeMain(
+    job: AutoJob,
+    error: String,
+    addTick: Int,
+    onNext: () -> Unit,
+    onRetry: () -> Unit,
+    onAdd: () -> Unit
+) {
+    val editable = !job.running && !job.saved && !job.saving
+    val failed = job.pages.count { !it.ok }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Button(
+            onClick = onNext,
+            enabled = editable && job.pages.isNotEmpty(),
+            modifier = Modifier.weight(1f)
+        ) { Text("Далее") }
+        if (!job.running && !job.saved && failed > 0) {
+            OutlinedButton(onClick = onRetry, modifier = Modifier.weight(1f)) {
+                Text("Повторить листы ($failed)", maxLines = 1)
+            }
+        }
+    }
+    if (error.isNotBlank()) {
+        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 4.dp))
+    }
+    if (job.saved) {
+        Text("Приём сохранён", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 4.dp))
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            job.sender.let { if (it.equals("none", true)) "" else it }, { job.sender = it },
+            label = { Text("Отправитель") }, enabled = editable, singleLine = true,
+            modifier = Modifier.weight(1f)
+        )
+        OutlinedTextField(
+            job.order.let { if (it.equals("none", true)) "" else it }, { job.order = it },
+            label = { Text("Заказ") }, enabled = editable, singleLine = true,
+            modifier = Modifier.width(150.dp)
         )
     }
-    if (open) {
-        Spacer(Modifier.height(8.dp))
-        DocFields(job, editable)
-    }
+    Spacer(Modifier.height(8.dp))
+    CountWheelList(
+        job.items, editable, Modifier.weight(1f), addTick, onAdd,
+        if (job.running) job.message else "Список пуст"
+    )
 }
 
 @Composable
@@ -536,14 +574,17 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         checked = true
     }
 
+    val showMain = ready && checked && (dup == null || forced)
     Column(
         Modifier.fillMaxSize()
-            .then(if (nameMode) Modifier else Modifier.verticalScroll(rememberScrollState()))
-            .padding(16.dp)
+            .then(if (nameMode) Modifier.imePadding() else Modifier.verticalScroll(rememberScrollState()))
+            .padding(if (nameMode && showMain) 10.dp else 16.dp)
     ) {
-        Text(if (nameMode) "Приём по имени" else "Автоприём", style = MaterialTheme.typography.headlineSmall)
-        Text(f.name, style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(12.dp))
+        if (!nameMode || !showMain) {
+            Text(if (nameMode) "Приём по имени" else "Автоприём", style = MaterialTheme.typography.headlineSmall)
+            Text(f.name, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(12.dp))
+        }
 
         if (!ready) {
             Text(
@@ -577,6 +618,24 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             return@Column
         }
 
+        if (nameMode) {
+            NameModeMain(
+                job = job,
+                error = error,
+                addTick = addTick,
+                onNext = {
+                    val e = checkFacts(job)
+                    if (e != null) error = e else {
+                        error = ""
+                        step = 1
+                    }
+                },
+                onRetry = { job.start(true) },
+                onAdd = { showAdd = true }
+            )
+            return@Column
+        }
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (job.running) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -586,7 +645,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         }
         Spacer(Modifier.height(8.dp))
         job.pages.forEachIndexed { i, p ->
-            if (!nameMode || p.status.startsWith("ошибка")) Text(
+            Text(
                 "Лист ${i + 1} из ${job.pages.size} — ${p.status}",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (p.status.startsWith("ошибка")) MaterialTheme.colorScheme.error
@@ -596,33 +655,16 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
 
         val editable = !job.running && !job.saved && !job.saving
         Spacer(Modifier.height(16.dp))
-        if (nameMode) CollapsedDocFields(job, editable) else DocFields(job, editable)
+        DocFields(job, editable)
 
         Spacer(Modifier.height(16.dp))
         Text("Товары: ${job.items.size}", style = MaterialTheme.typography.titleSmall)
-        if (nameMode) {
-            Text(
-                "Тап по строке — +1 к факту, тап по числу справа — ввод барабаном, свайп влево — «Брак» и «Удалить», долгое нажатие — правка.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        } else {
-            Text(
-                "По отметкам ручкой: ✓ — пришло, ✕ — не пришло (сохранится с количеством 0), ✎ — другое количество, дописанное ручкой.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        if (nameMode) {
-            CountWheelList(job.items, editable, Modifier.weight(1f), addTick)
-            if (editable) {
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("+ Добавить товар")
-                }
-            }
-        } else {
-            job.items.toList().forEach { row ->
-                key(row) { AutoRowEditor(row, editable) { job.items.remove(row) } }
-            }
+        Text(
+            "По отметкам ручкой: ✓ — пришло, ✕ — не пришло (сохранится с количеством 0), ✎ — другое количество, дописанное ручкой.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        job.items.toList().forEach { row ->
+            key(row) { AutoRowEditor(row, editable) { job.items.remove(row) } }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -632,31 +674,18 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.height(8.dp))
-        } else if (!job.running && job.pages.isNotEmpty() && (job.items.isNotEmpty() || nameMode)) {
+        } else if (!job.running && job.pages.isNotEmpty() && job.items.isNotEmpty()) {
             if (error.isNotBlank()) {
                 Text(error, color = MaterialTheme.colorScheme.error)
                 Spacer(Modifier.height(8.dp))
             }
-            if (nameMode) {
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        val e = checkFacts(job)
-                        if (e != null) error = e else {
-                            error = ""
-                            step = 1
-                        }
-                    }
-                ) { Text("Далее") }
-            } else {
-                Button(
-                    enabled = !job.saving,
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        scope.launch { error = saveJob(ctx, db, job, f, receiver, false) ?: "" }
-                    }
-                ) { Text(if (job.saving) "Сохранение…" else "Сохранить приём") }
-            }
+            Button(
+                enabled = !job.saving,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    scope.launch { error = saveJob(ctx, db, job, f, receiver, false) ?: "" }
+                }
+            ) { Text(if (job.saving) "Сохранение…" else "Сохранить приём") }
             Spacer(Modifier.height(8.dp))
         }
 
