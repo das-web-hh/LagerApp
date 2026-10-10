@@ -117,3 +117,32 @@ git push
 - Правила Firestore сейчас открыты (в приложении нет Firebase Auth). Токен и адрес скрипта
   лежат в `settings`, поэтому перед реальной эксплуатацией нужно перейти на Firebase Auth и закрыть правила.
 - Бесплатные лимиты Firestore: 50 000 чтений и 20 000 записей в сутки.
+
+## Подпись APK (чтобы приложение обновлялось поверх старого)
+
+Без постоянного ключа каждая сборка подписывается новым случайным ключом: Android не обновляет такое
+приложение, а Google Play Protect считает его новым. Поэтому APK подписывается **одним и тем же ключом**,
+который хранится в секретах GitHub (в репозиторий ключ не кладётся!).
+
+Один раз, в Termux:
+
+```bash
+pkg install -y openjdk-17 gh
+cd ~
+keytool -genkeypair -keystore lager.jks -alias lager -keyalg RSA -keysize 2048 -validity 10000 \
+  -storetype PKCS12 -storepass 'ВАШ_ПАРОЛЬ' -keypass 'ВАШ_ПАРОЛЬ' -dname "CN=Lager, O=Lager, C=DE"
+base64 -w 0 lager.jks > lager.b64
+
+gh auth login        # GitHub.com → HTTPS → Login with a web browser
+gh secret set KEYSTORE_BASE64   -R das-web-hh/LagerApp < lager.b64
+gh secret set KEYSTORE_PASSWORD -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
+gh secret set KEY_ALIAS         -R das-web-hh/LagerApp -b'lager'
+gh secret set KEY_PASSWORD      -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
+```
+
+**Файл `lager.jks` и пароль обязательно сохраните** (например, на Google Диск в личную папку): если их
+потерять, обновлять приложение поверх установленного станет невозможно.
+
+Дальше каждый `git push` собирает подписанный `release`-APK (Actions → Artifacts → `LagerApp`);
+номер версии растёт сам. Если секретов нет, собирается обычный debug-APK.
+
