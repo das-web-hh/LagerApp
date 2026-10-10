@@ -31,6 +31,7 @@ fun LoginScreen(onSuccess: (String) -> Unit) {
     var password by rememberSaveable { mutableStateOf("") }
     var show by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
 
     fun submit() {
         if (login.trim() == "admin" && password == "admin") onSuccess(login.trim())
@@ -54,14 +55,22 @@ fun LoginScreen(onSuccess: (String) -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(
-                    painterResource(R.drawable.app_logo),
-                    contentDescription = null,
-                    modifier = Modifier.size(112.dp).clip(RoundedCornerShape(28.dp))
-                )
+                Box(
+                    Modifier.size(132.dp).clip(RoundedCornerShape(32.dp)).background(Color.White),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        painterResource(R.drawable.app_logo),
+                        contentDescription = null,
+                        modifier = Modifier.size(112.dp)
+                    )
+                }
                 Spacer(Modifier.height(16.dp))
-                Text("Склад", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text("Приёмка и учёт товара", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
+                Text("Warehouse", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                val ver = remember {
+                    try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName } catch (e: Exception) { null } ?: ""
+                }
+                Text("v$ver", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
             }
         }
 
