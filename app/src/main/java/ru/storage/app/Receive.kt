@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -55,6 +56,16 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
     val lines = remember { mutableStateListOf<EditItem>() }
     var showDialog by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    val clipboard = LocalClipboardManager.current
+
+    // приём из ИИ: текст с меткой #LAGER (из поля поиска или из буфера обмена)
+    fun importAi(text: String) {
+        val res = AiImport.parse(text)
+        scope.launch {
+            message = if (res == null) "Не удалось разобрать текст"
+            else AiImport.save(ctx, db, res, receiver)
+        }
+    }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { Media.uploadPending(ctx, db) }
@@ -72,19 +83,26 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
 
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Приём вручную", style = MaterialTheme.typography.headlineSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Приём вручную", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            FilledTonalButton(
+                onClick = {
+                    val t = clipboard.getText()?.text.orEmpty()
+                    if (AiImport.looksLike(t)) importAi(t)
+                    else message = "В буфере нет данных ИИ: текст должен начинаться с метки ${AiImport.MARKER}"
+                },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(34.dp)
+            ) { Text("Вставить из буфера", style = MaterialTheme.typography.labelMedium) }
+        }
         Spacer(Modifier.height(12.dp))
         SearchBar(
             query = query,
             onChange = { v ->
                 if (AiImport.looksLike(v)) {
-                    // вставлен ответ ИИ (отправитель/заказ/время + товары) — сразу принимаем
+                    // вставлен ответ ИИ (метка #LAGER, отправитель/заказ/время, товары) — сразу принимаем
                     query = ""
-                    val res = AiImport.parse(v)
-                    scope.launch {
-                        message = if (res == null) "Не удалось разобрать вставленный текст"
-                        else AiImport.save(ctx, db, res, receiver)
-                    }
+                    importAi(v)
                 } else {
                     query = v
                 }

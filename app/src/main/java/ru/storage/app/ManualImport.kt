@@ -20,8 +20,11 @@ class ImportResult(
 )
 
 /**
- * Приём «из ИИ»: в строку поиска окна «Приём вручную» вставляют текст, который выдал ИИ по накладной:
+ * Приём «из ИИ»: в строку поиска окна «Приём вручную» вставляют текст (или жмут кнопку «Вставить из буфера»),
+ * который выдал ИИ по накладной. Текст принимается ТОЛЬКО если первая строка — метка #LAGER;
+ * любой другой случайно вставленный текст игнорируется:
  *
+ *   #LAGER
  *   Отправитель/EB1234567/16.07.2026 16:48
  *   Название товара<TAB>количество<TAB>штрих-код (необязательно)
  *
@@ -32,22 +35,32 @@ object AiImport {
     private val NUM = Regex("\\d+([.,]\\d+)?")
     private val BARCODE = Regex("\\d{8,14}")
 
+    const val MARKER = "#LAGER"
+
     private fun lines(text: String): List<String> =
         text.replace("\r", "\n").split('\n')
             .map { it.replace('\u00A0', ' ').trim() }
             .filter { it.isNotEmpty() && !it.startsWith("```") }
 
-    /** Текст похож на ответ ИИ: несколько строк, в первой два знака «/» (отправитель/заказ/дата). */
-    fun looksLike(text: String): Boolean {
-        if (!text.contains('\n') && !text.contains('\r')) return false
+    /** Строки после метки #LAGER (первая — заголовок отправитель/заказ/время); null — метки нет, текст чужой. */
+    private fun body(text: String): List<String>? {
         val l = lines(text)
-        return l.size >= 2 && l.first().count { it == '/' } >= 2
+        val first = l.firstOrNull() ?: return null
+        if (!first.startsWith(MARKER, ignoreCase = true)) return null
+        val rest = first.substring(MARKER.length).trim()
+        return (if (rest.isNotEmpty()) listOf(rest) else emptyList()) + l.drop(1)
+    }
+
+    /** Текст — ответ ИИ: есть метка #LAGER, заголовок с двумя «/» и хотя бы одна строка товара. */
+    fun looksLike(text: String): Boolean {
+        val b = body(text) ?: return false
+        return b.size >= 2 && b.first().count { it == '/' } >= 2
     }
 
     private fun clean(s: String): String = s.trim().let { if (it.lowercase() in EMPTY) "" else it }
 
     fun parse(text: String): ImportResult? {
-        val l = lines(text)
+        val l = body(text) ?: return null
         if (l.size < 2) return null
         val head = l.first().split('/')
         if (head.size < 3) return null

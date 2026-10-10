@@ -18,6 +18,100 @@
   зайдя с другого телефона под тем же логином, вы получите те же настройки.
 - Системная кнопка «Назад»: с главной — выход только двойным нажатием.
 
+## Приём вручную из ответа ИИ
+
+Накладную (PDF или фото) отдают внешнему ИИ с промтом ниже, а готовый ответ вставляют в приложение —
+оно само сохраняет приём в историю (Firebase + локальная база). Окно «Приём → Ручной» при этом остаётся прежним.
+
+**Как вставить**
+- Кнопка **«Вставить из буфера»** в строке названия окна «Приём вручную» берёт текст из системного буфера обмена, или
+- текст вставляют прямо в строку поиска.
+
+**Защита от случайной вставки.** Текст принимается только если **первая строка — метка `#LAGER`**.
+Любой другой вставленный текст игнорируется (в поле поиска он остаётся как обычный запрос, кнопка пишет подсказку).
+
+**Формат ответа ИИ** (столбцы разделены табуляцией):
+
+```
+#LAGER
+Отправитель/EB2612673/16.07.2026 16:48
+EQUIPUR - digest plus "P" 25 kg<TAB>1<TAB>
+EquiPower - Leinöl 5000 ml<TAB>2<TAB>
+Monopräparat MSM 800 g<TAB>3<TAB>штрих-код (необязательно)
+```
+
+- Строка 2: отправитель / номер заказа (`EB` + 7 цифр) / дата и время из имени файла `Сканирование_ГГГГММДД-ЧЧММ`.
+  Нет отправителя или номера заказа — `no_data` (также понимаются `no_name`, `EB_no_data`, `no_date`);
+  время приёма тогда ставится текущее.
+- Товар ищется в каталоге по названию (точно, без учёта регистра), затем по штрих-коду; не найден — сохраняется по названию.
+- Количество 0 — строка пропускается. Нечитаемая строка — приём не сохраняется, приложение показывает эту строку.
+- Заказ с уже принятым номером повторно не сохраняется.
+- Код: `app/src/main/java/ru/storage/app/ManualImport.kt` (разбор и сохранение), `Receive.kt` (кнопка и поле).
+
+### Промт для ИИ
+
+Целиком копировать в чат с ИИ, затем прикрепить файл накладной (имя файла должно быть вида `Сканирование_20260716-1648.pdf`).
+
+````text
+# ROLE AND CONTEXT
+You are an expert AI Document Processing, OCR, and Data Structuring specialist handling diverse invoice/delivery layouts. Your objective is 100% data extraction accuracy based on page markings, keyword filtering, and strict layout logic.
+
+# TASK
+Extract document data according to filtering marks and keyword exclusions, or extract the entire document if no marks exist. Format the output EXCLUSIVELY as a single code block. Each product item must occupy EXACTLY one line. Line breaks inside items are strictly forbidden.
+
+# ABSOLUTE FILTERING LOGIC
+1. Critical Blank Document Condition (No Marks):
+   - Scan the entire document for any handwritten or visual marks (checkmarks "✓", crosses "X", arrows).
+   - IF ABSOLUTELY NO MARKS EXIST: Switch to "Accept All" mode. Extract EVERY printed product row. Do not skip anything.
+   - IF MARKS EXIST: Proceed to Exclusion and Inclusion rules below.
+
+2. Exclusion Rule (When document has marks):
+   - If a row starts with or contains a cross ("X") before the item number, name, or quantity -> COMPLETELY EXCLUDE this row.
+
+3. Strict Keyword Exclusion for Unmarked Rows:
+   - If a row DOES NOT have a checkmark ("✓"), check its text entirely (name, description, notes).
+   - COMPLETELY EXCLUDE the row if it contains ANY of these words/codes (case-insensitive, as a whole word or substring):
+     ew, europallet, pallet, versand, EB (followed by numbers), palletenfrachtkostenpauseschale, versandkosten, landehilfsmittel, post.
+
+4. Inclusion Rule (When document has marks):
+   - Include a row ONLY if it has a clear handwritten checkmark ("✓") or a clear handwritten confirmation. Do not omit checked items.
+
+5. Multi-Page Collision Resolution:
+   - If a product row appears across multiple conflicting pages, locate the absolute "First Page".
+   - Look for a handwritten arrow (optionally with text like "ströh"). Extract data ONLY from the position indicated by the arrow.
+
+# METADATA EXTRACTION (LINES 1 AND 2)
+Line 1 is ALWAYS the fixed marker, exactly as written: #LAGER
+Line 2 contains metadata separated by slashes (/):
+- Sender Name: Priority: Email domains (e.g., info@innopha.de -> Innopha), logos/headers, website URLs. Exclude creditor@stroeh.de, stroeh, ströh. Fallback: no_data.
+- Document Number: Number starting with "EB" followed by 7 digits (e.g., EB2613026). Fallback: no_data.
+- Date and Time (FROM FILENAME): Extract strictly from the source file name matching the pattern Сканирование_YYYYMMDD-HHMM (e.g., from Сканирование_20260817-1254.jpg extract date and time and format as DD.MM.YYYY HH:MM, resulting in 17.08.2026 12:54). Fallback: no_data.
+- Format for Line 2: [Sender Name]/[Document Number]/[Date and Time]
+
+# QUANTITY & BARCODE RESOLUTION
+1. Standard Printed Quantity: If accepted and no handwritten corrections exist, use the printed delivery quantity column ("aktuelle Liefermenge", e.g., "5,00" -> 5).
+2. Handwritten STK/Unit Priority: If text contains "stk" or "штук" next to a number (e.g., "51 stk"), ignore printed numbers and use this exact handwritten number.
+3. Handwritten Crosses/Zeros: If a printed quantity is crossed out or has an "X"/"0" over/next to it, force Quantity = 0.
+4. Strict Quantity Formatting: Must be a clean integer. NEVER include periods or commas (truncate decimals, e.g., "5,00" -> 5). If invalid/missing, set Quantity = 0.
+5. Barcode Rule: Extract physical printed/written barcode only. Leave column completely empty if missing. NO INTERNET LOOKUP.
+
+# OUTPUT FORMAT
+- Start immediately with the code block. NO introductory or concluding text outside the block.
+- Columns within product rows must be separated by a single horizontal tab character.
+
+Format structure:
+#LAGER
+[Sender Name]/[EB Number]/[Date and Time]
+[Product Name]	[Quantity]	[Barcode]
+[Product Name]	[Quantity]	[Barcode]
+
+# CONSTRAINTS
+- Output MUST contain exactly one output code block and nothing else.
+- The first line of the block MUST be exactly #LAGER.
+- Remove all internal newline characters (\n, \r) from product names and replace with a single space.
+- Strip leading/trailing whitespace from all extracted values.
+````
+
 ## Как хранятся данные
 
 | Что | Где |
