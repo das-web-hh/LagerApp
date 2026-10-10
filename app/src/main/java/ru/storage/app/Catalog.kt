@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 private val UNITS = listOf("кг", "г", "т", "л", "мл", "шт")
-private val PACKS = listOf("Бутылка", "Коробка", "Мешок", "Банка", "Пачка")
+private val PACKS = listOf("Бутылка", "Коробка", "Мешок", "Банка", "Пачка", "Ведро", "Канистра", "Пакет", "Тюк")
 
 @Composable
 fun DropdownField(value: String, options: List<String>, onSelect: (String) -> Unit) {
@@ -280,6 +280,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
     var scanning by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var parsing by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) {
         if (id != null) {
@@ -307,6 +308,33 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(4.dp))
+        OutlinedButton(
+            enabled = !parsing && name.isNotBlank(),
+            onClick = {
+                if (!AiCfg.ready(ctx)) {
+                    error = "Не задан ключ ИИ. Откройте Профиль → Настройки → Распознавание документов."
+                    return@OutlinedButton
+                }
+                error = ""
+                parsing = true
+                val src = name
+                scope.launch {
+                    try {
+                        val r = withContext(Dispatchers.IO) { ProductParse.parse(ctx, src, manufacturer) }
+                        if (r.name.isNotBlank()) name = r.name
+                        if (r.manufacturer.isNotBlank()) manufacturer = r.manufacturer
+                        if (r.size.isNotBlank()) weight = r.size
+                        if (r.unit.isNotBlank()) unit = r.unit
+                        if (r.pack.isNotBlank()) pack = r.pack
+                    } catch (e: Exception) {
+                        error = e.message ?: "Ошибка разбора"
+                    }
+                    parsing = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (parsing) "Разбираю…" else "Разобрать") }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
