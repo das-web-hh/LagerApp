@@ -97,7 +97,7 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             "th,td{border:1px solid #888;padding:5px 6px;text-align:left;vertical-align:top}" +
             "th{background:#eee}.n{text-align:right;white-space:nowrap}" +
             ".bad{color:#b00020;font-weight:bold}.warn{color:#9a6700;font-weight:bold}.ok{color:#1b6e2d}" +
-            ".info td{border:none;padding:2px 6px 2px 0}.sign{margin-top:36px}" +
+            ".info td{border:none;padding:2px 6px 2px 0}" +
             "</style></head><body>"
     )
     sb.append("<h1>").append(if (full) "Приёмка товара — общий акт" else "Акт расхождений при приёмке").append("</h1>")
@@ -105,7 +105,6 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
     sb.append("<tr><td>Отправитель:</td><td>${esc(job.sender)}</td></tr>")
     sb.append("<tr><td>Номер заказа:</td><td>${esc(job.order)}</td></tr>")
     sb.append("<tr><td>Дата и время (по документу):</td><td>${esc(job.stamp)}</td></tr>")
-    sb.append("<tr><td>Файл:</td><td>${esc(f.name)}</td></tr>")
     sb.append("<tr><td>Принял:</td><td>${esc(receiver)}</td></tr>")
     sb.append("<tr><td>Распечатано:</td><td>${fmtTime(System.currentTimeMillis())}</td></tr>")
     sb.append("</table>")
@@ -167,12 +166,11 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("</table>")
         }
     }
-    sb.append("<div class='sign'>Принял: ______________________ &nbsp;&nbsp; Представитель отправителя: ______________________</div>")
     sb.append("</body></html>")
     return sb.toString()
 }
 
-/** Итог приёма по имени: печать (общая / только расхождения), сохранение и список «совпало / не совпало». */
+/** Сверка товаров одной партии: печать (мини-окно), сохранение и список «совпало / не совпало». */
 @Composable
 fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: () -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -186,8 +184,8 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
     val jobName = "Приёмка_" + f.name.substringBeforeLast('.')
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Итог приёма", style = MaterialTheme.typography.headlineSmall)
-        Text(f.name, style = MaterialTheme.typography.bodySmall)
+        Text("Сверка товаров", style = MaterialTheme.typography.headlineSmall)
+        Text(batchTitle(job, f), style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(12.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -203,27 +201,6 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
             ) {
                 Text(if (job.saved) "Сохранено ✓" else if (job.saving) "Сохранение…" else "Сохранить")
             }
-        }
-        if (printOpen) {
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = {
-                    buildReport(job, f, receiver, true)?.let { Printer.print(ctx, jobName, it) }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Печать общая (состояние приёма)") }
-            Spacer(Modifier.height(4.dp))
-            OutlinedButton(
-                onClick = {
-                    val html = buildReport(job, f, receiver, false)
-                    if (html == null) {
-                        Toast.makeText(ctx, "Расхождений нет — печатать нечего", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Printer.print(ctx, jobName + "_расхождения", html)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Печать расхождений") }
         }
         if (error.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
@@ -270,6 +247,83 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
             Text(if (job.saved) "Закрыть" else "Свернуть (партия останется в работе)")
+        }
+    }
+
+    if (printOpen) {
+        AlertDialog(
+            onDismissRequest = { printOpen = false },
+            confirmButton = {},
+            text = {
+                Column(Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = {
+                            printOpen = false
+                            val html = buildReport(job, f, receiver, false)
+                            if (html == null) {
+                                Toast.makeText(ctx, "Расхождений нет", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Printer.print(ctx, jobName + "_расхождения", html)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Расхождения") }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            printOpen = false
+                            buildReport(job, f, receiver, true)?.let { Printer.print(ctx, jobName, it) }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Всё") }
+                }
+            }
+        )
+    }
+}
+
+private fun batchTitle(job: AutoJob, f: IncomingFile): String {
+    val sender = job.sender.takeIf { !it.equals("none", true) && it.isNotBlank() }
+    val order = job.order.takeIf { !it.equals("none", true) && it.isNotBlank() }
+    return listOfNotNull(sender, order?.let { "заказ $it" }).joinToString(" · ").ifBlank { "Партия" }
+}
+
+/** «Итог приёма»: все партии в работе одним списком; нажатие на партию открывает её «Сверку товаров». */
+@Composable
+fun ReceiveTotalScreen(onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val jobs = AutoReceiveHolder.jobs.toList()
+    var positions = 0
+    var diffs = 0
+    jobs.forEach { j ->
+        val ls = lines(j)
+        positions += ls.size
+        diffs += ls.count { statusOf(it).kind != 0 || it.defect > 0 }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Итог приёма", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(8.dp))
+        if (jobs.isEmpty()) {
+            Text("Партий нет")
+        } else {
+            Text(
+                "Партий: ${jobs.size} · позиций: $positions · с расхождениями: $diffs",
+                style = MaterialTheme.typography.titleSmall
+            )
+            jobs.forEach { j ->
+                val ls = lines(j)
+                val d = ls.count { statusOf(it).kind != 0 || it.defect > 0 }
+                Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(batchTitle(j, j.file), fontWeight = FontWeight.Medium)
+                        Text(
+                            "Позиций: ${ls.size} · расхождений: $d · ${j.statusLine}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        TextButton(onClick = { if (j.nameMode) j.step = 1; Incoming.openPath = j.file.path }) { Text("Сверка товаров") }
+                    }
+                }
+            }
         }
     }
 }

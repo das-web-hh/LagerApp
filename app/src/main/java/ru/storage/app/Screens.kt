@@ -132,6 +132,10 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         ManualReceiveScreen(prefs, receiver) { mode = null }
         return
     }
+    if (current == "Итог приёма") {
+        ReceiveTotalScreen { mode = null }
+        return
+    }
     if (current != null) {
         SectionScreen(current) { mode = null }
         return
@@ -142,7 +146,7 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     ) {
         Text("Приём", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
-        listOf("Ручной", "По наименованию", "Автоприём").forEach { name ->
+        listOf("Ручной", "По наименованию", "Автоприём", "Итог приёма").forEach { name ->
             FilledTonalButton(
                 onClick = {
                     when (name) {
