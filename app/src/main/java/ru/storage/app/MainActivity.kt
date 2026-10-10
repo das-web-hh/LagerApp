@@ -82,6 +82,10 @@ fun AppRoot() {
             }
         }
     }
+    // после верного пароля: сначала анимация закрывает экран входа, и только потом открывается главный экран
+    var splash by remember { mutableStateOf(false) }
+    var pendingLogin by remember { mutableStateOf("") }
+    Box(Modifier.fillMaxSize()) {
     if (loggedIn) {
         val receiver = "${profile.firstName} ${profile.lastName}".trim()
         AutoReceiveHolder.receiver = receiver
@@ -100,11 +104,20 @@ fun AppRoot() {
         }
     } else {
         LoginScreen(onSuccess = {
-            val l = it.lowercase()
-            sessionSp.edit().putString("login", l).apply()
-            userLogin = l
-            loggedIn = true
+            pendingLogin = it.lowercase()
+            splash = true
         })
+    }
+    if (splash) {
+        WelcomeSplash(
+            onCovered = {
+                sessionSp.edit().putString("login", pendingLogin).apply()
+                userLogin = pendingLogin
+                loggedIn = true
+            },
+            onFinished = { splash = false }
+        )
+    }
     }
 }
 
