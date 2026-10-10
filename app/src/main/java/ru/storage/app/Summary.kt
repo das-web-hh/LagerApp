@@ -268,6 +268,8 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
         Spacer(Modifier.height(16.dp))
         OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("← К вводу количества") }
         Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
+        OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
+            Text(if (job.saved) "Закрыть" else "Свернуть (партия останется в работе)")
+        }
     }
 }

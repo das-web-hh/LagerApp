@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlin.concurrent.thread
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -120,9 +121,11 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     val current = mode
     val ctx = LocalContext.current
     var pickMode by remember { mutableStateOf("auto") }
-    val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+    var deleteJob by remember { mutableStateOf<AutoJob?>(null) }
+    val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         val m = pickMode
-        if (uri != null) thread { Incoming.accept(ctx, uri, m) }
+        // один файл — сразу открываем; несколько — создаём партии, открывать их можно из списка ниже
+        if (uris.isNotEmpty()) thread { uris.forEach { Incoming.accept(ctx, it, m, open = uris.size == 1) } }
     }
 
     if (current == "Ручной") {
@@ -157,5 +160,50 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             ) { Text(name) }
         }
+
+        val jobs = AutoReceiveHolder.jobs.toList()
+        if (jobs.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            Text("Партии в работе: ${jobs.size}", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Каждую партию можно свернуть и вернуться к ней позже — она не закроется, пока вы её не сохраните или не удалите.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            jobs.forEach { j ->
+                Card(
+                    Modifier.fillMaxWidth().padding(top = 8.dp).clickable { Incoming.openPath = j.file.path }
+                ) {
+                    Row(Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            val title = j.sender.takeIf { !it.equals("none", true) && it.isNotBlank() } ?: j.file.name
+                            Text(title, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium, maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            val order = j.order.takeIf { !it.equals("none", true) && it.isNotBlank() }
+                            val kind = if (j.nameMode) "По имени" else "Автоприём"
+                            Text(listOfNotNull(kind, order?.let { "заказ $it" }).joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall)
+                            Text(j.statusLine, style = MaterialTheme.typography.bodySmall,
+                                color = if (j.saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { deleteJob = j }) { Text("✕") }
+                    }
+                }
+            }
+        }
+    }
+
+    deleteJob?.let { j ->
+        AlertDialog(
+            onDismissRequest = { deleteJob = null },
+            title = { Text(if (j.saved) "Убрать из списка?" else "Удалить партию?") },
+            text = {
+                Text(if (j.saved) "Партия уже сохранена, из списка она просто исчезнет."
+                else "Партия не сохранена. Введённые количества будут потеряны.")
+            },
+            confirmButton = {
+                Button(onClick = { AutoReceiveHolder.remove(j); deleteJob = null }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { deleteJob = null }) { Text("Отмена") } }
+        )
     }
 }

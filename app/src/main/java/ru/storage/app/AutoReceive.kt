@@ -19,6 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.io.File
@@ -128,7 +130,7 @@ class ItemRow(
  * Автоприём: PDF → листы → чёрно-белые картинки → ИИ (по одному листу, с ожиданием и повтором).
  * Живёт отдельно от экрана, чтобы поворот экрана не прерывал распознавание.
  */
-class AutoJob(private val app: Context, val file: IncomingFile) {
+class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: Boolean) {
     val pages = mutableStateListOf<PageState>()
     var running by mutableStateOf(false)
     var message by mutableStateOf("")
@@ -140,8 +142,22 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
     var saving by mutableStateOf(false)
 
     /** true — приём по имени (все строки как есть, план = печатное количество); false — автоприём (по отметкам ручкой). */
-    var nameMode = false
+    var nameMode = startNameMode
         private set
+
+    /** Шаг приёма по имени: 0 — ввод количества, 1 — итог. Хранится в партии, чтобы «свёрнутая» партия открывалась там же, где её оставили. */
+    var step by mutableIntStateOf(0)
+
+    /** Короткая строка для списка «Партии в работе». */
+    val statusLine: String
+        get() = when {
+            saved -> "Сохранено"
+            saving -> "Сохранение…"
+            running -> message.ifBlank { "Распознавание…" }
+            !started -> "Ожидает открытия"
+            hasFailed -> "Не все листы распознаны"
+            else -> if (nameMode) "Идёт подсчёт · позиций: ${items.size}" else "Проверьте и сохраните · позиций: ${items.size}"
+        }
 
     fun setMode(name: Boolean) {
         if (nameMode == name) return
@@ -189,24 +205,27 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
                         st.status = "ошибка листа: ${e.message}"
                         continue
                     }
-                    for (a in 1..attempts) {
-                        st.status = if (a == 1) "отправка…" else "повтор $a из $attempts…"
-                        try {
-                            // со 2-й попытки — серая картинка покрупнее вместо чёрно-белой
-                            if (a == 2) png = try { doc.renderBw(i, 2200, false) } catch (e: Exception) { png }
-                            val r = Ai.recognize(app, png, i + 1, n)
-                            // пустой лист — повтор; на первом листе без товаров тоже (там таблица почти всегда есть)
-                            val blank = r.items.isEmpty() && r.sender == "none" && r.order == "none"
-                            if ((blank || (i == 0 && r.items.isEmpty())) && a < attempts) {
-                                throw RuntimeException("не нашёл товары, пробую в другом виде")
+                    // одновременно в ИИ идёт один лист (из любой партии) — чтобы не упереться в лимиты
+                    AutoReceiveHolder.aiLock.withLock {
+                        for (a in 1..attempts) {
+                            st.status = if (a == 1) "отправка…" else "повтор $a из $attempts…"
+                            try {
+                                // со 2-й попытки — серая картинка покрупнее вместо чёрно-белой
+                                if (a == 2) png = try { doc.renderBw(i, 2200, false) } catch (e: Exception) { png }
+                                val r = Ai.recognize(app, png, i + 1, n)
+                                // пустой лист — повтор; на первом листе без товаров тоже (там таблица почти всегда есть)
+                                val blank = r.items.isEmpty() && r.sender == "none" && r.order == "none"
+                                if ((blank || (i == 0 && r.items.isEmpty())) && a < attempts) {
+                                    throw RuntimeException("не нашёл товары, пробую в другом виде")
+                                }
+                                results[i] = r
+                                st.ok = true
+                                st.status = "готово"
+                                break
+                            } catch (e: Exception) {
+                                st.status = "ошибка: " + (e.message ?: e.javaClass.simpleName)
+                                if (a < attempts) delay(3000L * a)
                             }
-                            results[i] = r
-                            st.ok = true
-                            st.status = "готово"
-                            break
-                        } catch (e: Exception) {
-                            st.status = "ошибка: " + (e.message ?: e.javaClass.simpleName)
-                            if (a < attempts) delay(3000L * a)
                         }
                     }
                     rebuild()
@@ -256,14 +275,25 @@ class AutoJob(private val app: Context, val file: IncomingFile) {
     }
 }
 
+/** Все партии, которые сейчас в работе. Партия живёт, пока её не сохранят и не закроют или не удалят вручную. */
 object AutoReceiveHolder {
-    private var job: AutoJob? = null
+    val jobs = mutableStateListOf<AutoJob>()
+    val aiLock = Mutex()
 
-    fun get(ctx: Context, f: IncomingFile): AutoJob {
-        val j = job
-        if (j != null && j.file.path == f.path) return j
-        return AutoJob(ctx.applicationContext, f).also { job = it }
+    fun find(path: String): AutoJob? = jobs.firstOrNull { it.file.path == path }
+
+    fun create(ctx: Context, f: IncomingFile, nameMode: Boolean): AutoJob {
+        find(f.path)?.let { return it }
+        return AutoJob(ctx.applicationContext, f, nameMode).also { jobs.add(it) }
     }
+
+    fun remove(job: AutoJob) {
+        jobs.remove(job)
+        if (Incoming.openPath == job.file.path) Incoming.openPath = null
+    }
+
+    /** Партии, которые ещё не сохранены. */
+    fun unfinishedCount(): Int = jobs.count { !it.saved }
 }
 
 /** Количество без хвоста ",00": "45,00" → "45", "2,5" → "2.5"; пусто, если числа нет. */
@@ -464,22 +494,55 @@ private fun ColumnScope.NameModeMain(
             modifier = Modifier.padding(top = 4.dp))
     }
     Spacer(Modifier.height(8.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            job.sender.let { if (it.equals("none", true)) "" else it }, { job.sender = it },
-            label = { Text("Отправитель") }, enabled = editable, singleLine = true,
+    // Отправитель и заказ — обычный текст в одну строку; тап открывает правку
+    var editDoc by remember { mutableStateOf(false) }
+    val senderText = job.sender.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
+    val orderText = job.order.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = editable) { editDoc = true }.padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "Отправитель: $senderText", style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        OutlinedTextField(
-            job.order.let { if (it.equals("none", true)) "" else it }, { job.order = it },
-            label = { Text("Заказ") }, enabled = editable, singleLine = true,
-            modifier = Modifier.width(150.dp)
-        )
+        Text("Заказ: $orderText", style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+    }
+    if (editDoc) {
+        EditDocDialog(job, onDismiss = { editDoc = false })
     }
     Spacer(Modifier.height(8.dp))
     CountWheelList(
         job.items, editable, Modifier.weight(1f), addTick, onAdd,
         if (job.running) job.message else "Список пуст"
+    )
+}
+
+@Composable
+private fun EditDocDialog(job: AutoJob, onDismiss: () -> Unit) {
+    var sender by remember { mutableStateOf(job.sender.let { if (it.equals("none", true)) "" else it }) }
+    var order by remember { mutableStateOf(job.order.let { if (it.equals("none", true)) "" else it }) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Отправитель и заказ") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(sender, { sender = it }, label = { Text("Отправитель") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(order, { order = it }, label = { Text("Номер заказа") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                job.sender = sender.trim().ifEmpty { "none" }
+                job.order = order.trim().ifEmpty { "none" }
+                onDismiss()
+            }) { Text("Готово") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
     )
 }
 
@@ -541,11 +604,12 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     val db = remember { ProductDb.get(ctx) }
     val scope = rememberCoroutineScope()
     val nameMode = mode == "name"
-    val job = remember(f.path) { AutoReceiveHolder.get(ctx, f) }
-    var step by remember(f.path) { mutableIntStateOf(0) }
+    val job = remember(f.path) { AutoReceiveHolder.create(ctx, f, nameMode) }
 
-    if (nameMode && step == 1) {
-        NameSummaryScreen(job, f, receiver, onBack = { step = 0 }, onClose = onClose)
+    // onClose — «свернуть»: партия остаётся в работе. Убрать партию совсем можно после сохранения или кнопкой ✕ в списке.
+    val finish = { if (job.saved) AutoReceiveHolder.remove(job) else onClose() }
+    if (nameMode && job.step == 1) {
+        NameSummaryScreen(job, f, receiver, onBack = { job.step = 0 }, onClose = finish)
         return
     }
 
@@ -592,7 +656,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
                 color = MaterialTheme.colorScheme.error
             )
             Spacer(Modifier.height(16.dp))
-            Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
+            Button(onClick = { AutoReceiveHolder.remove(job); onClose() }, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
             return@Column
         }
         if (!checked) {
@@ -614,7 +678,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
                 Text("Обработать всё равно")
             }
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
+            OutlinedButton(onClick = { AutoReceiveHolder.remove(job); onClose() }, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
             return@Column
         }
 
@@ -627,7 +691,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
                     val e = checkFacts(job)
                     if (e != null) error = e else {
                         error = ""
-                        step = 1
+                        job.step = 1
                     }
                 },
                 onRetry = { job.start(true) },
@@ -695,7 +759,9 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             }
             Spacer(Modifier.height(8.dp))
         }
-        OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
+        OutlinedButton(onClick = finish, modifier = Modifier.fillMaxWidth()) {
+            Text(if (job.saved) "Закрыть" else "Свернуть (партия останется в работе)")
+        }
     }
 
     if (showAdd) {

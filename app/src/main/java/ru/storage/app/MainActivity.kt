@@ -82,21 +82,19 @@ fun AppRoot() {
         }
     }
     if (loggedIn) {
-        val inc = Incoming.file
-        when {
-            inc != null && Incoming.mode == "auto" -> AutoReceiveScreen(
-                inc, "${profile.firstName} ${profile.lastName}".trim(), "auto"
-            ) { Incoming.clear() }
-            inc != null && Incoming.mode == "name" -> AutoReceiveScreen(
-                inc, "${profile.firstName} ${profile.lastName}".trim(), "name"
-            ) { Incoming.clear() }
-            else -> {
-                MainScreen(prefs = prefs, profile = profile, onLogout = {
-                    sessionSp.edit().remove("login").apply()
-                    loggedIn = false
-                })
-                if (inc != null) IncomingChoiceDialog(inc)
-            }
+        val receiver = "${profile.firstName} ${profile.lastName}".trim()
+        val openJob = Incoming.openPath?.let { AutoReceiveHolder.find(it) }
+        if (openJob != null) {
+            // свёрнутые партии остаются в AutoReceiveHolder и продолжают работать
+            AutoReceiveScreen(
+                openJob.file, receiver, if (openJob.nameMode) "name" else "auto"
+            ) { Incoming.openPath = null }
+        } else {
+            MainScreen(prefs = prefs, profile = profile, onLogout = {
+                sessionSp.edit().remove("login").apply()
+                loggedIn = false
+            })
+            Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
         }
     } else {
         LoginScreen(onSuccess = {
@@ -145,7 +143,14 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                     NavigationBarItem(
                         selected = selected == i,
                         onClick = { selected = i },
-                        icon = { Icon(tab.icon, contentDescription = tab.title) },
+                        icon = {
+                            if (i == 1) {
+                                val n = AutoReceiveHolder.jobs.count { !it.saved }
+                                BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
+                                    Icon(tab.icon, contentDescription = tab.title)
+                                }
+                            } else Icon(tab.icon, contentDescription = tab.title)
+                        },
                         label = { Text(tab.title) }
                     )
                 }
