@@ -65,17 +65,17 @@ object InvOptions {
 }
 
 private fun bullets(list: List<String>) =
-    if (list.isEmpty()) "—" else list.joinToString("<br>") { "• " + bwEsc(it) }
+    if (list.isEmpty()) "—" else list.joinToString("<br>") { "• " + bwEsc(trOpt(it)) }
 
 private fun invHtml(receiver: String, now: Long): String {
     val sb = StringBuilder()
     sb.append("<html><head><meta charset='utf-8'><style>$BW_CSS.sub{color:#444;font-size:11px;margin-top:3px}</style></head><body>")
-    sb.append("<h1>Опись испорченного товара на складе (B-Ware)</h1>")
+    sb.append("<h1>${trHead("inv_title")}</h1>")
     sb.append("<table class='info'>")
-    sb.append("<tr><td>Составил:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
-    sb.append("<tr><td>Дата и время:</td><td>${fmtTime(now)}</td></tr>")
+    sb.append("<tr><td>${tr("compiled_by")}:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
+    sb.append("<tr><td>${tr("date_time")}:</td><td>${fmtTime(now)}</td></tr>")
     sb.append("</table><br>")
-    sb.append("<table><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Срок годности</th><th>Причины</th><th>Тип целостности</th></tr>")
+    sb.append("<table><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th>${trb("th_qty")}</th><th>${trb("th_expiry")}</th><th>${trb("th_reasons")}</th><th>${trb("th_integrity")}</th></tr>")
     var total = 0.0
     BWareInvHolder.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
@@ -86,9 +86,9 @@ private fun invHtml(receiver: String, now: Long): String {
         sb.append("<td>${bullets(InvOptions.reasons.filter { it in r.reasons })}</td>")
         sb.append("<td>${bullets(InvOptions.damage.filter { it in r.reasons })}</td></tr>")
     }
-    sb.append("<tr><th></th><th>Итого</th><th class='n'>${bwFmt(total)}</th><th></th><th></th><th></th></tr></table>")
-    sb.append("<table class='sign'><tr><td><div class='line'>Составил (подпись)</div></td>")
-    sb.append("<td><div class='line'>Проверил (подпись)</div></td></tr></table>")
+    sb.append("<tr><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th><th></th></tr></table>")
+    sb.append("<table class='sign'><tr><td>${Signature.cell("sig_compiled", receiver, now)}</td>")
+    sb.append("<td>${Signature.cell("sig_checked", "", now, auto = false)}</td></tr></table>")
     sb.append("</body></html>")
     return sb.toString()
 }

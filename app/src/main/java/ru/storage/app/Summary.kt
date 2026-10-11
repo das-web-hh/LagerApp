@@ -79,7 +79,7 @@ private fun statusOf(l: Line): Status = when {
 
 private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
-/** full = общий акт (все позиции); иначе только расхождения. null — расхождений нет. */
+/** full = общий акт (все позиции); иначе только расхождения. null — расхождений нет. Язык(и) — по настройкам печати. */
 private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: Boolean): String? {
     val ls = lines(job)
     val short = ls.filter { statusOf(it).kind == 1 }
@@ -88,6 +88,7 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
     val defects = ls.filter { it.defect > 0 }
     if (!full && short.isEmpty() && excess.isEmpty() && extra.isEmpty() && defects.isEmpty()) return null
 
+    val now = System.currentTimeMillis()
     val sb = StringBuilder()
     sb.append(
         "<html><head><meta charset='utf-8'><style>" +
@@ -98,20 +99,21 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             "th{background:#eee}.n{text-align:right;white-space:nowrap}" +
             ".bad{color:#b00020;font-weight:bold}.warn{color:#9a6700;font-weight:bold}.ok{color:#1b6e2d}" +
             ".info td{border:none;padding:2px 6px 2px 0}" +
+            Signature.CSS +
             "</style></head><body>"
     )
-    sb.append("<h1>").append(if (full) "Приёмка товара — общий акт" else "Акт расхождений при приёмке").append("</h1>")
+    sb.append("<h1>").append(trHead(if (full) "title_full" else "title_diff")).append("</h1>")
     sb.append("<table class='info'>")
-    sb.append("<tr><td>Отправитель:</td><td>${esc(job.sender)}</td></tr>")
-    sb.append("<tr><td>Номер заказа:</td><td>${esc(job.order)}</td></tr>")
-    sb.append("<tr><td>Дата и время (по документу):</td><td>${esc(job.stamp)}</td></tr>")
-    sb.append("<tr><td>Принял:</td><td>${esc(receiver)}</td></tr>")
-    sb.append("<tr><td>Распечатано:</td><td>${fmtTime(System.currentTimeMillis())}</td></tr>")
+    sb.append("<tr><td>${tr("sender")}:</td><td>${esc(job.sender)}</td></tr>")
+    sb.append("<tr><td>${tr("order")}:</td><td>${esc(job.order)}</td></tr>")
+    sb.append("<tr><td>${tr("doc_time")}:</td><td>${esc(job.stamp)}</td></tr>")
+    sb.append("<tr><td>${tr("received_by")}:</td><td>${esc(receiver)}</td></tr>")
+    sb.append("<tr><td>${tr("printed")}:</td><td>${fmtTime(now)}</td></tr>")
     sb.append("</table>")
 
     if (full) {
-        sb.append("<h2>Состояние приёма</h2><table><tr><th>№</th><th>Товар</th><th>План</th><th>Факт</th>")
-        sb.append("<th>Брак</th><th>Годный</th><th>Расхождение</th><th>Статус</th></tr>")
+        sb.append("<h2>${tr("state_h")}</h2><table><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th>")
+        sb.append("<th>${trb("th_defect")}</th><th>${trb("th_good")}</th><th>${trb("th_diff")}</th><th>${trb("th_status")}</th></tr>")
         var tp = 0.0
         var tf = 0.0
         var td = 0.0
@@ -119,10 +121,10 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             val st = statusOf(l)
             val diff = l.fact - l.plan
             val (cls, text) = when (st.kind) {
-                1 -> "bad" to "Недостача"
-                2 -> "warn" to "Излишек"
-                3 -> "bad" to "Нет в плане"
-                else -> "ok" to "Совпало"
+                1 -> "bad" to tr("st_short")
+                2 -> "warn" to tr("st_excess")
+                3 -> "bad" to tr("st_extra")
+                else -> "ok" to tr("st_ok")
             }
             tp += l.plan
             tf += l.fact
@@ -131,14 +133,14 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("<td class='n'>${fmtNum(l.fact)}</td><td class='n'>${fmtNum(l.defect)}</td>")
             sb.append("<td class='n'>${fmtNum(l.fact - l.defect)}</td>")
             sb.append("<td class='n'>${if (diff > 0) "+" else ""}${fmtNum(diff)}</td>")
-            sb.append("<td class='$cls'>$text${if (l.defect > 0) ", брак" else ""}</td></tr>")
+            sb.append("<td class='$cls'>$text${if (l.defect > 0) ", " + tr("th_defect") else ""}</td></tr>")
         }
-        sb.append("<tr><th></th><th>Итого</th><th class='n'>${fmtNum(tp)}</th><th class='n'>${fmtNum(tf)}</th>")
+        sb.append("<tr><th></th><th>${trb("total")}</th><th class='n'>${fmtNum(tp)}</th><th class='n'>${fmtNum(tf)}</th>")
         sb.append("<th class='n'>${fmtNum(td)}</th><th class='n'>${fmtNum(tf - td)}</th><th></th><th></th></tr>")
         sb.append("</table>")
     } else {
         if (short.isNotEmpty()) {
-            sb.append("<h2>Недостача (привезли меньше плана)</h2><table><tr><th>Товар</th><th>План</th><th>Факт</th><th>Не хватает</th></tr>")
+            sb.append("<h2>${tr("h_short")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_missing")}</th></tr>")
             short.forEach {
                 sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
                 sb.append("<td class='n bad'>${fmtNum(it.plan - it.fact)}</td></tr>")
@@ -146,7 +148,7 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("</table>")
         }
         if (excess.isNotEmpty()) {
-            sb.append("<h2>Излишек (привезли больше плана)</h2><table><tr><th>Товар</th><th>План</th><th>Факт</th><th>Лишних</th></tr>")
+            sb.append("<h2>${tr("h_excess")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_surplus")}</th></tr>")
             excess.forEach {
                 sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
                 sb.append("<td class='n warn'>${fmtNum(it.fact - it.plan)}</td></tr>")
@@ -154,18 +156,19 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("</table>")
         }
         if (extra.isNotEmpty()) {
-            sb.append("<h2>Товары, которых нет в плане</h2><table><tr><th>Товар</th><th>Привезли</th></tr>")
+            sb.append("<h2>${tr("h_extra")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_arrived")}</th></tr>")
             extra.forEach { sb.append("<tr><td>${esc(it.name)}</td><td class='n bad'>${fmtNum(it.fact)}</td></tr>") }
             sb.append("</table>")
         }
         if (defects.isNotEmpty()) {
-            sb.append("<h2>Бракованный товар</h2><table><tr><th>Товар</th><th>Принято всего</th><th>Брак</th></tr>")
+            sb.append("<h2>${tr("h_defects")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_recv_total")}</th><th>${trb("th_defect")}</th></tr>")
             defects.forEach {
                 sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.fact)}</td><td class='n bad'>${fmtNum(it.defect)}</td></tr>")
             }
             sb.append("</table>")
         }
     }
+    sb.append(Signature.box("sig_received", receiver, now))
     sb.append("</body></html>")
     return sb.toString()
 }

@@ -54,6 +54,8 @@ object CloudSettings {
                 "useFront" to prefs.useFront,
                 "formats" to prefs.formats.toList(),
                 "theme" to Ui.mode,
+                "printLangs" to PrintCfg.codes(),
+                "printSign" to PrintCfg.sign,
                 "updatedAt" to ts
             ),
             SetOptions.merge()
@@ -80,6 +82,7 @@ object CloudSettings {
             prefs.formats = (snap.get("formats") as? List<*>)
                 ?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
             snap.getString("theme")?.let { Ui.set(ctx, it) }
+            PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"))
             sp(ctx).edit().putLong("updated", remote).apply()
             return true
         }
@@ -93,6 +96,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
     var section by rememberSaveable { mutableStateOf<String?>(null) }
     when (section) {
         "Оформление" -> ThemeSettings(prefs) { section = null }
+        "Печать" -> PrintSettings(prefs) { section = null }
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
         "Распознавание документов" -> AiSettings { section = null }
@@ -108,6 +112,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
     BackHandler(onBack = onBack)
     val sections = listOf(
         "Оформление" to "Светлая, тёмная или как в системе",
+        "Печать" to "Языки документа (немецкий, русский, английский), автоподпись",
         "Сканер" to "Камера, типы штрих-кодов",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
@@ -446,6 +451,68 @@ private fun ThemeSettings(prefs: Prefs, onBack: () -> Unit) {
                 })
                 Text(label, style = MaterialTheme.typography.bodyLarge)
             }
+        }
+    }
+}
+
+@Composable
+private fun PrintSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    BackHandler(onBack = onBack)
+    val langs = listOf("de" to "Deutsch (немецкий)", "ru" to "Русский", "en" to "English (английский)")
+    val name = AutoReceiveHolder.receiver.ifBlank { "Admin" }
+
+    LaunchedEffect(Unit) {
+        try {
+            CloudSettings.pull(ctx, prefs)
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Печать", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Документ печатается сразу на всех включённых языках. Настройки сохраняются в аккаунте.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("Языки документа", style = MaterialTheme.typography.titleMedium)
+        langs.forEach { (code, label) ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = PrintCfg.isOn(code),
+                    onCheckedChange = {
+                        PrintCfg.setLang(ctx, code, it)
+                        CloudSettings.save(ctx, prefs)
+                    }
+                )
+            }
+        }
+        Text("Хотя бы один язык всегда остаётся включённым.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(20.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Автоподпись", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "В документе ставится рукописная подпись принимающего: имя из профиля и сегодняшняя дата.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = PrintCfg.sign,
+                onCheckedChange = {
+                    PrintCfg.setSign(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
+        if (PrintCfg.sign) {
+            Spacer(Modifier.height(12.dp))
+            val html = "<html><head><meta charset='utf-8'><style>body{margin:8px;font-family:sans-serif}" +
+                Signature.CSS + "</style></head><body>" +
+                Signature.svg(name, System.currentTimeMillis()) + "</body></html>"
+            HtmlPreview(html, Modifier.fillMaxWidth().height(110.dp))
         }
     }
 }

@@ -111,7 +111,7 @@ internal fun bwDetailsHtml(row: ItemRow, groups: List<Pair<String, List<String>>
         val sel = opts.filter { it in row.reasons }
         if (sel.isNotEmpty()) {
             if (sb.isNotEmpty()) sb.append("<br>")
-            sb.append("<b>${bwEsc(title)}:</b> ").append(sel.joinToString("; ") { bwEsc(it) })
+            sb.append("<b>${bwEsc(trOpt(title))}:</b> ").append(sel.joinToString("; ") { bwEsc(trOpt(it)) })
         }
     }
     if (row.note.isNotBlank()) {
@@ -129,23 +129,24 @@ internal const val BW_CSS =
         "th{background:#eee}.n{text-align:right;white-space:nowrap}" +
         ".info td{border:none;padding:2px 10px 2px 0}.info td:first-child{color:#444}" +
         ".sign{margin-top:36px}.sign td{border:none;padding:18px 10px 0 0;width:50%}" +
-        ".line{border-top:1px solid #111;padding-top:2px;font-size:11px;color:#444}"
+        ".line{border-top:1px solid #111;padding-top:2px;font-size:11px;color:#444}" +
+        Signature.CSS
 
-/** HTML документа приёма для предпросмотра и печати. */
+/** HTML документа приёма для предпросмотра и печати. Язык(и) и автоподпись — по настройкам печати. */
 private fun bwareHtml(receiver: String, now: Long): String {
     val h = BWareHolder
     val sb = StringBuilder()
     sb.append("<html><head><meta charset='utf-8'><style>$BW_CSS</style></head><body>")
-    sb.append("<h1>Акт приёма B-Ware (повреждённый товар)</h1>")
+    sb.append("<h1>${trHead("bw_title")}</h1>")
     sb.append("<table class='info'>")
-    sb.append("<tr><td>Отправитель:</td><td><b>${bwEsc(bwDash(h.sender))}</b></td></tr>")
-    sb.append("<tr><td>Номер заказа:</td><td><b>${bwEsc(bwDash(h.order))}</b></td></tr>")
-    sb.append("<tr><td>Номер машины:</td><td><b>${bwEsc(bwDash(h.truck).uppercase())}</b></td></tr>")
-    sb.append("<tr><td>Номер прицепа:</td><td><b>${bwEsc(bwDash(h.trailer).uppercase())}</b></td></tr>")
-    sb.append("<tr><td>Принял:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
-    sb.append("<tr><td>Дата и время:</td><td>${fmtTime(now)}</td></tr>")
+    sb.append("<tr><td>${tr("sender")}:</td><td><b>${bwEsc(bwDash(h.sender))}</b></td></tr>")
+    sb.append("<tr><td>${tr("order")}:</td><td><b>${bwEsc(bwDash(h.order))}</b></td></tr>")
+    sb.append("<tr><td>${tr("truck")}:</td><td><b>${bwEsc(bwDash(h.truck).uppercase())}</b></td></tr>")
+    sb.append("<tr><td>${tr("trailer")}:</td><td><b>${bwEsc(bwDash(h.trailer).uppercase())}</b></td></tr>")
+    sb.append("<tr><td>${tr("received_by")}:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
+    sb.append("<tr><td>${tr("date_time")}:</td><td>${fmtTime(now)}</td></tr>")
     sb.append("</table>")
-    sb.append("<h2>Товары</h2><table><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Срок годности</th><th>Подробности повреждений</th></tr>")
+    sb.append("<h2>${tr("goods_h")}</h2><table><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th>${trb("th_qty")}</th><th>${trb("th_expiry")}</th><th>${trb("th_details")}</th></tr>")
     var total = 0.0
     h.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
@@ -153,9 +154,9 @@ private fun bwareHtml(receiver: String, now: Long): String {
         sb.append("<tr><td>${i + 1}</td><td>${bwEsc(r.name.trim())}</td><td class='n'>${bwFmt(q)}</td>")
         sb.append("<td>${bwEsc(bwDash(r.expiry))}</td><td>${bwDetailsHtml(r, BWareDetails.groups)}</td></tr>")
     }
-    sb.append("<tr><th></th><th>Итого</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
-    sb.append("<table class='sign'><tr><td><div class='line'>Принял (подпись)</div></td>")
-    sb.append("<td><div class='line'>Водитель (подпись)</div></td></tr></table>")
+    sb.append("<tr><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
+    sb.append("<table class='sign'><tr><td>${Signature.cell("sig_received", receiver, now)}</td>")
+    sb.append("<td>${Signature.cell("sig_driver", "", now, auto = false)}</td></tr></table>")
     sb.append("</body></html>")
     return sb.toString()
 }

@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
         Ui.load(applicationContext)
+        PrintCfg.load(applicationContext)
         Speaker.init(applicationContext)
         setContent {
             AppTheme { AppRoot() }
