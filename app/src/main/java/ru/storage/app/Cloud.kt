@@ -70,13 +70,16 @@ object Cloud {
     )
 
     fun saveProduct(db: ProductDb, p: Product): Product {
+        val isNew = db.getProduct(p.id) == null
         val np = p.copy(updatedAt = System.currentTimeMillis())
         db.upsertProducts(listOf(np))
         fs.collection("products").document(np.id).set(productMap(np))
+        Journal.log("Каталог", (if (isNew) "Добавлен товар: " else "Изменён товар: ") + np.name)
         return np
     }
 
     fun pushProducts(list: List<Product>) {
+        Journal.log("Каталог", "Импорт каталога: товаров ${list.size}")
         list.chunked(400).forEach { chunk ->
             val b = fs.batch()
             chunk.forEach { b.set(fs.collection("products").document(it.id), productMap(it)) }
@@ -85,7 +88,9 @@ object Cloud {
     }
 
     fun deleteProduct(db: ProductDb, id: String) {
+        val oldName = db.getProduct(id)?.name ?: ""
         db.deleteProduct(id)
+        Journal.log("Каталог", "Удалён товар" + if (oldName.isNotBlank()) ": $oldName" else "")
         fs.collection("products").document(id).set(
             hashMapOf<String, Any>("deleted" to true, "updatedAt" to System.currentTimeMillis()),
             SetOptions.merge()
@@ -113,14 +118,24 @@ object Cloud {
     )
 
     fun saveReceipt(db: ProductDb, r: Receipt): Receipt {
+        val isNew = db.getReceipt(r.id) == null
         val nr = r.copy(updatedAt = System.currentTimeMillis())
         db.upsertReceipts(listOf(nr))
         fs.collection("receipts").document(nr.id).set(receiptMap(nr))
+        val who = listOf(nr.sender, if (nr.orderNo.isNotBlank() && nr.orderNo != "none") "заказ ${nr.orderNo}" else "")
+            .filter { it.isNotBlank() }.joinToString(" · ")
+        Journal.log(
+            "Приём",
+            (if (isNew) "Принята партия" else "Изменена партия") +
+                (if (who.isNotEmpty()) ": $who" else "") + " · позиций ${nr.items.size}"
+        )
         return nr
     }
 
     fun deleteReceipt(db: ProductDb, id: String) {
+        val old = db.getReceipt(id)
         db.deleteReceipt(id)
+        Journal.log("Приём", "Удалена партия" + if (old != null && old.sender.isNotBlank()) ": ${old.sender}" else "")
         fs.collection("receipts").document(id).set(
             hashMapOf<String, Any>("deleted" to true, "updatedAt" to System.currentTimeMillis()),
             SetOptions.merge()

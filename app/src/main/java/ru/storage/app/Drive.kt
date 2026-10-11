@@ -138,6 +138,18 @@ object DriveApi {
         check(http(DriveCfg.url(ctx), o.toString()))
     }
 
+    /** Имена файлов, в названии которых есть key (поиск на стороне скрипта Диска; действие search). */
+    fun searchNames(ctx: Context, key: String): List<String> {
+        val r = check(http(query(ctx, "search", "key" to key), null))
+        val arr = r.optJSONArray("files") ?: return emptyList()
+        val out = ArrayList<String>()
+        for (i in 0 until arr.length()) {
+            val n = arr.getJSONObject(i).optString("name")
+            if (n.isNotEmpty()) out.add(n)
+        }
+        return out
+    }
+
     /** Страница списка файлов, новые сверху. */
     fun page(ctx: Context, token: String?, size: Int): DrivePage {
         val kv = ArrayList<Pair<String, String>>()

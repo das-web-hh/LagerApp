@@ -259,10 +259,21 @@ object SendCloud {
 
     /** Локально сразу, в Firestore — в очередь (работает и без сети). */
     fun savePaket(db: SendDb, p: Paket): Paket {
+        val old = db.getPaket(p.id)
         val np = p.copy(updatedAt = System.currentTimeMillis())
         db.upsertPaket(np)
         fs.collection("shipments").document(np.id).set(paketMap(np))
         SendState.version++
+        val same = old != null && old.tracking == np.tracking && old.recipient == np.recipient &&
+            old.note == np.note && old.photos.size == np.photos.size
+        if (!same) {
+            val what = listOf(np.tracking, np.recipient).filter { it.isNotBlank() }.joinToString(" · ")
+            Journal.log(
+                "Отправка",
+                (if (old == null) "Post paket: добавлена посылка" else "Post paket: обновлена посылка") +
+                    (if (what.isNotEmpty()) " $what" else "")
+            )
+        }
         return np
     }
 
@@ -275,7 +286,13 @@ object SendCloud {
     }
 
     fun deletePaket(db: SendDb, id: String) {
+        val old = db.getPaket(id)
         db.deletePaket(id)
+        Journal.log(
+            "Отправка",
+            "Post paket: удалена посылка" +
+                (if (old != null) listOf(old.tracking, old.recipient).filter { it.isNotBlank() }.joinToString(" · ").let { if (it.isNotEmpty()) " $it" else "" } else "")
+        )
         fs.collection("shipments").document(id).set(
             hashMapOf<String, Any>("deleted" to true, "updatedAt" to System.currentTimeMillis()),
             SetOptions.merge()
@@ -284,8 +301,14 @@ object SendCloud {
     }
 
     fun saveWagen(db: SendDb, w: WagenOp): WagenOp {
+        val oldW = db.getWagen(w.id)
         val nw = w.copy(updatedAt = System.currentTimeMillis())
         db.upsertWagen(nw)
+        Journal.log(
+            "Отправка",
+            (if (oldW == null) "DHL Postwagen: добавлена операция" else "DHL Postwagen: изменена операция") +
+                " · отправлено ${nw.sent}, получено ${nw.received}"
+        )
         fs.collection("wagen_ops").document(nw.id).set(
             hashMapOf<String, Any>(
                 "createdAt" to nw.createdAt,
@@ -303,6 +326,7 @@ object SendCloud {
 
     fun deleteWagen(db: SendDb, id: String) {
         db.deleteWagen(id)
+        Journal.log("Отправка", "DHL Postwagen: удалена операция")
         fs.collection("wagen_ops").document(id).set(
             hashMapOf<String, Any>("deleted" to true, "updatedAt" to System.currentTimeMillis()),
             SetOptions.merge()

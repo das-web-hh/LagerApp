@@ -41,6 +41,7 @@ object CloudSettings {
     /** Вызывать после любого изменения настроек: ставит время и отправляет в Firebase (в очередь, работает и без сети). */
     fun save(ctx: Context, prefs: Prefs) {
         val now = System.currentTimeMillis()
+        Journal.log("Система", "Изменены настройки")
         sp(ctx).edit().putLong("updated", now).apply()
         push(ctx, prefs, now)
     }

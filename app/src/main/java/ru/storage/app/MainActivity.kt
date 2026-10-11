@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
+        Journal.init(applicationContext)
         Ui.load(applicationContext)
         PrintCfg.load(applicationContext)
         Speaker.init(applicationContext)
@@ -102,6 +103,7 @@ fun AppRoot() {
             ) { Incoming.openPath = null }
         } else {
             MainScreen(prefs = prefs, profile = profile, onLogout = {
+                Journal.log("Система", "Выход из аккаунта")
                 sessionSp.edit().remove("login").apply()
                 loggedIn = false
             })
@@ -116,6 +118,8 @@ fun AppRoot() {
     if (splash) {
         WelcomeSplash(
             onCovered = {
+                Session.login = pendingLogin.ifBlank { "admin" }
+                Journal.log("Система", "Вход в аккаунт")
                 sessionSp.edit().putString("login", pendingLogin).apply()
                 userLogin = pendingLogin
                 loggedIn = true
@@ -139,6 +143,16 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val ctx = LocalContext.current
     // снимки этикеток Post paket живут на телефоне двое суток; незаконченный анализ этикеток добирается
+    // журнал и документы: отправляем на Диск то, что накопилось без связи
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                Journal.flush(ctx)
+                DocStore.flush(ctx)
+            } catch (e: Exception) {
+            }
+        }
+    }
     LaunchedEffect(Unit) {
         LabelProcessor.resume(ctx)
         while (true) {

@@ -90,6 +90,7 @@ object InvoiceProfiles {
         val i = list.indexOfFirst { it.key == np.key }
         if (i >= 0) list[i] = np else list.add(np)
         persist(ctx)
+        Journal.log("Приём", (if (i >= 0) "Изменён шаблон накладной: " else "Добавлен шаблон накладной: ") + np.key)
         try {
             fs.collection("invoice_profiles").document(np.key).set(map(np))
         } catch (e: Exception) {
@@ -100,6 +101,7 @@ object InvoiceProfiles {
         load(ctx)
         list.removeAll { it.key == key }
         persist(ctx)
+        Journal.log("Приём", "Удалён шаблон накладной: $key")
         try {
             fs.collection("invoice_profiles").document(key).delete()
         } catch (e: Exception) {

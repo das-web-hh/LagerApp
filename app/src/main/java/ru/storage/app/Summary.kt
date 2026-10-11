@@ -25,10 +25,13 @@ import java.util.Locale
 object Printer {
     private var current: WebView? = null
 
-    fun print(ctx: Context, jobName: String, html: String) {
+    /** record = true: копия напечатанного попадает в «Документы»; печать всегда пишется в «Журнал». */
+    fun print(ctx: Context, jobName: String, html: String, record: Boolean = true) {
         var c: Context? = ctx
         while (c is ContextWrapper && c !is Activity) c = c.baseContext
         val activity = c as? Activity ?: return
+        Journal.log("Печать", "Печать: " + jobName.replace('_', ' ').trim())
+        if (record) DocStore.recordPrinted(ctx, jobName, html)
         val wv = WebView(activity)
         var done = false
         wv.webViewClient = object : WebViewClient() {

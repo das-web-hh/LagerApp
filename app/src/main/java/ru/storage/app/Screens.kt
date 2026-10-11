@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -63,6 +65,8 @@ fun OtherScreen(prefs: Prefs) {
         current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
         current == "История" -> HistoryScreen { section = null }
         current == "Инфо" -> InfoScreen { section = null }
+        current == "Журнал" -> JournalScreen { section = null }
+        current == "Документы" -> DocsScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Прочее", style = MaterialTheme.typography.headlineMedium)
@@ -72,7 +76,9 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Шаблоны накладных", Icons.Default.Edit, InvoiceProfiles.newCount) { section = "Шаблоны накладных" },
                     TileSpec("Каталог товаров", Icons.Default.Menu) { section = "Каталог товаров" },
                     TileSpec("История", Icons.Default.DateRange) { section = "История" },
-                    TileSpec("Инфо", Icons.Default.Info) { section = "Инфо" }
+                    TileSpec("Инфо", Icons.Default.Info) { section = "Инфо" },
+                    TileSpec("Журнал", Icons.AutoMirrored.Filled.List) { section = "Журнал" },
+                    TileSpec("Документы", Icons.Default.Create) { section = "Документы" }
                 )
             )
         }
