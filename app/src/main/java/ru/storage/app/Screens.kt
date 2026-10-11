@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Done
@@ -85,6 +86,10 @@ fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
     val current = section
     when {
         current == "Профиль" -> ProfileScreen(profile, prefs, onLogout) { section = null }
+        current == "Настройки" -> SettingsScreen(prefs) { section = null }
+        current == "Лицензия" -> LicenseScreen(profile) { section = null }
+        current == "О приложении" -> AboutAppScreen { section = null }
+        current == "О системе" -> AboutSystemScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Еще", style = MaterialTheme.typography.headlineMedium)
@@ -97,11 +102,13 @@ fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
             ) {
-                MoreRow(Icons.Default.Lock, "Лицензия", "Настройки лицензирования") { section = "Лицензия" }
+                MoreRow(Icons.Default.Settings, "Настройки", "Сканер, печать, тема, Google Диск и др.") { section = "Настройки" }
                 HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
-                MoreRow(Icons.Default.Info, "О приложении", "Информация о приложении") { section = "О приложении" }
+                MoreRow(Icons.Default.Lock, "Лицензия", "Условия использования, компоненты") { section = "Лицензия" }
                 HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
-                MoreRow(Icons.Default.Settings, "О системе", "Информация о системе") { section = "О системе" }
+                MoreRow(Icons.Default.Info, "О приложении", "Версия, возможности, что нового") { section = "О приложении" }
+                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                MoreRow(Icons.Default.Build, "О системе", "Телефон, память, сеть, батарея") { section = "О системе" }
             }
             Spacer(Modifier.height(12.dp))
             WideOutlinedButton(Icons.Default.Share, "Выгрузка данных") { section = "Выгрузка данных" }
@@ -130,13 +137,7 @@ private fun ProfileRow(label: String, value: String) {
 
 @Composable
 fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit, onBack: () -> Unit) {
-    var showSettings by remember { mutableStateOf(false) }
     BackHandler(onBack = onBack)
-
-    if (showSettings) {
-        SettingsScreen(prefs) { showSettings = false }
-        return
-    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
@@ -149,11 +150,6 @@ fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit, onBa
         ProfileRow("Электронная почта", profile.email)
         ProfileRow("Пароль", "••••••••")
         Spacer(Modifier.height(24.dp))
-        FilledTonalButton(
-            onClick = { showSettings = true },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Настройки") }
-        Spacer(Modifier.height(8.dp))
         OutlinedButton(
             onClick = onLogout,
             modifier = Modifier.fillMaxWidth()
