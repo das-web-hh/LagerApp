@@ -142,6 +142,14 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
         else withContext(Dispatchers.IO) { db.search(query, 300, newestFirst = true) }
     }
 
+    // код с Bluetooth-сканера попадает в строку поиска
+    LaunchedEffect(BtScan.version) {
+        val c = BtScan.pending
+        if (c != null) {
+            BtScan.pending = null
+            query = c
+        }
+    }
     if (scanning) {
         ScannerScreen(prefs = prefs, onResult = { query = it; scanning = false }, onClose = { scanning = false })
         return

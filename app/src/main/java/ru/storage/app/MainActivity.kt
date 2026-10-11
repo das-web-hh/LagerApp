@@ -49,6 +49,11 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (BtScan.onKey(this, event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -240,6 +245,10 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     val ctx = LocalContext.current
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
     LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
+    LaunchedEffect(Unit) {
+        BtScan.load(ctx)
+        withContext(Dispatchers.IO) { try { BtScan.autoConnect(ctx) } catch (e: Exception) { } }
+    }
     // папки автоприёма: новые PDF и картинки сами уходят в очередь на распознавание
     LaunchedEffect(Unit) {
         delay(5000)

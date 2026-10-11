@@ -68,6 +68,8 @@ fun OtherScreen(prefs: Prefs) {
         current == "Инфо" -> InfoScreen { section = null }
         current == "Журнал" -> JournalScreen { section = null }
         current == "Документы" -> DocsScreen { section = null }
+        current == "Bluetooth" -> BluetoothScreen { section = null }
+        current == "Отправить приложение" -> ShareAppScreen { section = null }
         current == "Файлы" -> FilesScreen { section = null }
         current == "Рабочее время" -> WorkTimeScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
@@ -83,6 +85,8 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Журнал", Icons.AutoMirrored.Filled.List) { section = "Журнал" },
                     TileSpec("Документы", Icons.Default.Create) { section = "Документы" },
                     TileSpec("Файлы", Icons.Default.Share) { section = "Файлы" },
+                    TileSpec("Bluetooth", Icons.Default.Settings) { section = "Bluetooth" },
+                    TileSpec("Отправить приложение", Icons.AutoMirrored.Filled.Send) { section = "Отправить приложение" },
                     TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" }
                 )
             )
