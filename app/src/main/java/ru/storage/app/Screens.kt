@@ -68,6 +68,7 @@ fun OtherScreen(prefs: Prefs) {
         current == "Инфо" -> InfoScreen { section = null }
         current == "Журнал" -> JournalScreen { section = null }
         current == "Документы" -> DocsScreen { section = null }
+        current == "Файлы" -> FilesScreen { section = null }
         current == "Рабочее время" -> WorkTimeScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -81,6 +82,7 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Инфо", Icons.Default.Info) { section = "Инфо" },
                     TileSpec("Журнал", Icons.AutoMirrored.Filled.List) { section = "Журнал" },
                     TileSpec("Документы", Icons.Default.Create) { section = "Документы" },
+                    TileSpec("Файлы", Icons.Default.Share) { section = "Файлы" },
                     TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" }
                 )
             )

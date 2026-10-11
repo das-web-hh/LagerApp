@@ -240,6 +240,20 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     val ctx = LocalContext.current
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
     LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
+    // папки автоприёма: новые PDF и картинки сами уходят в очередь на распознавание
+    LaunchedEffect(Unit) {
+        delay(5000)
+        while (true) {
+            withContext(Dispatchers.IO) {
+                try {
+                    Folders.load(ctx)
+                    if (Folders.auto && Folders.folders.isNotEmpty()) Folders.scanAll(ctx, true)
+                } catch (e: Exception) {
+                }
+            }
+            delay(120_000L)
+        }
+    }
     // снимки этикеток Post paket живут на телефоне двое суток; незаконченный анализ этикеток добирается
     // журнал и документы: отправляем на Диск то, что накопилось без связи
     LaunchedEffect(Unit) {
