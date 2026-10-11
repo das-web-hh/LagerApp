@@ -18,7 +18,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -40,13 +52,7 @@ fun Placeholder(title: String) {
 private val homeSections = listOf(
     "Поиск",
     "История",
-    "Инвентаризация",
-    "Приём испорченных товаров",
-    "Инвентаризация испорченных товаров",
-    "Каталог товаров",
     "Задачи",
-    "Шаблоны накладных",
-    "Инфо",
     "Чат"
 )
 
@@ -62,9 +68,7 @@ fun HomeScreen(prefs: Prefs) {
 
     when {
         current == "Поиск" -> SearchScreen(prefs) { section = null }
-        current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
         current == "История" -> HistoryScreen { section = null }
-        current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
@@ -74,10 +78,65 @@ fun HomeScreen(prefs: Prefs) {
                     onClick = { section = name },
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) {
-                    val n = if (name == "Шаблоны накладных") InvoiceProfiles.newCount else 0
-                    Text(if (n > 0) "$name ($n)" else name)
+                    Text(name)
                 }
             }
+        }
+    }
+}
+
+/** Окно «Прочее»: шаблоны накладных, каталог товаров, инфо. */
+@Composable
+fun OtherScreen(prefs: Prefs) {
+    var section by rememberSaveable { mutableStateOf<String?>(null) }
+    val current = section
+    val ctx = LocalContext.current
+    LaunchedEffect(Unit) { InvoiceProfiles.load(ctx) }
+    when {
+        current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
+        current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
+        current != null -> SectionScreen(current) { section = null }
+        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Text("Прочее", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(16.dp))
+            TileGrid(
+                listOf(
+                    TileSpec("Шаблоны накладных", Icons.Default.Edit, InvoiceProfiles.newCount) { section = "Шаблоны накладных" },
+                    TileSpec("Каталог товаров", Icons.Default.Menu) { section = "Каталог товаров" },
+                    TileSpec("Инфо", Icons.Default.Info) { section = "Инфо" }
+                )
+            )
+        }
+    }
+}
+
+/** Окно «Еще»: кнопка «Профиль» и четыре строки; профиль со всеми его строками — в отдельном окне. */
+@Composable
+fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
+    var section by rememberSaveable { mutableStateOf<String?>(null) }
+    val current = section
+    when {
+        current == "Профиль" -> ProfileScreen(profile, prefs, onLogout) { section = null }
+        current != null -> SectionScreen(current) { section = null }
+        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Text("Еще", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(16.dp))
+            ProfileCard(profile.firstName.ifBlank { "Профиль" }) { section = "Профиль" }
+            Spacer(Modifier.height(16.dp))
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+            ) {
+                MoreRow(Icons.Default.Lock, "Лицензия", "Настройки лицензирования") { section = "Лицензия" }
+                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                MoreRow(Icons.Default.Info, "О приложении", "Информация о приложении") { section = "О приложении" }
+                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                MoreRow(Icons.Default.Settings, "О системе", "Информация о системе") { section = "О системе" }
+            }
+            Spacer(Modifier.height(12.dp))
+            WideOutlinedButton(Icons.Default.Share, "Выгрузка данных") { section = "Выгрузка данных" }
         }
     }
 }
@@ -102,8 +161,9 @@ private fun ProfileRow(label: String, value: String) {
 }
 
 @Composable
-fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
+fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit, onBack: () -> Unit) {
     var showSettings by remember { mutableStateOf(false) }
+    BackHandler(onBack = onBack)
 
     if (showSettings) {
         SettingsScreen(prefs) { showSettings = false }
@@ -166,22 +226,24 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
     ) {
-        Text("Приём", style = MaterialTheme.typography.headlineMedium)
+        Text("Работа", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
-        listOf("Ручной", "По наименованию", "Автоприём", "Итог приёма").forEach { name ->
-            FilledTonalButton(
-                onClick = {
-                    when (name) {
-                        "Автоприём" -> {
-                            pickMode = "auto"
-                            pdfPicker.launch(arrayOf("application/pdf", "image/jpeg", "image/png"))
-                        }
-                        "По наименованию" -> mode = name
-                        else -> mode = name
-                    }
+        val autoCount = AutoReceiveHolder.jobs.count { !it.nameMode && !it.saved }
+        val nameCount = AutoReceiveHolder.jobs.count { it.nameMode && !it.saved }
+        TileGrid(
+            listOf(
+                TileSpec("Ручной", Icons.Default.Edit) { mode = "Ручной" },
+                TileSpec("По наименованию", Icons.Default.Search, nameCount) { mode = "По наименованию" },
+                TileSpec("Автоприём", Icons.Default.Refresh, autoCount) {
+                    pickMode = "auto"
+                    pdfPicker.launch(arrayOf("application/pdf", "image/jpeg", "image/png"))
                 },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) { Text(name) }
+                TileSpec("Итог приёма", Icons.Default.Check) { mode = "Итог приёма" },
+                TileSpec("Приём B-Ware", Icons.Default.Add) { mode = "Приём B-Ware" },
+                TileSpec("Инвентаризация", Icons.Default.Done) { mode = "Инвентаризация" },
+                TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
+                TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" }
+            )
         }
 
         val jobs = AutoReceiveHolder.jobs.filter { !it.nameMode }

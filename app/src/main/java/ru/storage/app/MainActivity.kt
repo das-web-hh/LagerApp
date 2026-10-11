@@ -14,7 +14,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -127,9 +128,9 @@ private data class Tab(val title: String, val icon: ImageVector)
 fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     val tabs = listOf(
         Tab("Главная", Icons.Default.Home),
-        Tab("Приём", Icons.Default.Add),
-        Tab("Отправка", Icons.AutoMirrored.Filled.Send),
-        Tab("Профиль", Icons.Default.Person)
+        Tab("Работа", Icons.Default.Add),
+        Tab("Прочее", Icons.Default.Menu),
+        Tab("Еще", Icons.Default.Settings)
     )
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val ctx = LocalContext.current
@@ -164,6 +165,11 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                                 BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
                                     Icon(tab.icon, contentDescription = tab.title)
                                 }
+                            } else if (i == 2) {
+                                val n = InvoiceProfiles.newCount
+                                BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
+                                    Icon(tab.icon, contentDescription = tab.title)
+                                }
                             } else Icon(tab.icon, contentDescription = tab.title)
                         },
                         label = { Text(tab.title) }
@@ -176,8 +182,8 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
             when (selected) {
                 0 -> HomeScreen(prefs)
                 1 -> ReceiveScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
-                2 -> Placeholder("Отправка")
-                else -> ProfileScreen(profile, prefs, onLogout)
+                2 -> OtherScreen(prefs)
+                else -> MoreScreen(profile, prefs, onLogout)
             }
         }
     }
