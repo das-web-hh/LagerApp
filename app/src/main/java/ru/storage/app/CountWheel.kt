@@ -597,7 +597,7 @@ private fun CountWheel(state: LazyListState) {
  * после остановки колеса; кнопка «Готово» — сразу.
  */
 @Composable
-private fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit, onDismiss: () -> Unit) {
+fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit, onDismiss: () -> Unit) {
     val start = initial.coerceIn(0, MAX_COUNT)
     // первый видимый индекс = число; число стоит третьим сверху, то есть посередине
     val state = rememberLazyListState(initialFirstVisibleItemIndex = start)

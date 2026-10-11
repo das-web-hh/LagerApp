@@ -25,6 +25,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -134,6 +137,14 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     )
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val ctx = LocalContext.current
+    // снимки этикеток Post paket живут на телефоне двое суток; незаконченный анализ этикеток добирается
+    LaunchedEffect(Unit) {
+        LabelProcessor.resume(ctx)
+        while (true) {
+            withContext(Dispatchers.IO) { try { SendRetention.sweep(ctx) } catch (e: Exception) { } }
+            delay(60 * 60 * 1000L)
+        }
+    }
     var lastBack by remember { mutableLongStateOf(0L) }
     // Системная «Назад»: с других вкладок — на главную; с главной — выход только двойным нажатием
     BackHandler {

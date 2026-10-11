@@ -61,6 +61,7 @@ fun OtherScreen(prefs: Prefs) {
         current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
         current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
         current == "История" -> HistoryScreen { section = null }
+        current == "Инфо" -> InfoScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Прочее", style = MaterialTheme.typography.headlineMedium)
@@ -183,6 +184,10 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     }
     if (current == "Итог приёма") {
         ReceiveTotalScreen { mode = null }
+        return
+    }
+    if (current == "Отправка") {
+        SendHubScreen { mode = null }
         return
     }
     if (current != null) {
