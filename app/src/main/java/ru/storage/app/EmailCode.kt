@@ -16,6 +16,11 @@ object EmailCode {
     private const val PUBLIC_KEY = "eVykpcx5pKB6QOkY_"
     private const val SERVICE_ID = "service_gqzvbbf"
     private const val TEMPLATE_ID = "template_43migsz"
+    /**
+     * Шаблон для писем администратора. Создайте в EmailJS второй шаблон с переменными
+     * {{to_email}} (поле «To Email»), {{to_name}}, {{from_name}}, {{subject}}, {{message}} и вставьте сюда его ID.
+     */
+    private const val MESSAGE_TEMPLATE_ID = "template_REPLACE_ME"
     private const val TTL_MS = 10 * 60 * 1000L
     private const val MAX_TRIES = 5
 
@@ -60,6 +65,35 @@ object EmailCode {
                 }
             } catch (e: Exception) {
                 "Нет связи. Не удалось отправить код на Email"
+            }
+        }
+    }
+
+    /** Письмо сотруднику на его Email: обращение по имени, подпись — имя отправителя. null — отправлено. */
+    suspend fun sendMessage(toEmail: String, toName: String, fromName: String, subject: String, message: String): String? {
+        if (MESSAGE_TEMPLATE_ID.endsWith("REPLACE_ME"))
+            return "Не задан шаблон письма: создайте шаблон в EmailJS и впишите его ID в EmailCode.kt"
+        return withContext(Dispatchers.IO) {
+            try {
+                val params = JSONObject()
+                    .put("to_email", toEmail).put("email", toEmail)
+                    .put("to_name", toName).put("from_name", fromName)
+                    .put("subject", subject).put("message", message)
+                val body = JSONObject()
+                    .put("service_id", SERVICE_ID).put("template_id", MESSAGE_TEMPLATE_ID)
+                    .put("user_id", PUBLIC_KEY).put("template_params", params)
+                val conn = URL("https://api.emailjs.com/api/v1.0/email/send").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 15000
+                conn.readTimeout = 20000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                val status = conn.responseCode
+                conn.disconnect()
+                if (status in 200..299) null else "Не удалось отправить письмо (ошибка $status)"
+            } catch (e: Exception) {
+                "Нет связи. Письмо не отправлено"
             }
         }
     }

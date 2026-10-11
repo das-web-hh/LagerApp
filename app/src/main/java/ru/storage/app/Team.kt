@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Transaction
@@ -33,7 +34,12 @@ data class AppUser(
     val name: String,
     val position: String,
     val role: String,
-    val status: String
+    val status: String,
+    val email: String = "",
+    /** Счётчик «завершений сеанса»: администратор увеличивает — все телефоны этого сотрудника выходят из аккаунта. */
+    val sess: Long = 0L,
+    /** Заблокирован администратором: вход закрыт, текущий сеанс завершается. */
+    val blocked: Boolean = false
 ) {
     val isAdmin: Boolean get() = role == "admin"
     val label: String get() = if (position.isBlank()) name else "$name · $position"
@@ -73,7 +79,10 @@ object Users {
             name = getString("name") ?: id,
             position = getString("position") ?: "",
             role = getString("role") ?: "worker",
-            status = getString("status") ?: "pending"
+            status = getString("status") ?: "pending",
+            email = getString("email") ?: if (id.contains('@')) id else "",
+            sess = getLong("sess") ?: 0L,
+            blocked = getBoolean("blocked") ?: false
         )
     }
 
@@ -95,6 +104,8 @@ object Users {
             val snap = fs.collection("users").document(k).get().awaitIt()
             if (!snap.exists() || snap.getString("passHash") != hash(k, pw)) {
                 AuthResult.Fail("Неверный логин или пароль")
+            } else if (snap.getBoolean("blocked") == true) {
+                AuthResult.Fail("Доступ заблокирован администратором")
             } else {
                 AuthResult.Ok(snap.toUser()!!)
             }
@@ -205,6 +216,18 @@ object Users {
 
     fun setPosition(login: String, position: String) {
         fs.collection("users").document(login).update("position", position)
+    }
+
+    /** Завершить сеанс: сотрудник выйдет из аккаунта на всех телефонах, но сможет войти снова. */
+    fun endSession(login: String) {
+        fs.collection("users").document(login).update("sess", FieldValue.increment(1))
+        Journal.log("Система", "Администратор завершил сеанс: $login")
+    }
+
+    /** Заблокировать / разблокировать: заблокированный сразу выходит и не может войти. */
+    fun setBlocked(login: String, blocked: Boolean) {
+        fs.collection("users").document(login).update(mapOf("blocked" to blocked, "sess" to FieldValue.increment(1)))
+        Journal.log("Система", (if (blocked) "Заблокирован: " else "Разблокирован: ") + login)
     }
 }
 

@@ -1,5 +1,6 @@
 package ru.storage.app
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -78,6 +80,8 @@ fun PendingScreen(user: AppUser, onApproved: (AppUser) -> Unit, onLogout: () -> 
         val reg = Users.listenUser(user.login) { u, fromCache ->
             if (u == null) {
                 if (!fromCache) rejected = true
+            } else if (u.blocked && !fromCache) {
+                onLogout()
             } else if (u.status == "active") {
                 onApproved(u)
             }
@@ -314,6 +318,10 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
     val me = Session.user ?: return
     var creating by rememberSaveable { mutableStateOf(false) }
     var posFor by remember { mutableStateOf<AppUser?>(null) }
+    var mgFor by remember { mutableStateOf<AppUser?>(null) }
+    var mailFor by remember { mutableStateOf<AppUser?>(null) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     if (creating) {
         NewTaskScreen(me) { creating = false }
         return
@@ -358,9 +366,13 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(u.name, fontWeight = FontWeight.Medium)
-                            Text(u.position.ifBlank { "без должности" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                u.position.ifBlank { "без должности" } + if (u.blocked) " · заблокирован" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (u.blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                            )
                         }
-                        TextButton(onClick = { posFor = u }) { Text("Должность") }
+                        TextButton(onClick = { mgFor = u }) { Text("Управление") }
                     }
                 }
             }
@@ -383,6 +395,88 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
                 }
             }
         }
+    }
+
+
+    mgFor?.let { u0 ->
+        val u = Live.users.firstOrNull { it.login == u0.login } ?: u0
+        AlertDialog(
+            onDismissRequest = { mgFor = null },
+            title = { Text(u.name) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        u.position.ifBlank { "без должности" } + if (u.blocked) " · заблокирован" else "",
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        u.email.ifBlank { "Email не указан" },
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(onClick = { posFor = u; mgFor = null }, modifier = Modifier.fillMaxWidth()) { Text("Изменить должность") }
+                    OutlinedButton(
+                        enabled = u.email.isNotBlank(),
+                        onClick = { mailFor = u; mgFor = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Написать на Email") }
+                    OutlinedButton(
+                        onClick = {
+                            Users.endSession(u.login)
+                            Toast.makeText(ctx, "Сеанс завершён: ${u.name}", Toast.LENGTH_SHORT).show()
+                            mgFor = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Завершить сеанс") }
+                    Button(
+                        onClick = { Users.setBlocked(u.login, !u.blocked); mgFor = null },
+                        colors = if (u.blocked) ButtonDefaults.buttonColors()
+                        else ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (u.blocked) "Разблокировать" else "Заблокировать") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { mgFor = null }) { Text("Закрыть") } }
+        )
+    }
+
+    mailFor?.let { u ->
+        var subject by remember(u.login) { mutableStateOf("") }
+        var body by remember(u.login) { mutableStateOf("") }
+        var sending by remember(u.login) { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { if (!sending) mailFor = null },
+            title = { Text("Письмо: ${u.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "На ${u.email}. Обращение по имени, подпись — ${me.name}.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(subject, { subject = it }, label = { Text("Тема") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(body, { body = it }, label = { Text("Сообщение") }, minLines = 4, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !sending && subject.isNotBlank() && body.isNotBlank(),
+                    onClick = {
+                        sending = true
+                        scope.launch {
+                            val err = EmailCode.sendMessage(u.email, u.name, me.name, subject.trim(), body.trim())
+                            sending = false
+                            if (err == null) {
+                                Journal.log("Система", "Письмо сотруднику ${u.name} <${u.email}>: ${subject.trim()}")
+                                Toast.makeText(ctx, "Письмо отправлено", Toast.LENGTH_SHORT).show()
+                                mailFor = null
+                            } else {
+                                Toast.makeText(ctx, err, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                ) { if (sending) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Text("Отправить") }
+            },
+            dismissButton = { TextButton(enabled = !sending, onClick = { mailFor = null }) { Text("Отмена") } }
+        )
     }
 
     posFor?.let { u ->

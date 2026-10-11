@@ -92,7 +92,8 @@ fun AppRoot() {
         if (sessionSp.getString("role", "") == "admin" && sessionSp.getInt("v", 0) < 2) return null
         return AppUser(
             l, sessionSp.getString("name", "") ?: "", sessionSp.getString("position", "") ?: "",
-            sessionSp.getString("role", "worker") ?: "worker", sessionSp.getString("status", "pending") ?: "pending"
+            sessionSp.getString("role", "worker") ?: "worker", sessionSp.getString("status", "pending") ?: "pending",
+            sess = sessionSp.getLong("sess", 0L)
         )
     }
     var user by remember { mutableStateOf(loadUser()) }
@@ -111,7 +112,7 @@ fun AppRoot() {
             e.clear()
         } else {
             e.putString("login", u.login).putString("name", u.name).putString("position", u.position)
-                .putString("role", u.role).putString("status", u.status).putInt("v", 2)
+                .putString("role", u.role).putString("status", u.status).putInt("v", 2).putLong("sess", u.sess)
         }
         e.apply()
         applyUser(u)
@@ -151,6 +152,14 @@ fun AppRoot() {
             reg = Users.listenUser(current.login) { u, fromCache ->
                 if (u == null) {
                     if (!fromCache) saveUser(null)
+                } else if (!fromCache && (u.blocked || u.sess != current.sess)) {
+                    // администратор заблокировал аккаунт или завершил сеанс
+                    Toast.makeText(
+                        context,
+                        if (u.blocked) "Доступ заблокирован администратором" else "Администратор завершил ваш сеанс",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    saveUser(null)
                 } else if (u.status == "active" && (u.name != current.name || u.position != current.position)) {
                     saveUser(u)
                 }
