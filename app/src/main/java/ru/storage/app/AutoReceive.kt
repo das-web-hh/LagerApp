@@ -151,6 +151,25 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     var saving by mutableStateOf(false)
     var newProductCount by mutableIntStateOf(0)
 
+    /** Причина, по которой накладная не принята (заказ или документ уже приняты). Пусто — всё в порядке. */
+    var blocked by mutableStateOf("")
+
+    /** Накладная привязана к уже принятому приёму (без новых товаров): что именно сделано. */
+    var attachedNote by mutableStateOf("")
+
+    /** Решения по товарам, которые за этот день уже принимались: ключ — название без знаков, true — принять, false — отказать. */
+    val dupDecision = mutableStateMapOf<String, Boolean>()
+
+    /** Товары, ожидающие решения «принять / отказать» (автоприём). */
+    var sameDay by mutableStateOf<List<SameDay>>(emptyList())
+
+    private var idDone = false
+    private var checkedOrder = ""
+    private var hashCache: String? = null
+
+    /** SHA-256 файла накладной (считается один раз). Вызывать не в главном потоке. */
+    fun docHash(): String = hashCache ?: InvoiceCheck.sha256(File(file.path)).also { hashCache = it }
+
     /** true — приём по имени (все строки как есть, план = печатное количество); false — автоприём (по отметкам ручкой). */
     var nameMode by mutableStateOf(startNameMode)
         private set
@@ -166,6 +185,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             running -> message.ifBlank { "Распознавание…" }
             !started -> "Ожидает открытия"
             hasFailed -> "Не все листы распознаны"
+            blocked.isNotBlank() -> "Не принято: $blocked"
+            attachedNote.isNotBlank() -> "Накладная привязана к приёму"
+            !nameMode && autoState == "samedup" -> "Такие товары уже принимались сегодня — откройте и решите"
             !nameMode && autoState == "unmarked" -> "Нет галочек/крестиков — откройте в «Приём по имени»"
             !nameMode && autoState == "error" -> "Не сохранено: $autoError"
             else -> if (nameMode) "Идёт подсчёт · позиций: ${items.size}" else "Проверьте и сохраните · позиций: ${items.size}"
@@ -203,6 +225,12 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             autoState = "unmarked"
             return
         }
+        val dups = pendingSameDay()
+        if (dups.isNotEmpty()) {
+            sameDay = dups
+            autoState = "samedup"
+            return
+        }
         autoError = ""
         message = "Сохраняю приём…"
         val err = try {
@@ -217,6 +245,112 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             autoState = "error"
             autoError = err
         }
+    }
+
+    /** Товары, которые за день приёма уже принимались с тем же количеством и по которым ещё нет решения. */
+    suspend fun pendingSameDay(): List<SameDay> {
+        val at = stampMillis(stamp.trim()) ?: System.currentTimeMillis()
+        val rows = items.filter { it.name.isNotBlank() }
+            .map { DocItem(it.name.trim(), if (nameMode) it.fact else it.qty) }
+        return InvoiceCheck.sameDayItems(ProductDb.get(app), rows, at)
+            .filter { dupDecision[InvoiceCheck.norm(it.name)] == null }
+            .distinctBy { InvoiceCheck.norm(it.name) }
+    }
+
+    /** Накладная привязывается к уже принятому приёму: товары не дублируются, документ и недостающие данные дописываются. */
+    private suspend fun attachTo(r: Receipt, how: String): Boolean {
+        saving = true
+        message = "Привязываю накладную к приёму…"
+        val st = stamp.trim().let { if (it.length == 16) it else "" }
+        val err = try {
+            InvoiceCheck.attach(app, ProductDb.get(app), r, file, sender, order, st, withContext(Dispatchers.IO) { docHash() })
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
+        }
+        saving = false
+        if (err != null) {
+            blocked = "Не удалось привязать накладную: $err"
+            return true
+        }
+        val shown = ArrayList<ItemRow>()
+        r.items.forEach {
+            val row = ItemRow(it.name, it.qty, status = "ok", printed = it.plan.ifEmpty { it.qty })
+            row.fact = it.qty
+            shown.add(row)
+        }
+        items.clear()
+        items.addAll(shown)
+        attachedNote = InvoiceCheck.attachNote(r, how, sender, order)
+        saved = true
+        autoState = "saved"
+        message = attachedNote
+        return true
+    }
+
+    /** Этап 1 уже знает номер заказа: заказ принят с накладной — стоп; принят без накладной — привязываем документ. true — партия закончена. */
+    private suspend fun checkOrderEarly(): Boolean {
+        val o = InvoiceCheck.clean(order)
+        if (o.isEmpty()) return false
+        checkedOrder = o
+        val r = InvoiceCheck.byOrder(ProductDb.get(app), o) ?: return false
+        if (r.invoices.isEmpty()) return attachTo(r, "по номеру заказа")
+        blocked = "заказ $o уже принят ${fmtTime(r.receivedAt)} вместе с накладной — повторно не принимаю. Остальное с документа не запрашивалось."
+        return true
+    }
+
+    /** После распознавания всех листов: заказ, отправитель + товары, дата + товары. true — документ привязан к существующему приёму или отклонён. */
+    private suspend fun resolveExisting(): Boolean {
+        val db = ProductDb.get(app)
+        val o = InvoiceCheck.clean(order)
+        if (o.isNotEmpty() && o != checkedOrder) {
+            checkedOrder = o
+            val r = InvoiceCheck.byOrder(db, o)
+            if (r != null) {
+                if (r.invoices.isEmpty()) return attachTo(r, "по номеру заказа")
+                blocked = "заказ $o уже принят ${fmtTime(r.receivedAt)} вместе с накладной — повторно не принимаю."
+                return true
+            }
+        }
+        val docItems = items.filter { !it.extra && it.name.isNotBlank() }
+            .map { DocItem(it.name.trim(), it.printed.ifEmpty { it.qty }) }
+        val found = InvoiceCheck.byGoods(db, sender, order, stampMillis(stamp.trim()), docItems) ?: return false
+        return attachTo(found.receipt, found.by)
+    }
+
+    /** Лёгкий запрос по первым листам: только отправитель и номер заказа. Бросает исключение, если ИИ не ответил ни на один лист. */
+    private suspend fun identify(doc: PageSource, n: Int, attempts: Int) {
+        var s = "none"
+        var o = "none"
+        var answered = false
+        var lastErr = ""
+        val limit = minOf(n, 4)
+        for (i in 0 until limit) {
+            message = "Проверка накладной: лист ${i + 1}"
+            val png = try {
+                doc.renderBw(i)
+            } catch (e: Exception) {
+                continue
+            }
+            AutoReceiveHolder.aiLock.withLock {
+                for (a in 1..attempts) {
+                    try {
+                        val r = Ai.identify(app, png, i + 1, n)
+                        if (s == "none" && r.sender != "none") s = r.sender
+                        if (o == "none" && r.order != "none") o = r.order
+                        answered = true
+                        break
+                    } catch (e: Exception) {
+                        lastErr = e.message ?: e.javaClass.simpleName
+                        if (a < attempts) delay(3000L * a)
+                    }
+                }
+            }
+            if (s != "none" && o != "none") break
+            if (i < limit - 1) delay(1000)
+        }
+        if (!answered) throw RuntimeException(lastErr.ifBlank { "ИИ не ответил" })
+        if (s != "none") sender = s
+        if (o != "none") order = o
     }
 
     private val results = HashMap<Int, PageResult>()
@@ -274,7 +408,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     var started = false
         private set
 
-    val hasFailed: Boolean get() = pages.isNotEmpty() && pages.any { !it.ok }
+    val hasFailed: Boolean
+        get() = blocked.isBlank() && attachedNote.isBlank() && pages.isNotEmpty() && pages.any { !it.ok }
 
     /** Распознавание закончилось с ошибкой (не все листы или сбой до начала) — вместо «Далее» показываем «Повторить». */
     val failedState: Boolean
@@ -313,8 +448,30 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 val attempts = AiCfg.attempts(app).coerceIn(1, 8)
                 // шаблоны накладных поставщиков (из Firebase, не чаще раза в 5 минут)
                 try { InvoiceProfiles.refresh(app) } catch (e: Exception) { }
+                // Этап 1: узнаём только отправителя и номер заказа. Заказ уже принят — остальное не запрашиваем.
+                if (!idDone && !onlyFailed) {
+                    try {
+                        identify(doc, n, attempts)
+                        idDone = true
+                        if (checkOrderEarly()) {
+                            message = if (blocked.isNotBlank()) "Не принято: $blocked" else attachedNote
+                            return@launch
+                        }
+                    } catch (e: Exception) {
+                        // этап 1 — только экономия запросов: если не вышло, читаем документ целиком, как раньше
+                    }
+                }
                 var rules = ""
                 var rulesChecked = false
+                var needGen = false
+                val knownSender = InvoiceCheck.clean(sender)
+                if (knownSender.isNotEmpty() && idDone) {
+                    // отправитель известен с этапа 1: подтверждённый шаблон используем сразу для всех листов
+                    seenSender = knownSender
+                    rulesChecked = true
+                    InvoiceProfiles.confirmedRules(app, knownSender)?.let { rules = it }
+                    needGen = InvoiceProfiles.find(app, knownSender) == null
+                }
                 for (i in 0 until n) {
                     val st = pages[i]
                     if (onlyFailed && st.ok) continue
@@ -343,6 +500,10 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                                 results[i] = r
                                 st.ok = true
                                 st.status = "готово"
+                                if (needGen && genPng == null && r.items.isNotEmpty()) {
+                                    genSender = knownSender
+                                    genPng = png
+                                }
                                 if (!rulesChecked && r.sender != "none") {
                                     rulesChecked = true
                                     seenSender = r.sender
@@ -371,10 +532,17 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 val failed = pages.count { !it.ok }
                 message = if (failed == 0) "Готово: распознано листов — $n"
                 else "Не распознано листов: $failed из $n"
-                try {
-                    parseNewProducts()
-                    if (failed == 0) message = "Готово: распознано листов — $n"
-                } catch (e: Exception) {
+                // Проверка накладной: не относится ли документ к уже принятому приёму (заказ / отправитель + товары / дата + товары)
+                var attached = false
+                if (failed == 0) {
+                    attached = try { resolveExisting() } catch (e: Exception) { false }
+                }
+                if (!attached) {
+                    try {
+                        parseNewProducts()
+                        if (failed == 0) message = "Готово: распознано листов — $n"
+                    } catch (e: Exception) {
+                    }
                 }
                 var profileNote: String
                 if (failed != 0) {
@@ -396,7 +564,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     }
                 }
                 message = "Готово: распознано листов — $n. $profileNote"
-                if (failed == 0 && !nameMode) autoFinish()
+                if (attached) message = if (blocked.isNotBlank()) "Не принято: $blocked" else attachedNote
+                if (failed == 0 && !nameMode && !attached) autoFinish()
             } catch (e: Exception) {
                 message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
             } finally {
@@ -420,8 +589,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     }
 
     private fun rebuild() {
-        var s = "none"
-        var o = "none"
+        if (attachedNote.isNotBlank()) return
+        var s = if (InvoiceCheck.isNone(sender)) "none" else sender
+        var o = if (InvoiceCheck.isNone(order)) "none" else order
         val list = ArrayList<ItemRow>()
         for (i in 0 until pages.size) {
             val r = results[i] ?: continue
@@ -511,6 +681,8 @@ suspend fun saveJob(
     for (r in job.items) {
         val name = r.name.trim()
         if (name.isEmpty()) continue
+        // товар, который за этот день уже принимали с тем же количеством и по которому выбрали «Отказать»
+        if (job.dupDecision[InvoiceCheck.norm(name)] == false) continue
         var pid = withContext(Dispatchers.IO) { r.productId.ifEmpty { db.findByName(name)?.id ?: "" } }
         val pt = r.parts
         if (pid.isEmpty() && !nameMode && !r.extra && pt != null) {
@@ -542,21 +714,32 @@ suspend fun saveJob(
             }
         }
     }
-    if (rows.isEmpty()) return "Нет товаров для сохранения"
+    if (rows.isEmpty()) {
+        return if (job.dupDecision.values.any { !it }) "Все товары отклонены — приём не сохранён" else "Нет товаров для сохранения"
+    }
 
     val order = Ai.normalizeOrder(job.order)
     job.saving = true
     try {
-        // Номер заказа — главный признак: тот же заказ второй раз не сохраняем
-        if (order != "none") {
-            val d2 = try {
-                Cloud.findDuplicate(db, order, "", "")
-            } catch (e: Exception) {
-                null
+        val hash = withContext(Dispatchers.IO) { job.docHash() }
+        // Точные признаки — номер заказа, содержимое и имя файла: тот же заказ или документ второй раз не принимаем
+        val d2 = try {
+            Cloud.findDuplicate(db, if (order != "none") order else "", f.name, "", hash)
+        } catch (e: Exception) {
+            null
+        }
+        if (d2 != null) {
+            if (d2.kind == "order" && d2.receipt.invoices.isEmpty()) {
+                // заказ уже принят, но без накладной — документ привязываем к нему, товары не дублируем
+                val st = job.stamp.trim().let { if (it.length == 16) it else "" }
+                val err = InvoiceCheck.attach(ctx, db, d2.receipt, f, job.sender, order, st, hash)
+                if (err != null) return err
+                job.attachedNote = InvoiceCheck.attachNote(d2.receipt, "по номеру заказа", job.sender, order)
+                job.saved = true
+                return null
             }
-            if (d2 != null) {
-                return "Заказ $order уже принят ${fmtTime(d2.receipt.receivedAt)} — повторно не сохраняю."
-            }
+            return if (d2.kind == "order") "Заказ $order уже принят ${fmtTime(d2.receipt.receivedAt)} — повторно не сохраняю."
+            else "Этот документ уже принят (${d2.by}) ${fmtTime(d2.receipt.receivedAt)} — повторно не сохраняю."
         }
         val now = System.currentTimeMillis()
         val at = stampMillis(job.stamp.trim()) ?: now
@@ -576,7 +759,8 @@ suspend fun saveJob(
                 invoices = listOfNotNull(inv),
                 updatedAt = now,
                 fileName = f.name,
-                stamp = stamp
+                stamp = stamp,
+                docHash = hash
             )
             Cloud.saveReceipt(db, r)
             Media.uploadPending(ctx, db)
@@ -587,6 +771,49 @@ suspend fun saveJob(
     } finally {
         job.saving = false
     }
+}
+
+/**
+ * Мини-окно: такой товар (то же название и количество) за этот день уже принимался.
+ * По каждому товару нужно выбрать «Принять» или «Отказать»; отказанный в приём не попадает.
+ */
+@Composable
+fun SameDayDialog(list: List<SameDay>, onConfirm: (Map<String, Boolean>) -> Unit, onDismiss: () -> Unit) {
+    val choice = remember { mutableStateMapOf<String, Boolean>() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Такой товар уже принят сегодня") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                list.forEach { d ->
+                    val k = InvoiceCheck.norm(d.name)
+                    Column {
+                        Text(d.name, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                        val where = listOf(d.receipt.sender, d.receipt.orderNo, fmtTime(d.receipt.receivedAt))
+                            .filter { it.isNotBlank() }.joinToString(" · ")
+                        Text("Количество ${d.qty} · уже принято: $where", style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (choice[k] == true) Button(onClick = { choice[k] = true }) { Text("Принять") }
+                            else OutlinedButton(onClick = { choice[k] = true }) { Text("Принять") }
+                            if (choice[k] == false) Button(onClick = { choice[k] = false }) { Text("Отказать") }
+                            else OutlinedButton(onClick = { choice[k] = false }) { Text("Отказать") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = list.all { choice[InvoiceCheck.norm(it.name)] != null },
+                onClick = { onConfirm(choice.toMap()) }
+            ) { Text("Продолжить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 @Composable
@@ -688,8 +915,8 @@ private fun ColumnScope.NameModeMain(
             modifier = Modifier.padding(top = 4.dp))
     }
     if (job.saved) {
-        Text("Приём сохранён", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 4.dp))
+        Text(job.attachedNote.ifBlank { "Приём сохранён" }, color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
     }
     Spacer(Modifier.height(8.dp))
     CountWheelList(
@@ -812,7 +1039,9 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     LaunchedEffect(f.path) {
         if (ready && !job.started) {
             val d = try {
-                Cloud.findDuplicate(db, "", f.name, job.stamp)
+                // сначала содержимое файла и имя (точные признаки), затем дата и время
+                val h = withContext(Dispatchers.IO) { job.docHash() }
+                Cloud.findDuplicate(db, "", f.name, job.stamp, h)
             } catch (e: Exception) {
                 null
             }
@@ -849,8 +1078,8 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         }
         val d = dup
         if (d != null && !forced) {
-            Text("Этот файл уже обработан", style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.error)
+            Text(if (d.hard) "Этот документ уже принят" else "Похожий документ уже принят",
+                style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
             Text("Совпало: ${d.by}. На распознавание не отправлен.")
             Spacer(Modifier.height(8.dp))
             Text("Приём: ${fmtTime(d.receipt.receivedAt)}")
@@ -858,11 +1087,23 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             if (d.receipt.orderNo.isNotBlank()) Text("Номер заказа: ${d.receipt.orderNo}")
             Text("Товаров: ${d.receipt.items.size}")
             Spacer(Modifier.height(16.dp))
-            Button(onClick = { forced = true; job.startOnce() }, modifier = Modifier.fillMaxWidth()) {
-                Text("Обработать всё равно")
+            if (!d.hard) {
+                // совпали только дата и время — это могут быть разные документы, даём выбрать
+                Button(onClick = { forced = true; job.startOnce() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Обработать всё равно")
+                }
+                Spacer(Modifier.height(8.dp))
             }
-            Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { AutoReceiveHolder.remove(job); onClose() }, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
+            return@Column
+        }
+
+        if (job.blocked.isNotBlank() && !job.running) {
+            Text("Накладная не принята", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.height(8.dp))
+            Text(job.blocked)
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = { AutoReceiveHolder.remove(job); onClose() }, modifier = Modifier.fillMaxWidth()) { Text("Закрыть") }
             return@Column
         }
 
@@ -919,7 +1160,8 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
         when {
             job.saved -> {
                 Text(
-                    "Приём сохранён автоматически: история, Firebase и локальная база. Накладная отправляется на Google Диск." +
+                    if (job.attachedNote.isNotBlank()) job.attachedNote
+                    else "Приём сохранён автоматически: история, Firebase и локальная база. Накладная отправляется на Google Диск." +
                         if (job.newProductCount > 0) " Новых товаров в каталоге: ${job.newProductCount}." else "",
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -961,6 +1203,18 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
 
     if (retryDlg) {
         RetryKeyDialog(onDismiss = { retryDlg = false }, onRetry = { retryDlg = false; job.start(true) })
+    }
+
+    if (!nameMode && job.autoState == "samedup") {
+        SameDayDialog(
+            list = job.sameDay,
+            onConfirm = { m ->
+                m.forEach { (k, v) -> job.dupDecision[k] = v }
+                job.autoState = ""
+                scope.launch { job.autoFinish() }
+            },
+            onDismiss = onClose
+        )
     }
 
     if (!nameMode && job.autoState == "unmarked") {

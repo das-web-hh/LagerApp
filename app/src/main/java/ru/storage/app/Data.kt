@@ -43,7 +43,9 @@ data class Receipt(
     val invoices: List<String>,
     val updatedAt: Long,
     val fileName: String = "",
-    val stamp: String = ""
+    val stamp: String = "",
+    /** SHA-256 содержимого файла накладной: один и тот же документ нельзя принять дважды, даже под другим именем. */
+    val docHash: String = ""
 ) {
     fun allMedia(): List<String> = photos + invoices
 }
@@ -98,7 +100,7 @@ fun jsonToItems(s: String?): List<ReceiptItem> {
 }
 
 class ProductDb private constructor(context: Context) :
-    SQLiteOpenHelper(context, "catalog.db", null, 3) {
+    SQLiteOpenHelper(context, "catalog.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -120,9 +122,14 @@ class ProductDb private constructor(context: Context) :
             }
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name_lc)")
             createExtra(db)
-        } else if (oldVersion == 2) {
-            db.execSQL("ALTER TABLE receipts ADD COLUMN file_name TEXT NOT NULL DEFAULT ''")
-            db.execSQL("ALTER TABLE receipts ADD COLUMN stamp TEXT NOT NULL DEFAULT ''")
+        } else {
+            if (oldVersion == 2) {
+                db.execSQL("ALTER TABLE receipts ADD COLUMN file_name TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE receipts ADD COLUMN stamp TEXT NOT NULL DEFAULT ''")
+            }
+            if (oldVersion < 4) {
+                db.execSQL("ALTER TABLE receipts ADD COLUMN doc_hash TEXT NOT NULL DEFAULT ''")
+            }
         }
     }
 
@@ -134,7 +141,8 @@ class ProductDb private constructor(context: Context) :
                 "id TEXT PRIMARY KEY, sender TEXT NOT NULL, order_no TEXT NOT NULL, " +
                 "received_at INTEGER NOT NULL, receiver TEXT NOT NULL, items TEXT NOT NULL, " +
                 "photos TEXT NOT NULL, invoices TEXT NOT NULL, updated_at INTEGER NOT NULL, " +
-                "file_name TEXT NOT NULL DEFAULT '', stamp TEXT NOT NULL DEFAULT '')"
+                "file_name TEXT NOT NULL DEFAULT '', stamp TEXT NOT NULL DEFAULT '', " +
+                "doc_hash TEXT NOT NULL DEFAULT '')"
         )
         db.execSQL("CREATE TABLE IF NOT EXISTS uploads (name TEXT PRIMARY KEY)")
     }
@@ -233,7 +241,7 @@ class ProductDb private constructor(context: Context) :
 
     // ---------- приёмки ----------
 
-    private val rcols = "id, sender, order_no, received_at, receiver, items, photos, invoices, updated_at, file_name, stamp"
+    private val rcols = "id, sender, order_no, received_at, receiver, items, photos, invoices, updated_at, file_name, stamp, doc_hash"
 
     private fun readReceipts(sql: String, args: Array<String>): List<Receipt> =
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -243,7 +251,7 @@ class ProductDb private constructor(context: Context) :
                     Receipt(
                         c.getString(0), c.getString(1), c.getString(2), c.getLong(3), c.getString(4),
                         jsonToItems(c.getString(5)), jsonToList(c.getString(6)),
-                        jsonToList(c.getString(7)), c.getLong(8), c.getString(9), c.getString(10)
+                        jsonToList(c.getString(7)), c.getLong(8), c.getString(9), c.getString(10), c.getString(11)
                     )
                 )
             }
@@ -277,6 +285,7 @@ class ProductDb private constructor(context: Context) :
                     put("updated_at", r.updatedAt)
                     put("file_name", r.fileName)
                     put("stamp", r.stamp)
+                    put("doc_hash", r.docHash)
                 }
                 db.insertWithOnConflict("receipts", null, v, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -293,7 +302,14 @@ class ProductDb private constructor(context: Context) :
     fun getReceipt(id: String): Receipt? =
         readReceipts("SELECT $rcols FROM receipts WHERE id = ?", arrayOf(id)).firstOrNull()
 
-    /** column: order_no, file_name или stamp — внутренние имена столбцов. */
+    /** Приёмки, принятые в промежутке [from, to) — для проверки накладных и повторов за один день. */
+    fun receiptsBetween(from: Long, to: Long): List<Receipt> =
+        readReceipts(
+            "SELECT $rcols FROM receipts WHERE received_at >= ? AND received_at < ? ORDER BY received_at DESC",
+            arrayOf(from.toString(), to.toString())
+        )
+
+    /** column: order_no, file_name, stamp или doc_hash — внутренние имена столбцов. */
     fun findReceiptBy(column: String, value: String): Receipt? =
         readReceipts("SELECT $rcols FROM receipts WHERE $column = ? ORDER BY received_at DESC LIMIT 1", arrayOf(value))
             .firstOrNull()

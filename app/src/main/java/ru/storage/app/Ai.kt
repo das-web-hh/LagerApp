@@ -158,6 +158,9 @@ data class AiItem(
 )
 data class PageResult(val sender: String, val order: String, val items: List<AiItem>)
 
+/** Лёгкий первый запрос: только отправитель и номер заказа (без товаров). */
+data class IdResult(val sender: String, val order: String)
+
 object Ai {
     private val ORDER = Regex("[ЕеEe][БбBb6]\\s*[-–]?\\s*(\\d{7})")
 
@@ -281,6 +284,15 @@ object Ai {
         If the page has no goods lines, use an empty items array.
     """.trimIndent() + (if (rules.isBlank()) "" else "\nNotes about the layout of THIS supplier's documents (checked by the warehouse manager; they are more important than the general rules above):\n" + rules.trim())
 
+    private fun idPrompt(page: Int, total: Int) = """
+        This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip / invoice). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
+        The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
+        Find ONLY two things on THIS page. Do not read the goods table. Answer with JSON only (no markdown, no comments):
+        {"sender": "...", "order_number": "..."}
+        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. If it is not on this page, use "none".
+        - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"). If it is not on this page, use "none".
+    """.trimIndent()
+
     /** Достаём JSON из ответа; если ответ оборвался на длинной таблице — закрываем скобки. */
     private fun parseJson(text: String): JSONObject {
         val s = text.indexOf('{')
@@ -294,6 +306,13 @@ object Ai {
             }
         }
         throw RuntimeException("ИИ вернул неполный JSON")
+    }
+
+    /** Быстрая проверка листа: только отправитель и номер заказа. Бросает исключение при ошибке/таймауте. */
+    fun identify(ctx: Context, png: ByteArray, page: Int, total: Int): IdResult {
+        val o = parseJson(call(ctx, idPrompt(page, total), png))
+        val sender = o.optString("sender", "none").trim().ifBlank { "none" }
+        return IdResult(sender, normalizeOrder(o.optString("order_number", "none")))
     }
 
     /** Распознать один лист. Бросает исключение при ошибке/таймауте — вызывающий повторит. */

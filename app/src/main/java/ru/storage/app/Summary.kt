@@ -179,6 +179,7 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
     BackHandler(onBack = onBack)
     var printOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var dupList by remember { mutableStateOf<List<SameDay>>(emptyList()) }
     val ls = lines(job)
     val withDiff = ls.count { statusOf(it).kind != 0 || it.defect > 0 }
     val jobName = "Приёмка_" + f.name.substringBeforeLast('.')
@@ -196,7 +197,12 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
                 enabled = !job.saving && !job.saved,
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    scope.launch { error = saveJob(ctx, db, job, f, receiver, true) ?: "" }
+                    scope.launch {
+                        // сначала — не принимался ли такой же товар с тем же количеством за этот день
+                        val pend = job.pendingSameDay()
+                        if (pend.isNotEmpty()) dupList = pend
+                        else error = saveJob(ctx, db, job, f, receiver, true) ?: ""
+                    }
                 }
             ) {
                 Text(if (job.saved) "Сохранено ✓" else if (job.saving) "Сохранение…" else "Сохранить")
@@ -209,7 +215,7 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
         if (job.saved) {
             Spacer(Modifier.height(8.dp))
             Text(
-                "Приём сохранён в историю. Исходный файл отправляется на Google Диск.",
+                job.attachedNote.ifBlank { "Приём сохранён в историю. Исходный файл отправляется на Google Диск." },
                 color = MaterialTheme.colorScheme.primary
             )
         }
@@ -248,6 +254,18 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
         OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
             Text(if (job.saved) "Закрыть" else "Свернуть (партия останется в работе)")
         }
+    }
+
+    if (dupList.isNotEmpty()) {
+        SameDayDialog(
+            list = dupList,
+            onConfirm = { m ->
+                m.forEach { (k, v) -> job.dupDecision[k] = v }
+                dupList = emptyList()
+                scope.launch { error = saveJob(ctx, db, job, f, receiver, true) ?: "" }
+            },
+            onDismiss = { dupList = emptyList() }
+        )
     }
 
     if (printOpen) {

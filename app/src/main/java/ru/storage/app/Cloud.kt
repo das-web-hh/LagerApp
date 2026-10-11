@@ -30,7 +30,14 @@ class SyncState {
 }
 
 /** Найденная ранее приёмка: by — по какому признаку совпало. */
-class Dup(val by: String, val receipt: Receipt)
+class Dup(
+    val by: String,
+    val receipt: Receipt,
+    /** true — признак точный (заказ, содержимое или имя файла): повторно не принимаем. false — только дата и время, можно подтвердить. */
+    val hard: Boolean = false,
+    /** "order", "hash", "file" или "stamp" */
+    val kind: String = ""
+)
 
 /*
  * Firestore:
@@ -100,6 +107,7 @@ object Cloud {
         "invoices" to r.invoices,
         "fileName" to r.fileName,
         "stamp" to r.stamp,
+        "docHash" to r.docHash,
         "updatedAt" to r.updatedAt,
         "deleted" to false
     )
@@ -163,7 +171,8 @@ object Cloud {
             invoices = strList(get("invoices")),
             updatedAt = getLong("updatedAt") ?: 0L,
             fileName = get("fileName")?.toString() ?: "",
-            stamp = get("stamp")?.toString() ?: ""
+            stamp = get("stamp")?.toString() ?: "",
+            docHash = get("docHash")?.toString() ?: ""
         )
     }
 
@@ -273,28 +282,26 @@ object Cloud {
     }
 
     /**
-     * Проверка на повторную обработку. Приоритет признаков: 1) номер заказа, 2) имя файла, 3) дата и время.
+     * Проверка на повторную обработку. Приоритет признаков: 1) номер заказа, 2) содержимое файла (хэш),
+     * 3) имя файла, 4) дата и время. Первые три — точные (повторно не принимаем), дата и время — только предупреждение.
      * Пустые значения пропускаются. Сначала локальная история, потом Firebase (1 чтение на признак).
      */
-    suspend fun findDuplicate(db: ProductDb, order: String, fileName: String, stamp: String): Dup? {
-        val checks = ArrayList<Triple<String, String, String>>() // подпись, поле Firestore, значение
-        if (order.isNotBlank() && order != "none") checks.add(Triple("номер заказа", "orderNo", order))
-        if (fileName.isNotBlank()) checks.add(Triple("имя файла", "fileName", fileName))
-        if (stamp.length == 16) checks.add(Triple("дата и время", "stamp", stamp))
-        for ((label, field, value) in checks) {
-            val column = when (field) {
-                "orderNo" -> "order_no"
-                "fileName" -> "file_name"
-                else -> "stamp"
-            }
-            val local = withContext(Dispatchers.IO) { db.findReceiptBy(column, value) }
-            if (local != null) return Dup(label, local)
+    suspend fun findDuplicate(db: ProductDb, order: String, fileName: String, stamp: String, docHash: String = ""): Dup? {
+        class Check(val label: String, val field: String, val column: String, val value: String, val kind: String, val hard: Boolean)
+        val checks = ArrayList<Check>()
+        if (order.isNotBlank() && order != "none") checks.add(Check("номер заказа", "orderNo", "order_no", order, "order", true))
+        if (docHash.isNotBlank()) checks.add(Check("тот же файл (содержимое)", "docHash", "doc_hash", docHash, "hash", true))
+        if (fileName.isNotBlank()) checks.add(Check("имя файла", "fileName", "file_name", fileName, "file", true))
+        if (stamp.length == 16) checks.add(Check("дата и время", "stamp", "stamp", stamp, "stamp", false))
+        for (c in checks) {
+            val local = withContext(Dispatchers.IO) { db.findReceiptBy(c.column, c.value) }
+            if (local != null) return Dup(c.label, local, c.hard, c.kind)
             try {
-                val docs = fs.collection("receipts").whereEqualTo(field, value).limit(5).get().awaitIt().documents
+                val docs = fs.collection("receipts").whereEqualTo(c.field, c.value).limit(5).get().awaitIt().documents
                 val r = docs.firstOrNull { it.getBoolean("deleted") != true }?.toReceipt()
                 if (r != null) {
                     withContext(Dispatchers.IO) { db.upsertReceipts(listOf(r)) }
-                    return Dup(label, r)
+                    return Dup(c.label, r, c.hard, c.kind)
                 }
             } catch (e: Exception) {
                 // нет связи — остаёмся с проверкой по локальной истории
