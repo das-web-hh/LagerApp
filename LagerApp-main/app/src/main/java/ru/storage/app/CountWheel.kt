@@ -1,0 +1,737 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
+package ru.storage.app
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+/*
+ * Пересчёт товаров «колесом» (барабаном):
+ *  - список бесконечный: после последней строки — одна пустая, затем снова первая;
+ *  - середина крупная (x1), верх и низ в два раза меньше (x0.5) и наклонены, как у вращающегося колеса;
+ *  - поиск сверху ищет по этому списку с первого символа и показывает подсказки под полем;
+ *    тап по подсказке прокручивает колесо так, что товар оказывается посередине; «+» в поле — добавить товар;
+ *  - тап по строке = +1 к факту; тап по числу справа — барабан цифр 0…9999 (как в будильнике),
+ *    (одно колесо 0…9999) через 3 секунды после остановки значение применяется само;
+ *  - после тапа и после выбора барабаном крупная цифра плавно появляется/гаснет, затем голос называет число (Настройки → Голос и подсчёт);
+ *  - свайп справа налево открывает две кнопки: «Брак» (барабан цифр) и «Удалить»; свайп вправо закрывает;
+ *  - долгое нажатие на строку — правка названия и плана.
+ */
+
+private val ROW_H = 76.dp
+private val DIGIT_H = 46.dp
+private const val CYCLE_BASE = 1_000_000
+
+/** Наклон строк у краёв «колеса», градусы. Если наклон выглядит «наоборот» — поменять знак. */
+private const val WHEEL_TILT = 38f
+
+private fun parseQ(s: String): Double = normalizeQty(s).toDoubleOrNull() ?: 0.0
+
+private fun fmtQ(d: Double): String =
+    if (d == Math.floor(d) && d < 1e9) d.toLong().toString() else d.toString()
+
+/** Строки, подходящие под запрос (все слова запроса есть в названии); сначала те, что начинаются с запроса. */
+private fun findRows(rows: List<ItemRow>, q: String): List<ItemRow> {
+    val words = q.trim().lowercase().split(' ').filter { it.isNotEmpty() }
+    if (words.isEmpty()) return emptyList()
+    val w0 = words[0]
+    return rows
+        .filter { r ->
+            val n = r.name.lowercase()
+            words.all { n.contains(it) }
+        }
+        .sortedBy { r ->
+            val n = r.name.lowercase()
+            when {
+                n.startsWith(w0) -> 0
+                n.split(' ', ',', '-', '/', '(', ')').any { it.startsWith(w0) } -> 1
+                else -> 2
+            }
+        }
+}
+
+/** Строка, которая сейчас ближе всего к середине колеса (пустая строка цикла — null). */
+private fun centerRow(state: LazyListState, rows: List<ItemRow>, cycle: Int): ItemRow? {
+    val li = state.layoutInfo
+    if (li.viewportSize.height == 0) return null
+    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+    val best = li.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - c) } ?: return null
+    return rows.getOrNull(best.index % cycle)
+}
+
+/** Прокрутить колесо так, чтобы строка k оказалась посередине (по кратчайшему пути по циклу). */
+private suspend fun scrollToRow(state: LazyListState, k: Int, cycle: Int, rowPx: Int, animate: Boolean) {
+    var tries = 0
+    while (state.layoutInfo.viewportSize.height == 0 && tries < 20) {
+        withFrameNanos { }
+        tries++
+    }
+    val li = state.layoutInfo
+    val h = li.viewportSize.height
+    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+    val cur = li.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - c) }?.index
+        ?: state.firstVisibleItemIndex
+    val base = cur - Math.floorMod(cur - k, cycle)
+    val t = if (cur - base <= base + cycle - cur) base else base + cycle
+    val off = -(h - rowPx) / 2
+    if (animate) state.animateScrollToItem(t, off) else state.scrollToItem(t, off)
+}
+
+/** Эффект колеса: чем дальше строка от середины, тем она меньше, бледнее и сильнее наклонена. */
+private fun GraphicsLayerScope.applyWheel(
+    state: LazyListState,
+    index: Int,
+    minScale: Float,
+    minAlpha: Float,
+    tilt: Float,
+    pull: Float
+) {
+    val li = state.layoutInfo
+    val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val half = (li.viewportEndOffset - li.viewportStartOffset) / 2f
+    if (half <= 0f) return
+    val center = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+    val d = ((info.offset + info.size / 2f - center) / half).coerceIn(-1f, 1f)
+    val a = abs(d)
+    val s = 1f - (1f - minScale) * a
+    scaleX = s
+    scaleY = s
+    alpha = 1f - (1f - minAlpha) * a
+    rotationX = -d * tilt
+    translationY = -d * info.size * pull
+    cameraDistance = 14f * density
+}
+
+/**
+ * Колесо списка товаров: средняя строка в полном размере, остальные — вдвое меньше (середина в 2 раза крупнее и выше),
+ * дальше от середины — бледнее и сильнее наклонены.
+ */
+private fun GraphicsLayerScope.applyBigCenter(state: LazyListState, index: Int, tilt: Float) {
+    val li = state.layoutInfo
+    val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val half = (li.viewportEndOffset - li.viewportStartOffset) / 2f
+    if (half <= 0f) return
+    val center = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+    val dPx = info.offset + info.size / 2f - center
+    val k = dPx / info.size            // расстояние до середины в «строках», со знаком
+    val ak = abs(k)
+    val near = ak.coerceAtMost(1f)
+    val s = 1f - 0.5f * near           // середина 1.0, соседи и дальше 0.5
+    scaleX = s
+    scaleY = s
+    alpha = if (ak <= 1f) 1f - 0.3f * ak else (0.7f - 0.2f * (ak - 1f)).coerceAtLeast(0.3f)
+    // уменьшенные строки подтягиваем к середине, чтобы между ними не было больших дыр
+    val ideal = if (ak <= 1f) 0.25f * ak else 0.5f * ak - 0.25f
+    translationY = -Math.signum(k) * ideal * info.size * 0.7f
+    rotationX = -(dPx / half).coerceIn(-1f, 1f) * tilt
+    cameraDistance = 14f * density
+}
+
+/** 1 — строка ровно посередине, 0 — на расстоянии строки и дальше. */
+private fun centerness(state: LazyListState, index: Int): Float {
+    val li = state.layoutInfo
+    val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return 0f
+    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+    val k = abs(info.offset + info.size / 2f - c) / info.size
+    return (1f - k).coerceIn(0f, 1f)
+}
+
+@Composable
+private fun ListSearchField(
+    query: String,
+    onChange: (String) -> Unit,
+    onAdd: (() -> Unit)?,
+    onSubmit: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(start = 14.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            if (query.isEmpty()) {
+                Text(
+                    "Поиск по списку",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (query.isNotEmpty()) {
+            TextButton(onClick = { onChange("") }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
+        }
+        if (onAdd != null) {
+            IconButton(onClick = onAdd) {
+                Icon(Icons.Default.Add, contentDescription = "Добавить товар", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+/** Мини-окно с подходящими товарами под полем поиска. */
+@Composable
+private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier) {
+    Card(modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+        if (hits.isEmpty()) {
+            Text("Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+        } else {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                hits.forEachIndexed { i, r ->
+                    Column(
+                        Modifier.fillMaxWidth().clickable { onPick(r) }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val info = buildList {
+                            if (r.extra) add("нет в плане") else add("план ${fmtQ(parseQ(r.qty))}")
+                            if (r.fact.isNotBlank()) add("факт ${fmtQ(parseQ(r.fact))}")
+                        }.joinToString(" · ")
+                        Text(info, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (i < hits.lastIndex) HorizontalDivider()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Список-колесо для приёма по имени. rows — строки приёма (ItemRow): qty = план, fact = пересчитано, defect = брак.
+ * Колесо всегда показывает весь список; поле поиска даёт подсказки, тап по подсказке ставит товар на середину.
+ * addTick — при росте значения колесо прокручивается к последней (только что добавленной) строке.
+ * onAdd — «+» в поле поиска.
+ */
+@Composable
+fun CountWheelList(
+    rows: SnapshotStateList<ItemRow>,
+    editable: Boolean,
+    modifier: Modifier = Modifier,
+    addTick: Int = 0,
+    onAdd: (() -> Unit)? = null,
+    emptyText: String = "Список пуст",
+    /** false — своего поля поиска нет (его рисует экран, например «Приём B-Ware») */
+    showSearch: Boolean = true,
+    /** true — режим B-Ware: кнопки свайпа «Срок» и «Удалить», под названием — срок годности */
+    bware: Boolean = false,
+    /** при addTick колесо встаёт на эту строку; null — на последнюю добавленную */
+    focusTarget: ItemRow? = null,
+    /** не null — у строки третья кнопка свайпа «Причины» (инвентарь B-Ware); вызывается с этой строкой */
+    onDetails: ((ItemRow) -> Unit)? = null
+) {
+    var query by remember { mutableStateOf("") }
+    var picking by remember { mutableStateOf<Pair<ItemRow, Boolean>?>(null) } // true — факт, false — брак
+    var editing by remember { mutableStateOf<ItemRow?>(null) }
+    var expiryRow by remember { mutableStateOf<ItemRow?>(null) }
+    var focusRow by remember { mutableStateOf<ItemRow?>(null) }
+    var blinkRow by remember { mutableStateOf<ItemRow?>(null) }
+    var blinkTick by remember { mutableIntStateOf(0) }
+    val memo = remember { arrayOfNulls<ItemRow>(1) } // строка, стоявшая посередине (чтобы не терять место)
+    val focusManager = LocalFocusManager.current
+    val appCtx = LocalContext.current
+    val density = LocalDensity.current
+    val rowPx = with(density) { ROW_H.roundToPx() }
+
+    LaunchedEffect(addTick) {
+        if (addTick > 0) {
+            query = ""
+            focusRow = focusTarget ?: rows.lastOrNull()
+        }
+    }
+
+    val n = rows.size
+    val cycle = n + 1
+    val hits = if (query.isBlank()) emptyList() else findRows(rows, query)
+
+    fun pick(row: ItemRow) {
+        focusRow = row
+        query = ""
+        focusManager.clearFocus()
+    }
+
+    Column(modifier) {
+        if (showSearch) {
+            ListSearchField(query, { query = it }, onAdd) { hits.firstOrNull()?.let { pick(it) } }
+            Spacer(Modifier.height(8.dp))
+        }
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            if (n == 0) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(emptyText, style = MaterialTheme.typography.bodyMedium)
+                }
+            } else {
+                key(n) {
+                    // старт: первая строка близко к середине, выше неё — пустая и последняя
+                    val listState = rememberLazyListState(
+                        initialFirstVisibleItemIndex = (CYCLE_BASE / cycle) * cycle - 3
+                    )
+                    val restored = remember { booleanArrayOf(false) }
+                    LaunchedEffect(focusRow) {
+                        if (!restored[0]) {
+                            restored[0] = true
+                            val k = memo[0]?.let { rows.indexOf(it) } ?: -1
+                            if (k >= 0) scrollToRow(listState, k, cycle, rowPx, false)
+                        }
+                        val fr = focusRow
+                        if (fr != null) {
+                            val k = rows.indexOf(fr)
+                            if (k >= 0) {
+                                scrollToRow(listState, k, cycle, rowPx, true)
+                                // строка встала на середину — мигнуть два раза
+                                blinkRow = fr
+                                blinkTick++
+                            }
+                            focusRow = null
+                        }
+                    }
+                    LaunchedEffect(Unit) {
+                        snapshotFlow { centerRow(listState, rows, cycle) }.collect {
+                            if (it != null) {
+                                // импульс, когда на середину пришла другая строка (первое значение — просто запоминаем)
+                                if (memo[0] != null && memo[0] !== it) Haptics.pulse(appCtx, Haptics.LIST)
+                                memo[0] = it
+                            }
+                        }
+                    }
+                    LazyColumn(
+                        state = listState,
+                        flingBehavior = rememberSnapFlingBehavior(listState),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(count = Int.MAX_VALUE) { index ->
+                            val row = rows.getOrNull(index % cycle)
+                            if (row == null) {
+                                Spacer(Modifier.fillMaxWidth().height(ROW_H))
+                            } else {
+                                WheelRow(
+                                    row = row,
+                                    blinkKey = if (row === blinkRow) blinkTick else 0,
+                                    index = index,
+                                    listState = listState,
+                                    editable = editable,
+                                    bware = bware,
+                                    onPickExpiry = { expiryRow = row },
+                                    onDetails = onDetails?.let { cb -> { cb(row) } },
+                                    onPickFact = { picking = row to true },
+                                    onPickDefect = { picking = row to false },
+                                    onEdit = { editing = row },
+                                    onDelete = { rows.remove(row) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (query.isNotBlank()) {
+                SuggestionsCard(hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter))
+            }
+            CountOverlay()
+        }
+    }
+
+    picking?.let { (row, isFact) ->
+        CountPickerDialog(
+            title = (if (isFact) (if (bware) "Количество: " else "Факт: ") else "Брак: ") + row.name,
+            initial = parseQ(if (isFact) row.fact else row.defect).roundToInt().coerceIn(0, 9999),
+            onApply = { v ->
+                if (isFact) row.fact = v.toString() else row.defect = v.toString()
+                picking = null
+                if (isFact) CountAnnouncer.picked(appCtx, v.toString(), v.toString())
+                else CountAnnouncer.picked(appCtx, "Брак $v", "брак $v")
+            },
+            onDismiss = { picking = null }
+        )
+    }
+    editing?.let { row -> RowEditDialog(row) { editing = null } }
+    expiryRow?.let { row ->
+        ExpiryPickerDialog(
+            initial = row.expiry,
+            onPick = { row.expiry = it; expiryRow = null },
+            onDismiss = { expiryRow = null }
+        )
+    }
+}
+
+@Composable
+private fun WheelRow(
+    row: ItemRow,
+    blinkKey: Int,
+    index: Int,
+    listState: LazyListState,
+    editable: Boolean,
+    bware: Boolean,
+    onPickExpiry: () -> Unit,
+    onDetails: (() -> Unit)?,
+    onPickFact: () -> Unit,
+    onPickDefect: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val ctx = LocalContext.current
+    val density = LocalDensity.current
+    val btnW = 76.dp
+    val btnCount = if (bware && onDetails != null) 3 else 2
+    val maxPx = with(density) { (btnW * btnCount).toPx() }
+    val anim = remember(row) { Animatable(0f) }
+    val blink = remember(row) { Animatable(0f) }
+    LaunchedEffect(blinkKey) {
+        if (blinkKey > 0) {
+            repeat(2) {
+                blink.animateTo(1f, tween(170))
+                blink.animateTo(0f, tween(170))
+            }
+        }
+    }
+    val scope = rememberCoroutineScope()
+    val scheme = MaterialTheme.colorScheme
+    val factD = parseQ(row.fact)
+    val planD = if (row.extra) 0.0 else parseQ(row.qty)
+    val defD = parseQ(row.defect)
+
+    Box(
+        Modifier.fillMaxWidth()
+            .height(ROW_H)
+            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .graphicsLayer { applyBigCenter(listState, index, WHEEL_TILT) }
+    ) {
+        // кнопки справа (открываются свайпом справа налево)
+        Row(
+            Modifier.align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(btnW * btnCount)
+                .clip(RoundedCornerShape(14.dp))
+        ) {
+            Box(
+                Modifier.weight(1f).fillMaxHeight()
+                    .background(scheme.tertiaryContainer)
+                    .clickable(enabled = editable) {
+                        scope.launch { anim.animateTo(0f) }
+                        if (bware) onPickExpiry() else onPickDefect()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (bware) (if (row.expiry.isBlank()) "Срок\nгодности" else "Срок\n${row.expiry.take(5)}")
+                    else if (defD > 0) "Брак\n${fmtQ(defD)}" else "Брак",
+                    textAlign = TextAlign.Center,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = scheme.onTertiaryContainer
+                )
+            }
+            if (bware && onDetails != null) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight()
+                        .background(scheme.secondaryContainer)
+                        .clickable(enabled = editable) {
+                            scope.launch { anim.animateTo(0f) }
+                            onDetails()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Причины\nи вид",
+                        textAlign = TextAlign.Center,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onSecondaryContainer
+                    )
+                }
+            }
+            Box(
+                Modifier.weight(1f).fillMaxHeight()
+                    .background(scheme.errorContainer)
+                    .clickable(enabled = editable) { onDelete() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Удалить",
+                    textAlign = TextAlign.Center,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = scheme.onErrorContainer
+                )
+            }
+        }
+
+        // сама строка: свайп влево/вправо, тап = +1, долгое нажатие = правка
+        Row(
+            Modifier.offset { IntOffset(anim.value.roundToInt(), 0) }
+                .fillMaxSize()
+                .clip(RoundedCornerShape(14.dp))
+                .background(scheme.surfaceVariant)
+                // средняя строка другого цвета: плавно «заливается» по мере подхода к середине колеса
+                .drawBehind {
+                    val t = centerness(listState, index)
+                    if (t > 0f) drawRect(scheme.primaryContainer.copy(alpha = t))
+                }
+                .background(scheme.primary.copy(alpha = 0.55f * blink.value))
+                .draggable(
+                    orientation = Orientation.Horizontal,
+                    enabled = editable,
+                    state = rememberDraggableState { delta ->
+                        scope.launch { anim.snapTo((anim.value + delta).coerceIn(-maxPx, 0f)) }
+                    },
+                    onDragStopped = { velocity ->
+                        scope.launch {
+                            anim.animateTo(if (anim.value < -maxPx / 2f || velocity < -1200f) -maxPx else 0f)
+                        }
+                    }
+                )
+                .combinedClickable(
+                    enabled = editable,
+                    onClick = {
+                        if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
+                        else {
+                            row.fact = fmtQ(parseQ(row.fact) + 1)
+                            Haptics.pulse(ctx, Haptics.TAP)
+                            CountAnnouncer.tap(ctx, row)
+                        }
+                    },
+                    onLongClick = onEdit
+                )
+                .padding(start = 12.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    row.name.ifBlank { "—" },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 15.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                if (bware) {
+                    // срок годности: тап по строке под названием тоже открывает календарь
+                    val tail = if (onDetails == null) "" else {
+                        val r = row.reasons.size
+                        val d = row.damage.size
+                        if (r + d == 0) " · причины не выбраны" else " · причин $r · вид $d"
+                    }
+                    Text(
+                        (if (row.expiry.isBlank()) "срок: не указан" else "срок: ${row.expiry}") + tail,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        color = if (row.expiry.isBlank()) scheme.error else scheme.onSurfaceVariant,
+                        modifier = Modifier.clickable(enabled = editable) { onPickExpiry() }
+                    )
+                } else {
+                    val sub = buildList {
+                        if (row.extra) add("нет в плане") else add("план ${fmtQ(planD)}")
+                        if (defD > 0) add("брак ${fmtQ(defD)}")
+                    }.joinToString(" · ")
+                    Text(sub, fontSize = 12.sp, maxLines = 1, color = scheme.onSurfaceVariant)
+                }
+            }
+            // количество — справа; тап по числу открывает барабан цифр
+            Box(
+                Modifier.defaultMinSize(minWidth = 56.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(scheme.surface)
+                    .clickable(enabled = editable) { onPickFact() }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    fmtQ(factD),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        row.fact.isBlank() -> scheme.onSurfaceVariant
+                        !row.extra && factD == planD -> scheme.primary
+                        !row.extra && factD > planD -> scheme.error
+                        else -> scheme.onSurface
+                    }
+                )
+            }
+        }
+    }
+}
+
+private const val MAX_COUNT = 9999
+private const val PAD_ITEMS = 2 // пустые строки сверху и снизу, чтобы 0 и 9999 тоже вставали в середину
+
+/** Число в середине колеса (индекс списка минус пустые строки сверху). */
+private fun selectedCount(state: LazyListState, fallback: Int): Int {
+    val li = state.layoutInfo
+    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+    val best = li.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - c) } ?: return fallback
+    return (best.index - PAD_ITEMS).coerceIn(0, MAX_COUNT)
+}
+
+/** Одно колесо: все числа 0…9999 подряд, начинается с 0. */
+@Composable
+private fun CountWheel(state: LazyListState) {
+    Box(Modifier.width(180.dp).height(DIGIT_H * 5)) {
+        Box(
+            Modifier.align(Alignment.Center)
+                .fillMaxWidth()
+                .height(DIGIT_H)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer)
+        )
+        LazyColumn(
+            state = state,
+            flingBehavior = rememberSnapFlingBehavior(state),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(count = MAX_COUNT + 1 + PAD_ITEMS * 2) { i ->
+                val v = i - PAD_ITEMS
+                Box(
+                    Modifier.fillMaxWidth()
+                        .height(DIGIT_H)
+                        .graphicsLayer { applyWheel(state, i, 0.55f, 0.25f, 30f, 0.12f) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (v in 0..MAX_COUNT) Text(v.toString(), fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Барабан количества как в будильнике, но одно колесо 0…9999. Значение применяется само через 3 секунды
+ * после остановки колеса; кнопка «Готово» — сразу.
+ */
+@Composable
+fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit, onDismiss: () -> Unit) {
+    val start = initial.coerceIn(0, MAX_COUNT)
+    // первый видимый индекс = число; число стоит третьим сверху, то есть посередине
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = start)
+    val value by remember { derivedStateOf { selectedCount(state, start) } }
+    val scrolling = state.isScrollInProgress
+    var touched by remember { mutableStateOf(false) }
+    LaunchedEffect(scrolling) { if (scrolling) touched = true }
+    val vibCtx = LocalContext.current
+    LaunchedEffect(Unit) {
+        // импульс на каждое новое число в середине (первое значение пропускаем)
+        var first = true
+        snapshotFlow { value }.collect {
+            if (first) first = false else Haptics.pulse(vibCtx, Haptics.PICKER)
+        }
+    }
+    LaunchedEffect(value, scrolling, touched) {
+        if (touched && !scrolling) {
+            delay(3000)
+            onApply(value)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(24.dp), tonalElevation = 6.dp) {
+            Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(12.dp))
+                CountWheel(state)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Выбрано: $value · применится само через 3 секунды",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onDismiss) { Text("Отмена") }
+                    Button(onClick = { onApply(value) }) { Text("Готово") }
+                }
+            }
+        }
+    }
+}
+
+/** Правка названия и плана (долгое нажатие на строку): ошибки распознавания можно исправить. */
+@Composable
+private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(row.name) }
+    var plan by remember { mutableStateOf(row.qty) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Правка строки") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+                if (!row.extra) {
+                    OutlinedTextField(
+                        plan, { plan = it }, label = { Text("План (по документу)") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = name.isNotBlank(),
+                onClick = {
+                    row.name = name.trim()
+                    if (!row.extra) row.qty = plan
+                    onDismiss()
+                }
+            ) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
+}
