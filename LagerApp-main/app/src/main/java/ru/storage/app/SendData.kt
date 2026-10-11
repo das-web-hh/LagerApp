@@ -40,7 +40,13 @@ data class Paket(
     val rawText: String = "",
     val status: String = "new",
     val author: String = "",
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    /** Номер расчёта (Abrechnungsnr / Billing No). */
+    val billing: String = "",
+    /** Референс отправителя (Referenznr / Sendungsreferenz / Warenkorb-ID). */
+    val reference: String = "",
+    /** Отметки и услуги с этикетки: Nachnahme, Schweres Paket, Filial-Routing, GoGreen… */
+    val services: String = ""
 ) {
     fun title(): String = when {
         tracking.isNotBlank() -> tracking
@@ -61,7 +67,7 @@ data class WagenOp(
     val updatedAt: Long = 0L
 )
 
-class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "send.db", null, 1) {
+class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "send.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -69,7 +75,8 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
                 "product TEXT NOT NULL, recipient TEXT NOT NULL, street TEXT NOT NULL, zip TEXT NOT NULL, " +
                 "city TEXT NOT NULL, country TEXT NOT NULL, sender TEXT NOT NULL, weight TEXT NOT NULL, " +
                 "routing TEXT NOT NULL, note TEXT NOT NULL, photos TEXT NOT NULL, raw_text TEXT NOT NULL, " +
-                "status TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+                "status TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL, " +
+                "billing TEXT NOT NULL DEFAULT '', reference TEXT NOT NULL DEFAULT '', services TEXT NOT NULL DEFAULT '')"
         )
         db.execSQL("CREATE INDEX idx_pakets_created ON pakets(created_at)")
         db.execSQL(
@@ -79,10 +86,16 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
         db.execSQL("CREATE INDEX idx_wagen_created ON wagen(created_at)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE pakets ADD COLUMN billing TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE pakets ADD COLUMN reference TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE pakets ADD COLUMN services TEXT NOT NULL DEFAULT ''")
+        }
+    }
 
     private val pcols = "id, created_at, tracking, product, recipient, street, zip, city, country, sender, " +
-        "weight, routing, note, photos, raw_text, status, author, updated_at"
+        "weight, routing, note, photos, raw_text, status, author, updated_at, billing, reference, services"
 
     private fun readPakets(sql: String, args: Array<String>): List<Paket> =
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -95,7 +108,8 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
                         zip = c.getString(6), city = c.getString(7), country = c.getString(8),
                         sender = c.getString(9), weight = c.getString(10), routing = c.getString(11),
                         note = c.getString(12), photos = jsonToList(c.getString(13)), rawText = c.getString(14),
-                        status = c.getString(15), author = c.getString(16), updatedAt = c.getLong(17)
+                        status = c.getString(15), author = c.getString(16), updatedAt = c.getLong(17),
+                        billing = c.getString(18), reference = c.getString(19), services = c.getString(20)
                     )
                 )
             }
@@ -122,6 +136,9 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
             put("status", p.status)
             put("author", p.author)
             put("updated_at", p.updatedAt)
+            put("billing", p.billing)
+            put("reference", p.reference)
+            put("services", p.services)
         }
         writableDatabase.insertWithOnConflict("pakets", null, v, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -208,7 +225,7 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
 /*
  * Firestore:
  *  shipments/{id}: createdAt, tracking, product, recipient, street, zip, city, country, sender, weight,
- *                  routing, note, photos[], rawText, status, author, updatedAt, deleted
+ *                  routing, note, photos[], rawText, status, author, updatedAt, billing, reference, services, deleted
  *  wagen_ops/{id}: createdAt, sent, received, note, author, updatedAt, deleted
  * Снимки этикеток: Google Диск (имена DH-…), связь — список photos.
  */
@@ -234,6 +251,9 @@ object SendCloud {
         "status" to p.status,
         "author" to p.author,
         "updatedAt" to p.updatedAt,
+        "billing" to p.billing,
+        "reference" to p.reference,
+        "services" to p.services,
         "deleted" to false
     )
 
@@ -322,7 +342,10 @@ object SendCloud {
                         rawText = d.getString("rawText") ?: "",
                         status = d.getString("status") ?: "done",
                         author = d.getString("author") ?: "",
-                        updatedAt = d.getLong("updatedAt") ?: 0L
+                        updatedAt = d.getLong("updatedAt") ?: 0L,
+                        billing = d.getString("billing") ?: "",
+                        reference = d.getString("reference") ?: "",
+                        services = d.getString("services") ?: ""
                     )
                 )
             }

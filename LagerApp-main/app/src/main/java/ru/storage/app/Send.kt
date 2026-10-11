@@ -1,7 +1,10 @@
 package ru.storage.app
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.net.Uri
@@ -90,13 +93,18 @@ fun SendHubScreen(onBack: () -> Unit) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
                 Text("Отправка", style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(16.dp))
-                TileGrid(
-                    listOf(
-                        TileSpec("Post paket", Icons.Default.Email) { section = "Post paket" },
-                        TileSpec("DHL Postwagen", Icons.Default.ShoppingCart) { section = "DHL Postwagen" },
-                        TileSpec("Spedition", Icons.Default.LocationOn) { section = "Spedition" }
-                    )
-                )
+                Card(
+                    Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+                ) {
+                    MoreRow(Icons.Default.Email, "Post paket", "Этикетки посылок DHL, сканер, список") { section = "Post paket" }
+                    HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                    MoreRow(Icons.Default.ShoppingCart, "DHL Postwagen", "Отправлено и получено, история") { section = "DHL Postwagen" }
+                    HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                    MoreRow(Icons.Default.LocationOn, "Spedition", "Отправка грузов экспедицией") { section = "Spedition" }
+                }
             }
         }
     }
@@ -270,6 +278,12 @@ private fun PaketRow(p: Paket, notUploaded: Boolean, onClick: () -> Unit) {
                     fmtTime(p.createdAt) + (if (p.product.isNotBlank()) " · " + p.product else ""),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (p.services.isNotBlank()) {
+                    Text(
+                        p.services, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
                 val st = statusText(p.status)
                 if (st.isNotEmpty()) {
                     Text(
@@ -331,23 +345,24 @@ private fun BoxScope.ScanFab(onClick: () -> Unit) {
     }
 }
 
-/** Иконка сканера документа: четыре уголка рамки и линия луча. */
+/** Иконка «Сканер» как в списке операций: два ряда чёрных квадратиков и оранжевая линия луча между ними. */
 @Composable
 private fun ScannerGlyph() {
-    Canvas(Modifier.size(30.dp)) {
+    Canvas(Modifier.size(32.dp)) {
+        val sq = 8.dp.toPx()
+        val gap = 4.dp.toPx()
+        val x0 = (size.width - (2 * sq + gap)) / 2f
+        val topY = 3.dp.toPx()
+        val botY = size.height - 3.dp.toPx() - sq
+        val dark = Color(0xFF212121)
+        fun box(x: Float, y: Float) = drawRect(dark, topLeft = Offset(x, y), size = androidx.compose.ui.geometry.Size(sq, sq))
+        box(x0, topY); box(x0 + sq + gap, topY)
+        box(x0, botY); box(x0 + sq + gap, botY)
         val sw = 3.dp.toPx()
-        val i = sw / 2f
-        val w = size.width - i
-        val h = size.height - i
-        val c = 9.dp.toPx()
-        val col = Color(0xFF3E2723)
-        fun ln(x1: Float, y1: Float, x2: Float, y2: Float) =
-            drawLine(col, Offset(x1, y1), Offset(x2, y2), strokeWidth = sw, cap = StrokeCap.Round)
-        ln(i, i, i + c, i); ln(i, i, i, i + c)
-        ln(w, i, w - c, i); ln(w, i, w, i + c)
-        ln(i, h, i + c, h); ln(i, h, i, h - c)
-        ln(w, h, w - c, h); ln(w, h, w, h - c)
-        ln(i + 5.dp.toPx(), size.height / 2f, w - 5.dp.toPx(), size.height / 2f)
+        drawLine(
+            Color(0xFFE65100), Offset(1.dp.toPx(), size.height / 2f), Offset(size.width - 1.dp.toPx(), size.height / 2f),
+            strokeWidth = sw, cap = StrokeCap.Round
+        )
     }
 }
 
@@ -434,6 +449,9 @@ fun PaketDetailScreen(id: String, onClose: () -> Unit) {
         Triple("sender", "Отправитель", cur.sender),
         Triple("weight", "Вес, кг", cur.weight),
         Triple("routing", "Leitcode / Routingcode", cur.routing),
+        Triple("billing", "Номер расчёта (Abrechnungsnr)", cur.billing),
+        Triple("reference", "Референс отправителя", cur.reference),
+        Triple("services", "Отметки и услуги", cur.services),
         Triple("note", "Заметка", cur.note)
     )
 
@@ -457,6 +475,34 @@ fun PaketDetailScreen(id: String, onClose: () -> Unit) {
         }
         Spacer(Modifier.height(4.dp))
         Text("Нажмите на поле, чтобы исправить его.", style = MaterialTheme.typography.bodySmall)
+        if (cur.tracking.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(
+                    onClick = {
+                        try {
+                            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("tracking", cur.tracking))
+                            Toast.makeText(ctx, "Номер скопирован", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Копировать номер") }
+                FilledTonalButton(
+                    onClick = {
+                        try {
+                            val url = "https://www.dhl.de/de/privatkunden/pakete-empfangen/verfolgen.html?piececode=" +
+                                Uri.encode(cur.tracking)
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "Не удалось открыть браузер", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Отследить") }
+            }
+        }
 
         Spacer(Modifier.height(16.dp))
         Text("Снимки этикетки", style = MaterialTheme.typography.titleMedium)
@@ -521,6 +567,9 @@ fun PaketDetailScreen(id: String, onClose: () -> Unit) {
                             "sender" -> cur.copy(sender = t)
                             "weight" -> cur.copy(weight = t.replace(',', '.'))
                             "routing" -> cur.copy(routing = t)
+                            "billing" -> cur.copy(billing = t)
+                            "reference" -> cur.copy(reference = t)
+                            "services" -> cur.copy(services = t)
                             else -> cur.copy(note = t)
                         }.let { n ->
                             if ((n.status == "check" || n.status == "error") && n.tracking.isNotBlank()) n.copy(status = "done") else n
@@ -584,7 +633,32 @@ fun PostwagenScreen(onBack: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             Text("Добавить", style = MaterialTheme.typography.titleMedium)
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
+        val dayStart = remember(list) {
+            val c = java.util.Calendar.getInstance()
+            c.set(java.util.Calendar.HOUR_OF_DAY, 0); c.set(java.util.Calendar.MINUTE, 0)
+            c.set(java.util.Calendar.SECOND, 0); c.set(java.util.Calendar.MILLISECOND, 0)
+            c.timeInMillis
+        }
+        val todayOps = list.filter { it.createdAt >= dayStart }
+        if (todayOps.isNotEmpty()) {
+            Card(
+                Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Сегодня", style = MaterialTheme.typography.labelMedium)
+                        Text("операций: ${todayOps.size}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Отправлено ${todayOps.sumOf { it.sent }}", fontWeight = FontWeight.SemiBold)
+                        Text("Получено ${todayOps.sumOf { it.received }}", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         Text("История", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(4.dp))
         if (list.isEmpty()) {

@@ -18,6 +18,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -97,6 +99,51 @@ private fun buildReport(period: Int, anchor: Long, d: InfoData): String {
     return sb.toString()
 }
 
+private fun csvCell(s: String): String = "\"" + s.replace("\"", "\"\"").replace("\n", " ").replace("\r", " ") + "\""
+
+/** Таблица за выбранный период (открывается в Excel): приёмки, их позиции, посылки Post paket, операции Postwagen. */
+private fun buildCsv(d: InfoData): String {
+    val df = SimpleDateFormat("dd.MM.yyyy", RU_LOCALE)
+    val tf = SimpleDateFormat("HH:mm:ss", RU_LOCALE)
+    val sb = StringBuilder("\uFEFF")
+    fun row(vararg c: String) {
+        sb.append(c.joinToString(";") { csvCell(it) }).append("\r\n")
+    }
+    row("Тип", "Дата", "Время", "Кто", "Отправитель / получатель", "Заказ / номер посылки", "Количество", "Детали")
+    d.receipts.sortedBy { it.receivedAt }.forEach { r ->
+        val dt = Date(r.receivedAt)
+        row(
+            "Приёмка", df.format(dt), tf.format(dt), r.receiver, r.sender, r.orderNo, iFmt(iUnits(r)),
+            "позиций ${r.items.size}; брак ${iFmt(iDefects(r))}; накладных ${r.invoices.size}; фото ${r.photos.size}"
+        )
+        r.items.forEach { it2 ->
+            row(
+                "Позиция", df.format(dt), tf.format(dt), r.receiver, r.sender, r.orderNo, iFmt(iNum(it2.qty)),
+                it2.name + (if (it2.plan.isNotBlank()) "; план " + it2.plan else "") +
+                    (if (it2.defect.isNotBlank()) "; брак " + it2.defect else "")
+            )
+        }
+    }
+    d.pakets.sortedBy { it.createdAt }.forEach { p ->
+        val dt = Date(p.createdAt)
+        row(
+            "Post paket", df.format(dt), tf.format(dt), p.author,
+            listOf(p.recipient, p.street, p.zip + " " + p.city).filter { it.isNotBlank() }.joinToString(", "),
+            p.tracking, "1",
+            listOf(p.product, if (p.weight.isNotBlank()) p.weight + " кг" else "", p.services, p.note)
+                .filter { it.isNotBlank() }.joinToString("; ")
+        )
+    }
+    d.wagen.sortedBy { it.createdAt }.forEach { w ->
+        val dt = Date(w.createdAt)
+        row(
+            "Postwagen", df.format(dt), tf.format(dt), w.author, "", w.id, "${w.sent}/${w.received}",
+            "отправлено ${w.sent}; получено ${w.received}" + (if (w.note.isNotBlank()) "; " + w.note else "")
+        )
+    }
+    return sb.toString()
+}
+
 @Composable
 private fun MetricTile(label: String, value: String, modifier: Modifier = Modifier) {
     Card(
@@ -141,6 +188,8 @@ fun InfoScreen(onBack: () -> Unit) {
     var period by rememberSaveable { mutableIntStateOf(0) }
     var anchor by rememberSaveable { mutableStateOf(iDayStart(System.currentTimeMillis())) }
     var openReceipt by rememberSaveable { mutableStateOf<String?>(null) }
+    var openPaket by rememberSaveable { mutableStateOf<String?>(null) }
+    var openWagen by rememberSaveable { mutableStateOf<String?>(null) }
     var showAll by remember { mutableStateOf(false) }
     var data by remember { mutableStateOf<InfoData?>(null) }
 
@@ -161,6 +210,16 @@ fun InfoScreen(onBack: () -> Unit) {
     val opened = openReceipt
     if (opened != null) {
         ReceiptCardScreen(opened) { openReceipt = null }
+        return
+    }
+    val openedPaket = openPaket
+    if (openedPaket != null) {
+        PaketDetailScreen(openedPaket) { openPaket = null }
+        return
+    }
+    val openedWagen = openWagen
+    if (openedWagen != null) {
+        WagenDetailScreen(openedWagen) { openWagen = null }
         return
     }
     BackHandler(onBack = onBack)
@@ -243,6 +302,27 @@ fun InfoScreen(onBack: () -> Unit) {
                 MetricTile("Накладных", docs.toString(), Modifier.weight(1f))
                 MetricTile("Фото", photos.toString(), Modifier.weight(1f))
             }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile("Post paket", d.pakets.size.toString(), Modifier.weight(1f))
+                MetricTile("Фото этикеток", d.pakets.sumOf { it.photos.size }.toString(), Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile("Postwagen отправлено", d.wagen.sumOf { it.sent }.toString(), Modifier.weight(1f))
+                MetricTile("Postwagen получено", d.wagen.sumOf { it.received }.toString(), Modifier.weight(1f))
+            }
+            val stamps = d.receipts.map { it.receivedAt } + d.pakets.map { it.createdAt } + d.wagen.map { it.createdAt }
+            if (period == 0 && stamps.size > 1) {
+                val a = stamps.min()
+                val b = stamps.max()
+                val mins = (b - a) / 60000L
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Активность за день: ${iHm(a)} – ${iHm(b)} (${mins / 60} ч ${mins % 60} мин)",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
             if (d.receipts.isNotEmpty()) {
                 val first = d.receipts.minOf { it.receivedAt }
                 val last = d.receipts.maxOf { it.receivedAt }
@@ -315,6 +395,13 @@ fun InfoScreen(onBack: () -> Unit) {
                 topSenders.forEach { TopLine(it.first, iFmt(it.second) + " шт") }
                 SectionHead("Топ товаров")
                 topProducts.forEach { TopLine(it.key, iFmt(it.value) + " шт") }
+                val byWho = d.receipts.filter { it.receiver.isNotBlank() }.groupBy { it.receiver }
+                    .map { Triple(it.key, it.value.size, it.value.sumOf { r -> iUnits(r) }) }
+                    .sortedByDescending { it.third }.take(5)
+                if (byWho.isNotEmpty()) {
+                    SectionHead("Кто принимал")
+                    byWho.forEach { TopLine(it.first + " · приёмок " + it.second, iFmt(it.third) + " шт") }
+                }
                 SectionHead("Приёмки")
             }
             val shown = if (showAll) d.receipts else d.receipts.take(30)
@@ -357,7 +444,7 @@ fun InfoScreen(onBack: () -> Unit) {
         if (d.pakets.isNotEmpty()) {
             item { SectionHead("Посылки Post paket") }
             items(d.pakets.take(30), key = { "p" + it.id }) { p ->
-                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                Column(Modifier.fillMaxWidth().clickable { openPaket = p.id }.padding(vertical = 6.dp)) {
                     Text(p.title(), fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
                         listOf(fmtTime(p.createdAt), p.recipient, listOf(p.zip, p.city).filter { it.isNotBlank() }.joinToString(" "))
@@ -370,7 +457,9 @@ fun InfoScreen(onBack: () -> Unit) {
         if (d.wagen.isNotEmpty()) {
             item { SectionHead("Операции Postwagen") }
             items(d.wagen.take(30), key = { "w" + it.id }) { w ->
-                TopLine(fmtTime(w.createdAt), "отпр. ${w.sent} · получ. ${w.received}")
+                Box(Modifier.fillMaxWidth().clickable { openWagen = w.id }) {
+                    TopLine(fmtTime(w.createdAt), "отпр. ${w.sent} · получ. ${w.received}")
+                }
             }
         }
 
@@ -386,6 +475,28 @@ fun InfoScreen(onBack: () -> Unit) {
                 },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Поделиться итогом текстом") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    try {
+                        val dir = File(ctx.cacheDir, "export").also { it.mkdirs() }
+                        val name = "lager_info_" + SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(anchor)) +
+                            "_" + periodDays[period] + "d.csv"
+                        val f = File(dir, name)
+                        f.writeText(buildCsv(d), Charsets.UTF_8)
+                        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+                        val i = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/csv"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        ctx.startActivity(Intent.createChooser(i, "Выгрузить таблицу").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(ctx, "Не удалось создать таблицу", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Выгрузить таблицей (CSV для Excel)") }
             Spacer(Modifier.height(16.dp))
         }
     }
