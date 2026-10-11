@@ -3,6 +3,9 @@ package ru.storage.app
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -40,6 +43,8 @@ class EditItem(
     val defect: String = ""
 ) {
     var qty by mutableStateOf(initial)
+    /** срок годности дд.мм.гггг, "" — не указан */
+    var expiry by mutableStateOf("")
 }
 
 fun qtyValid(q: String): Boolean = (q.trim().replace(',', '.').toDoubleOrNull() ?: 0.0) > 0.0
@@ -55,6 +60,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
     var suggestions by remember { mutableStateOf(emptyList<Product>()) }
     val lines = remember { mutableStateListOf<EditItem>() }
     var showDialog by remember { mutableStateOf(false) }
+    var expiryItem by remember { mutableStateOf<EditItem?>(null) }
     var message by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
 
@@ -148,8 +154,20 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         if (lines.isNotEmpty()) Text("Принято позиций: ${lines.size}", style = MaterialTheme.typography.titleSmall)
         LazyColumn(Modifier.weight(1f)) {
             items(lines.toList(), key = { it.productId }) { l ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(l.name, modifier = Modifier.weight(1f))
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        // свайп вправо по строке — выбор срока годности
+                        .draggable(
+                            orientation = Orientation.Horizontal,
+                            state = rememberDraggableState { },
+                            onDragStopped = { v -> if (v > 900f) expiryItem = l }
+                        ),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(l.name)
+                        if (l.expiry.isNotBlank()) Text("срок ${l.expiry}", style = MaterialTheme.typography.bodySmall)
+                    }
                     OutlinedTextField(
                         value = l.qty, onValueChange = { l.qty = it },
                         singleLine = true, label = { Text("Кол-во") },
@@ -171,6 +189,14 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         }
     }
 
+    expiryItem?.let { it0 ->
+        ExpiryPickerDialog(
+            initial = it0.expiry,
+            onPick = { v -> it0.expiry = v; expiryItem = null },
+            onDismiss = { expiryItem = null }
+        )
+    }
+
     if (showDialog) {
         SaveReceiptDialog(
             onDismiss = { showDialog = false },
@@ -179,7 +205,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                 val r = Receipt(
                     id = UUID.randomUUID().toString(),
                     sender = sender.trim(), orderNo = order.trim(), receivedAt = now, receiver = receiver,
-                    items = lines.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.'), it.plan, it.defect) },
+                    items = lines.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.'), it.plan, it.defect, it.expiry.trim()) },
                     photos = photos, invoices = invoices, updatedAt = now
                 )
                 scope.launch(Dispatchers.IO) {

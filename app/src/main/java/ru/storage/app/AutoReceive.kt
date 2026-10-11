@@ -134,9 +134,8 @@ class ItemRow(
     /** Срок годности (дд.мм.гггг), только «Приём B-Ware»; "" — не указан. */
     var expiry by mutableStateOf("")
 
-    /** Инвентарь B-Ware: причины порчи, тип целостности и примечание к позиции. */
+    /** B-Ware: выбранные причины и виды повреждений позиции (список вариантов зависит от окна) и примечание. */
     val reasons = mutableStateListOf<String>()
-    val damage = mutableStateListOf<String>()
     var note by mutableStateOf("")
 
     /** Поля карточки (производитель, вес, тип), разобранные ИИ; только для товаров, которых нет в каталоге. */
@@ -708,7 +707,7 @@ suspend fun saveJob(
             val defect = normalizeQty(r.defect).ifEmpty { "0" }
             if (defect.toDouble() > fact.toDouble()) return "Брак больше фактического количества: $name"
             val plan = if (r.extra) "0" else normalizeQty(r.qty).ifEmpty { "0" }
-            rows.add(ReceiptItem(pid, name, fact, plan, defect))
+            rows.add(ReceiptItem(pid, name, fact, plan, defect, r.expiry.trim()))
         } else {
             val qty = normalizeQty(r.qty)
             val printed = normalizeQty(r.printed)

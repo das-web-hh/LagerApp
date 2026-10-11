@@ -8,11 +8,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /*
- * «Инвентарь B-Ware» — регистрация испорченного товара, который лежит на складе.
- * Как «Приём B-Ware», но без отправителя и номера заказа: поиск с «+», колесо-список (тап +1, барабан, вибрация, голос),
- * у каждой позиции срок годности, причины порчи и тип целостности. «Далее» — предпросмотр документа и печать.
+ * «Инвентарь B-Ware» — регистрация испорченного товара на складе. Как «Приём B-Ware», но без отправителя,
+ * заказа и машины: поиск «Товар» с «+», обычный список (тап +1, барабан цифр, вибрация, голос),
+ * свайп вправо — срок годности, удержание строки — причины порчи и тип целостности.
+ * «Далее» — документ «Опись» и печать.
  */
 
 object BWareInvHolder {
@@ -54,24 +58,18 @@ object InvOptions {
         "Этикетка повреждена или отсутствует",
         "Загрязнён"
     )
+    val groups: List<Pair<String, List<String>>> = listOf(
+        "Причина порчи" to reasons,
+        "Тип целостности" to damage
+    )
 }
 
+private fun bullets(list: List<String>) =
+    if (list.isEmpty()) "—" else list.joinToString("<br>") { "• " + bwEsc(it) }
+
 private fun invHtml(receiver: String, now: Long): String {
-    val rows = BWareInvHolder.rows
     val sb = StringBuilder()
-    sb.append(
-        "<html><head><meta charset='utf-8'><style>" +
-            "body{font-family:sans-serif;font-size:12px;color:#111}" +
-            "h1{font-size:20px;margin:0 0 8px}" +
-            "table{border-collapse:collapse;width:100%}" +
-            "th,td{border:1px solid #888;padding:4px 5px;text-align:left;vertical-align:top}" +
-            "th{background:#eee}.n{text-align:right;white-space:nowrap}" +
-            ".info td{border:none;padding:2px 10px 2px 0}.info td:first-child{color:#444}" +
-            ".sub{color:#444;font-size:11px;margin-top:3px}" +
-            ".sign{margin-top:36px}.sign td{border:none;padding:18px 10px 0 0;width:50%}" +
-            ".line{border-top:1px solid #111;padding-top:2px;font-size:11px;color:#444}" +
-            "</style></head><body>"
-    )
+    sb.append("<html><head><meta charset='utf-8'><style>$BW_CSS.sub{color:#444;font-size:11px;margin-top:3px}</style></head><body>")
     sb.append("<h1>Опись испорченного товара на складе (B-Ware)</h1>")
     sb.append("<table class='info'>")
     sb.append("<tr><td>Составил:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
@@ -79,14 +77,14 @@ private fun invHtml(receiver: String, now: Long): String {
     sb.append("</table><br>")
     sb.append("<table><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Срок годности</th><th>Причины</th><th>Тип целостности</th></tr>")
     var total = 0.0
-    rows.forEachIndexed { i, r ->
+    BWareInvHolder.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
         total += q
         sb.append("<tr><td>${i + 1}</td><td>${bwEsc(r.name.trim())}")
         if (r.note.isNotBlank()) sb.append("<div class='sub'>${bwEsc(r.note.trim()).replace("\n", "<br>")}</div>")
         sb.append("</td><td class='n'>${bwFmt(q)}</td><td>${bwEsc(bwDash(r.expiry))}</td>")
-        sb.append("<td>${if (r.reasons.isEmpty()) "—" else r.reasons.joinToString("<br>") { "• " + bwEsc(it) }}</td>")
-        sb.append("<td>${if (r.damage.isEmpty()) "—" else r.damage.joinToString("<br>") { "• " + bwEsc(it) }}</td></tr>")
+        sb.append("<td>${bullets(InvOptions.reasons.filter { it in r.reasons })}</td>")
+        sb.append("<td>${bullets(InvOptions.damage.filter { it in r.reasons })}</td></tr>")
     }
     sb.append("<tr><th></th><th>Итого</th><th class='n'>${bwFmt(total)}</th><th></th><th></th><th></th></tr></table>")
     sb.append("<table class='sign'><tr><td><div class='line'>Составил (подпись)</div></td>")
@@ -106,48 +104,42 @@ fun BWareInventoryScreen(receiver: String, onBack: () -> Unit) {
     if (h.step == 1) {
         val stamp = remember { System.currentTimeMillis() }
         val html = invHtml(receiver, stamp)
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Row(Modifier.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { h.step = 0 }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("← Назад") }
-                Text("Документ", style = MaterialTheme.typography.headlineSmall)
+                Text("Документ", style = MaterialTheme.typography.titleLarge)
             }
-            Spacer(Modifier.height(8.dp))
             HtmlPreview(html, Modifier.weight(1f).fillMaxWidth())
             Spacer(Modifier.height(8.dp))
             Button(
-                onClick = { Printer.print(ctx, "Инвентарь_BWare_" + java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.ROOT).format(java.util.Date(stamp)), html) },
+                onClick = {
+                    val d = SimpleDateFormat("yyyyMMdd_HHmm", Locale.ROOT).format(Date(stamp))
+                    Printer.print(ctx, "Инвентарь_BWare_$d", html)
+                },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("🖨 Печать") }
-            Spacer(Modifier.height(4.dp))
             TextButton(onClick = { clearOpen = true }, modifier = Modifier.fillMaxWidth()) { Text("Закончить и очистить") }
         }
     } else {
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Инвентарь B-Ware", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                if (h.rows.isNotEmpty()) TextButton(onClick = { clearOpen = true }) { Text("Очистить") }
-                Button(
-                    enabled = h.rows.isNotEmpty(),
-                    onClick = {
-                        val bad = h.rows.firstOrNull { bwQty(it.fact) <= 0.0 }
-                        if (bad != null) error = "Укажите количество: ${bad.name.trim()}"
-                        else { error = ""; h.step = 1 }
-                    }
-                ) { Text("Далее") }
-            }
-            Spacer(Modifier.height(8.dp))
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            BWareHeader(
+                title = "Инвентарь B-Ware",
+                canClear = h.rows.isNotEmpty(),
+                canNext = h.rows.isNotEmpty(),
+                onClear = { clearOpen = true },
+                onNext = {
+                    val bad = h.rows.firstOrNull { bwQty(it.fact) <= 0.0 }
+                    if (bad != null) error = "Укажите количество: ${bad.name.trim()}"
+                    else { error = ""; h.step = 1 }
+                }
+            )
+            Spacer(Modifier.height(4.dp))
             CatalogWheel(
                 rows = h.rows,
+                groups = InvOptions.groups,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 errorText = error,
-                emptyText = "Введите название товара и выберите из подсказок\nили нажмите «+»",
-                itemDetails = true,
                 onAdded = { error = "" }
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Свайп влево по строке: срок годности, причины и вид, удалить.",
-                style = MaterialTheme.typography.bodySmall
             )
         }
     }

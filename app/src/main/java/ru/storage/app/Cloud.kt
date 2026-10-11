@@ -100,7 +100,7 @@ object Cloud {
         "items" to r.items.map {
             hashMapOf(
                 "productId" to it.productId, "name" to it.name, "qty" to it.qty,
-                "plan" to it.plan, "defect" to it.defect
+                "plan" to it.plan, "defect" to it.defect, "expiry" to it.expiry
             )
         },
         "photos" to r.photos,
@@ -156,7 +156,8 @@ object Cloud {
                     m["name"]?.toString() ?: "",
                     m["qty"]?.toString() ?: "",
                     m["plan"]?.toString() ?: "",
-                    m["defect"]?.toString() ?: ""
+                    m["defect"]?.toString() ?: "",
+                    m["expiry"]?.toString() ?: ""
                 )
             }
         } ?: emptyList()

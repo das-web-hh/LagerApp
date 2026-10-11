@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -35,9 +36,10 @@ import java.util.Locale
 
 /*
  * «Приём B-Ware» — приём испорченного товара, который привезли.
- * Окно 1: отправитель, номер заказа (справа «Далее»), поиск по каталогу с «+», ниже — колесо-список
- *         (тап +1, барабан цифр, вибрация и голос, срок годности каждой позиции), снизу «Подробности».
- * Окно 2: номер машины и прицепа, предпросмотр документа и «Печать».
+ * Окно 1 (минимализм): [Отправитель | Номер машины], [Номер заказа | Номер прицепа], поиск «Товар» с «+»,
+ *   ниже обычный список. Тап по строке +1 (вибрация, голос), тап по числу — барабан цифр,
+ *   свайп вправо — срок годности, свайп влево — «Причины» и «Удалить», удержание — причины и повреждения.
+ *   «Далее» (вверху справа) — предпросмотр документа и печать.
  * Состояние живёт в BWareHolder, поэтому не теряется при переходе между вкладками.
  */
 
@@ -46,10 +48,7 @@ object BWareHolder {
     var order by mutableStateOf("")
     var truck by mutableStateOf("")
     var trailer by mutableStateOf("")
-    var note by mutableStateOf("")
     val rows = mutableStateListOf<ItemRow>()
-    /** выбранные варианты из BWareDetails */
-    val details = mutableStateListOf<String>()
     /** 0 — ввод и подсчёт, 1 — предпросмотр и печать */
     var step by mutableIntStateOf(0)
 
@@ -58,14 +57,12 @@ object BWareHolder {
         order = ""
         truck = ""
         trailer = ""
-        note = ""
         rows.clear()
-        details.clear()
         step = 0
     }
 }
 
-/** Варианты «подробностей»: как испортился товар и в каком виде его привезли. */
+/** Варианты повреждений при приёме: как испортился, в каком виде привезли, что с содержимым. */
 object BWareDetails {
     val groups: List<Pair<String, List<String>>> = listOf(
         "Когда испортился" to listOf(
@@ -107,22 +104,38 @@ internal fun bwEsc(s: String) =
 
 internal fun bwDash(s: String) = s.trim().ifBlank { "—" }
 
-/** HTML документа для предпросмотра и печати. */
+/** Выбранное в позиции по группам (для документа): «Группа: пункт; пункт» построчно. */
+internal fun bwDetailsHtml(row: ItemRow, groups: List<Pair<String, List<String>>>): String {
+    val sb = StringBuilder()
+    groups.forEach { (title, opts) ->
+        val sel = opts.filter { it in row.reasons }
+        if (sel.isNotEmpty()) {
+            if (sb.isNotEmpty()) sb.append("<br>")
+            sb.append("<b>${bwEsc(title)}:</b> ").append(sel.joinToString("; ") { bwEsc(it) })
+        }
+    }
+    if (row.note.isNotBlank()) {
+        if (sb.isNotEmpty()) sb.append("<br>")
+        sb.append("<i>${bwEsc(row.note.trim()).replace("\n", "<br>")}</i>")
+    }
+    return if (sb.isEmpty()) "—" else sb.toString()
+}
+
+internal const val BW_CSS =
+    "body{font-family:sans-serif;font-size:12px;color:#111}" +
+        "h1{font-size:20px;margin:0 0 8px}h2{font-size:15px;margin:16px 0 6px}" +
+        "table{border-collapse:collapse;width:100%}" +
+        "th,td{border:1px solid #888;padding:4px 5px;text-align:left;vertical-align:top}" +
+        "th{background:#eee}.n{text-align:right;white-space:nowrap}" +
+        ".info td{border:none;padding:2px 10px 2px 0}.info td:first-child{color:#444}" +
+        ".sign{margin-top:36px}.sign td{border:none;padding:18px 10px 0 0;width:50%}" +
+        ".line{border-top:1px solid #111;padding-top:2px;font-size:11px;color:#444}"
+
+/** HTML документа приёма для предпросмотра и печати. */
 private fun bwareHtml(receiver: String, now: Long): String {
     val h = BWareHolder
     val sb = StringBuilder()
-    sb.append(
-        "<html><head><meta charset='utf-8'><style>" +
-            "body{font-family:sans-serif;font-size:13px;color:#111}" +
-            "h1{font-size:20px;margin:0 0 8px}h2{font-size:15px;margin:18px 0 6px}" +
-            "table{border-collapse:collapse;width:100%}" +
-            "th,td{border:1px solid #888;padding:5px 6px;text-align:left;vertical-align:top}" +
-            "th{background:#eee}.n{text-align:right;white-space:nowrap}" +
-            ".info td{border:none;padding:2px 10px 2px 0}.info td:first-child{color:#444}" +
-            ".sign{margin-top:36px}.sign td{border:none;padding:18px 10px 0 0;width:50%}" +
-            ".line{border-top:1px solid #111;padding-top:2px;font-size:11px;color:#444}" +
-            "</style></head><body>"
-    )
+    sb.append("<html><head><meta charset='utf-8'><style>$BW_CSS</style></head><body>")
     sb.append("<h1>Акт приёма B-Ware (повреждённый товар)</h1>")
     sb.append("<table class='info'>")
     sb.append("<tr><td>Отправитель:</td><td><b>${bwEsc(bwDash(h.sender))}</b></td></tr>")
@@ -132,68 +145,72 @@ private fun bwareHtml(receiver: String, now: Long): String {
     sb.append("<tr><td>Принял:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
     sb.append("<tr><td>Дата и время:</td><td>${fmtTime(now)}</td></tr>")
     sb.append("</table>")
-
-    sb.append("<h2>Товары</h2><table><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Срок годности</th></tr>")
+    sb.append("<h2>Товары</h2><table><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Срок годности</th><th>Подробности повреждений</th></tr>")
     var total = 0.0
     h.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
         total += q
-        sb.append("<tr><td>${i + 1}</td><td>${bwEsc(r.name.trim())}</td>")
-        sb.append("<td class='n'>${bwFmt(q)}</td><td>${bwEsc(bwDash(r.expiry))}</td></tr>")
+        sb.append("<tr><td>${i + 1}</td><td>${bwEsc(r.name.trim())}</td><td class='n'>${bwFmt(q)}</td>")
+        sb.append("<td>${bwEsc(bwDash(r.expiry))}</td><td>${bwDetailsHtml(r, BWareDetails.groups)}</td></tr>")
     }
-    sb.append("<tr><th></th><th>Итого</th><th class='n'>${bwFmt(total)}</th><th></th></tr></table>")
-
-    val chosen = h.details.toSet()
-    val hasDetails = chosen.isNotEmpty() || h.note.isNotBlank()
-    if (hasDetails) {
-        sb.append("<h2>Подробности повреждений</h2><table>")
-        BWareDetails.groups.forEach { (title, opts) ->
-            val sel = opts.filter { it in chosen }
-            if (sel.isNotEmpty()) {
-                sb.append("<tr><td style='width:32%'><b>${bwEsc(title)}</b></td><td>")
-                sb.append(sel.joinToString("<br>") { "• " + bwEsc(it) })
-                sb.append("</td></tr>")
-            }
-        }
-        if (h.note.isNotBlank()) {
-            sb.append("<tr><td><b>Примечание</b></td><td>${bwEsc(h.note.trim()).replace("\n", "<br>")}</td></tr>")
-        }
-        sb.append("</table>")
-    }
-
-    sb.append("<table class='sign'><tr>")
-    sb.append("<td><div class='line'>Принял (подпись)</div></td>")
-    sb.append("<td><div class='line'>Водитель (подпись)</div></td>")
-    sb.append("</tr></table>")
+    sb.append("<tr><th></th><th>Итого</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
+    sb.append("<table class='sign'><tr><td><div class='line'>Принял (подпись)</div></td>")
+    sb.append("<td><div class='line'>Водитель (подпись)</div></td></tr></table>")
     sb.append("</body></html>")
     return sb.toString()
 }
 
-/** Поле поиска в стиле остальных строк: лупа, текст, «+» справа. */
+/** Невысокое поле ввода без рамки: подсказка внутри, заглавные буквы для номеров. */
 @Composable
-private fun BWareSearchField(
-    query: String,
+fun CompactField(
+    value: String,
     onChange: (String) -> Unit,
-    onAdd: () -> Unit
+    hint: String,
+    modifier: Modifier = Modifier,
+    caps: Boolean = false
 ) {
+    Box(
+        modifier.height(44.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        if (value.isEmpty()) {
+            Text(hint, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(
+                capitalization = if (caps) KeyboardCapitalization.Characters else KeyboardCapitalization.None
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+/** Поиск товара: лупа, надпись «Товар», «+» справа. */
+@Composable
+private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
-            .height(48.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(start = 14.dp, end = 4.dp),
+            .padding(start = 12.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (query.isEmpty()) {
-                Text(
-                    "Название товара (от $MIN_SEARCH_CHARS букв)",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1
-                )
+                Text("Товар", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             }
             BasicTextField(
                 value = query,
@@ -216,16 +233,16 @@ private fun BWareSearchField(
 }
 
 /**
- * Поиск по каталогу («+» добавляет как написано) и колесо-список под ним — общий блок для «Приём B-Ware»
- * и «Инвентарь B-Ware». itemDetails = true — у позиции кнопка свайпа «Причины и вид».
+ * Поиск по каталогу («+» добавляет как написано) и обычный список под ним — общий блок для «Приём B-Ware»
+ * и «Инвентарь B-Ware». groups — варианты для окна «причины и повреждения» (удержание строки).
  */
 @Composable
 fun CatalogWheel(
     rows: SnapshotStateList<ItemRow>,
+    groups: List<Pair<String, List<String>>>,
     modifier: Modifier = Modifier,
     errorText: String = "",
-    emptyText: String,
-    itemDetails: Boolean = false,
+    emptyText: String = "Введите товар и нажмите «+»",
     onAdded: () -> Unit = {}
 ) {
     val ctx = LocalContext.current
@@ -284,15 +301,16 @@ fun CatalogWheel(
                 emptyText = emptyText,
                 showSearch = false,
                 bware = true,
+                plain = true,
                 focusTarget = focusTarget,
-                onDetails = if (itemDetails) ({ r: ItemRow -> detailsRow = r }) else null
+                onDetails = { r -> detailsRow = r }
             )
             val typed = query.trim()
             if (typed.length >= MIN_SEARCH_CHARS) {
                 Card(Modifier.fillMaxWidth().heightIn(max = 300.dp).align(Alignment.TopCenter)) {
                     if (suggestions.isEmpty()) {
                         Text(
-                            if (sync.busy) "Загрузка каталога…" else "В каталоге не найдено. Нажмите «+», чтобы добавить как написано.",
+                            if (sync.busy) "Загрузка каталога…" else "Нет в каталоге — нажмите «+», чтобы добавить как написано.",
                             Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium
                         )
                     } else {
@@ -318,7 +336,7 @@ fun CatalogWheel(
         }
     }
 
-    detailsRow?.let { r -> BWareItemDialog(r) { detailsRow = null } }
+    detailsRow?.let { r -> BWareItemDialog(r, groups) { detailsRow = null } }
 }
 
 /** Предпросмотр HTML-документа (как лист бумаги, можно увеличивать щипком). */
@@ -352,31 +370,28 @@ fun HtmlPreview(html: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** Причины порчи и тип целостности одной позиции (инвентарь B-Ware). Попадает в документ. */
+/** Причины и повреждения одной позиции (удержание строки). Попадает в документ. */
 @Composable
-private fun BWareItemDialog(row: ItemRow, onClose: () -> Unit) {
+private fun BWareItemDialog(row: ItemRow, groups: List<Pair<String, List<String>>>, onClose: () -> Unit) {
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text(row.name.ifBlank { "Товар" }, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                @Composable
-                fun group(title: String, opts: List<String>, sel: SnapshotStateList<String>) {
+                groups.forEach { (title, opts) ->
                     Text(title, style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(top = 8.dp, bottom = 2.dp))
                     opts.forEach { o ->
-                        val on = o in sel
+                        val on = o in row.reasons
                         Row(
-                            Modifier.fillMaxWidth().clickable { if (on) sel.remove(o) else sel.add(o) },
+                            Modifier.fillMaxWidth().clickable { if (on) row.reasons.remove(o) else row.reasons.add(o) },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Checkbox(checked = on, onCheckedChange = { if (it) sel.add(o) else sel.remove(o) })
+                            Checkbox(checked = on, onCheckedChange = { if (it) row.reasons.add(o) else row.reasons.remove(o) })
                             Text(o, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
-                group("Причина порчи", InvOptions.reasons, row.reasons)
-                group("Тип целостности", InvOptions.damage, row.damage)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     row.note, { row.note = it },
@@ -388,9 +403,24 @@ private fun BWareItemDialog(row: ItemRow, onClose: () -> Unit) {
         },
         confirmButton = { Button(onClick = onClose) { Text("Готово") } },
         dismissButton = {
-            TextButton(onClick = { row.reasons.clear(); row.damage.clear(); row.note = "" }) { Text("Сбросить") }
+            TextButton(onClick = { row.reasons.clear(); row.note = "" }) { Text("Сбросить") }
         }
     )
+}
+
+/** Верхняя строка окна: заголовок, «Очистить», «Далее». */
+@Composable
+internal fun BWareHeader(title: String, canClear: Boolean, canNext: Boolean, onClear: () -> Unit, onNext: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f), maxLines = 1)
+        if (canClear) TextButton(onClick = onClear, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Очистить") }
+        Button(
+            onClick = onNext,
+            enabled = canNext,
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
+            modifier = Modifier.height(36.dp)
+        ) { Text("Далее") }
+    }
 }
 
 @Composable
@@ -402,147 +432,67 @@ fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
         return
     }
 
-    var detailsOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Приём B-Ware", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            if (h.rows.isNotEmpty() || h.sender.isNotBlank() || h.order.isNotBlank()) {
-                TextButton(onClick = { clearOpen = true }) { Text("Очистить") }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        BWareHeader(
+            title = "Приём B-Ware",
+            canClear = h.rows.isNotEmpty() || h.sender.isNotBlank() || h.order.isNotBlank() ||
+                h.truck.isNotBlank() || h.trailer.isNotBlank(),
+            canNext = h.rows.isNotEmpty(),
+            onClear = { clearOpen = true },
+            onNext = {
+                val bad = h.rows.firstOrNull { bwQty(it.fact) <= 0.0 }
+                if (bad != null) error = "Укажите количество: ${bad.name.trim()}"
+                else { error = ""; h.step = 1 }
             }
-        }
-        Spacer(Modifier.height(8.dp))
-        // 1-я строка: отправитель
-        OutlinedTextField(
-            h.sender, { h.sender = it },
-            label = { Text("Имя отправителя") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
         )
-        Spacer(Modifier.height(8.dp))
-        // 2-я строка: номер заказа и «Далее» справа
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                h.order, { h.order = it },
-                label = { Text("Номер заказа") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                enabled = h.rows.isNotEmpty(),
-                onClick = {
-                    val bad = h.rows.firstOrNull { bwQty(it.fact) <= 0.0 }
-                    if (bad != null) {
-                        error = "Укажите количество: ${bad.name.trim()}"
-                    } else {
-                        error = ""
-                        h.step = 1
-                    }
-                }
-            ) { Text("Далее") }
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CompactField(h.sender, { h.sender = it }, "Отправитель", Modifier.weight(1f))
+            CompactField(h.truck, { h.truck = it }, "Номер машины", Modifier.weight(1f), caps = true)
         }
-        Spacer(Modifier.height(8.dp))
-        // 3-я строка: поиск по каталогу и колесо-список
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CompactField(h.order, { h.order = it }, "Номер заказа", Modifier.weight(1f), caps = true)
+            CompactField(h.trailer, { h.trailer = it }, "Номер прицепа", Modifier.weight(1f), caps = true)
+        }
+        Spacer(Modifier.height(6.dp))
         CatalogWheel(
             rows = h.rows,
+            groups = BWareDetails.groups,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             errorText = error,
-            emptyText = "Введите название товара и выберите из подсказок\nили нажмите «+»",
             onAdded = { error = "" }
         )
-        Spacer(Modifier.height(8.dp))
-        val n = h.details.size
-        OutlinedButton(onClick = { detailsOpen = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (n > 0 || h.note.isNotBlank()) "Подробности повреждений (выбрано: $n)" else "Подробности повреждений")
-        }
     }
-
-    if (detailsOpen) BWareDetailsDialog { detailsOpen = false }
 
     if (clearOpen) {
         AlertDialog(
             onDismissRequest = { clearOpen = false },
             title = { Text("Очистить приём?") },
-            text = { Text("Список товаров, отправитель, номера и подробности будут удалены.") },
+            text = { Text("Список товаров, отправитель, заказ и номера машины будут удалены.") },
             confirmButton = { Button(onClick = { h.clear(); clearOpen = false; error = "" }) { Text("Очистить") } },
             dismissButton = { TextButton(onClick = { clearOpen = false }) { Text("Отмена") } }
         )
     }
 }
 
-/** Выбор подробностей: как испортился, в каком виде привезли, что с содержимым. Попадает в документ. */
-@Composable
-private fun BWareDetailsDialog(onClose: () -> Unit) {
-    val h = BWareHolder
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Подробности повреждений") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                BWareDetails.groups.forEach { (title, opts) ->
-                    Text(title, style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp))
-                    opts.forEach { o ->
-                        val on = o in h.details
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clickable { if (on) h.details.remove(o) else h.details.add(o) },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(checked = on, onCheckedChange = { if (it) h.details.add(o) else h.details.remove(o) })
-                            Text(o, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    h.note, { h.note = it },
-                    label = { Text("Другое / примечание") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = { Button(onClick = onClose) { Text("Готово") } },
-        dismissButton = {
-            TextButton(onClick = { h.details.clear(); h.note = "" }) { Text("Сбросить") }
-        }
-    )
-}
-
-/** Окно «Далее»: номер машины и прицепа, предпросмотр документа, печать. */
+/** Окно «Далее»: предпросмотр документа и печать. */
 @Composable
 private fun BWarePreview(receiver: String) {
     val h = BWareHolder
     val ctx = LocalContext.current
     val stamp = remember { System.currentTimeMillis() }
-    val html = bwareHtml(receiver, stamp) // перечитывается при изменении полей и списка
+    val html = bwareHtml(receiver, stamp)
     var clearOpen by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(Modifier.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { h.step = 0 }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("← Назад") }
-            Text("Документ", style = MaterialTheme.typography.headlineSmall)
+            Text("Документ", style = MaterialTheme.typography.titleLarge)
         }
-        Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                h.truck, { h.truck = it },
-                label = { Text("Номер машины") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            OutlinedTextField(
-                h.trailer, { h.trailer = it },
-                label = { Text("Номер прицепа") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(Modifier.height(8.dp))
         HtmlPreview(html, Modifier.weight(1f).fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         Button(
@@ -553,7 +503,6 @@ private fun BWarePreview(receiver: String) {
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("🖨 Печать") }
-        Spacer(Modifier.height(4.dp))
         TextButton(onClick = { clearOpen = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Закончить и очистить")
         }

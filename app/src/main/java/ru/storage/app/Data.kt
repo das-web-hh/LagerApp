@@ -29,7 +29,9 @@ data class ReceiptItem(
     val name: String,
     val qty: String,
     val plan: String = "",
-    val defect: String = ""
+    val defect: String = "",
+    /** срок годности дд.мм.гггг ("" — не указан) */
+    val expiry: String = ""
 )
 
 data class Receipt(
@@ -77,7 +79,7 @@ fun itemsToJson(l: List<ReceiptItem>): String {
     l.forEach {
         a.put(
             JSONObject().put("id", it.productId).put("name", it.name).put("qty", it.qty)
-                .put("plan", it.plan).put("defect", it.defect)
+                .put("plan", it.plan).put("defect", it.defect).put("expiry", it.expiry)
         )
     }
     return a.toString()
@@ -91,7 +93,7 @@ fun jsonToItems(s: String?): List<ReceiptItem> {
             val o = a.getJSONObject(it)
             ReceiptItem(
                 o.optString("id"), o.optString("name"), o.optString("qty"),
-                o.optString("plan"), o.optString("defect")
+                o.optString("plan"), o.optString("defect"), o.optString("expiry")
             )
         }
     } catch (e: Exception) {
