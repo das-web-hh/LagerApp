@@ -244,7 +244,7 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
                 TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
                 TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" }
             )
-        }
+        )
 
         val jobs = AutoReceiveHolder.jobs.filter { !it.nameMode }
         if (jobs.isNotEmpty()) {
