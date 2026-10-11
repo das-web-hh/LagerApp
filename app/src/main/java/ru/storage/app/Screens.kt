@@ -182,6 +182,14 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         NameReceiveHub(onBack = { mode = null })
         return
     }
+    if (current == "Приём B-Ware") {
+        BWareReceiveScreen(receiver) { mode = null }
+        return
+    }
+    if (current == "Инвентарь B-Ware") {
+        BWareInventoryScreen(receiver) { mode = null }
+        return
+    }
     if (current == "Итог приёма") {
         ReceiveTotalScreen { mode = null }
         return

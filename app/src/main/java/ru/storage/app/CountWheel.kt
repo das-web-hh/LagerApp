@@ -271,11 +271,20 @@ fun CountWheelList(
     modifier: Modifier = Modifier,
     addTick: Int = 0,
     onAdd: (() -> Unit)? = null,
-    emptyText: String = "Список пуст"
+    emptyText: String = "Список пуст",
+    /** false — своего поля поиска нет (его рисует экран, например «Приём B-Ware») */
+    showSearch: Boolean = true,
+    /** true — режим B-Ware: кнопки свайпа «Срок» и «Удалить», под названием — срок годности */
+    bware: Boolean = false,
+    /** при addTick колесо встаёт на эту строку; null — на последнюю добавленную */
+    focusTarget: ItemRow? = null,
+    /** не null — у строки третья кнопка свайпа «Причины» (инвентарь B-Ware); вызывается с этой строкой */
+    onDetails: ((ItemRow) -> Unit)? = null
 ) {
     var query by remember { mutableStateOf("") }
     var picking by remember { mutableStateOf<Pair<ItemRow, Boolean>?>(null) } // true — факт, false — брак
     var editing by remember { mutableStateOf<ItemRow?>(null) }
+    var expiryRow by remember { mutableStateOf<ItemRow?>(null) }
     var focusRow by remember { mutableStateOf<ItemRow?>(null) }
     var blinkRow by remember { mutableStateOf<ItemRow?>(null) }
     var blinkTick by remember { mutableIntStateOf(0) }
@@ -288,7 +297,7 @@ fun CountWheelList(
     LaunchedEffect(addTick) {
         if (addTick > 0) {
             query = ""
-            focusRow = rows.lastOrNull()
+            focusRow = focusTarget ?: rows.lastOrNull()
         }
     }
 
@@ -303,8 +312,10 @@ fun CountWheelList(
     }
 
     Column(modifier) {
-        ListSearchField(query, { query = it }, onAdd) { hits.firstOrNull()?.let { pick(it) } }
-        Spacer(Modifier.height(8.dp))
+        if (showSearch) {
+            ListSearchField(query, { query = it }, onAdd) { hits.firstOrNull()?.let { pick(it) } }
+            Spacer(Modifier.height(8.dp))
+        }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             if (n == 0) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -360,6 +371,9 @@ fun CountWheelList(
                                     index = index,
                                     listState = listState,
                                     editable = editable,
+                                    bware = bware,
+                                    onPickExpiry = { expiryRow = row },
+                                    onDetails = onDetails?.let { cb -> { cb(row) } },
                                     onPickFact = { picking = row to true },
                                     onPickDefect = { picking = row to false },
                                     onEdit = { editing = row },
@@ -379,7 +393,7 @@ fun CountWheelList(
 
     picking?.let { (row, isFact) ->
         CountPickerDialog(
-            title = (if (isFact) "Факт: " else "Брак: ") + row.name,
+            title = (if (isFact) (if (bware) "Количество: " else "Факт: ") else "Брак: ") + row.name,
             initial = parseQ(if (isFact) row.fact else row.defect).roundToInt().coerceIn(0, 9999),
             onApply = { v ->
                 if (isFact) row.fact = v.toString() else row.defect = v.toString()
@@ -391,6 +405,13 @@ fun CountWheelList(
         )
     }
     editing?.let { row -> RowEditDialog(row) { editing = null } }
+    expiryRow?.let { row ->
+        ExpiryPickerDialog(
+            initial = row.expiry,
+            onPick = { row.expiry = it; expiryRow = null },
+            onDismiss = { expiryRow = null }
+        )
+    }
 }
 
 @Composable
@@ -400,6 +421,9 @@ private fun WheelRow(
     index: Int,
     listState: LazyListState,
     editable: Boolean,
+    bware: Boolean,
+    onPickExpiry: () -> Unit,
+    onDetails: (() -> Unit)?,
     onPickFact: () -> Unit,
     onPickDefect: () -> Unit,
     onEdit: () -> Unit,
@@ -408,7 +432,8 @@ private fun WheelRow(
     val ctx = LocalContext.current
     val density = LocalDensity.current
     val btnW = 76.dp
-    val maxPx = with(density) { (btnW * 2).toPx() }
+    val btnCount = if (bware && onDetails != null) 3 else 2
+    val maxPx = with(density) { (btnW * btnCount).toPx() }
     val anim = remember(row) { Animatable(0f) }
     val blink = remember(row) { Animatable(0f) }
     LaunchedEffect(blinkKey) {
@@ -435,7 +460,7 @@ private fun WheelRow(
         Row(
             Modifier.align(Alignment.CenterEnd)
                 .fillMaxHeight()
-                .width(btnW * 2)
+                .width(btnW * btnCount)
                 .clip(RoundedCornerShape(14.dp))
         ) {
             Box(
@@ -443,17 +468,37 @@ private fun WheelRow(
                     .background(scheme.tertiaryContainer)
                     .clickable(enabled = editable) {
                         scope.launch { anim.animateTo(0f) }
-                        onPickDefect()
+                        if (bware) onPickExpiry() else onPickDefect()
                     },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    if (defD > 0) "Брак\n${fmtQ(defD)}" else "Брак",
+                    if (bware) (if (row.expiry.isBlank()) "Срок\nгодности" else "Срок\n${row.expiry.take(5)}")
+                    else if (defD > 0) "Брак\n${fmtQ(defD)}" else "Брак",
                     textAlign = TextAlign.Center,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = scheme.onTertiaryContainer
                 )
+            }
+            if (bware && onDetails != null) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight()
+                        .background(scheme.secondaryContainer)
+                        .clickable(enabled = editable) {
+                            scope.launch { anim.animateTo(0f) }
+                            onDetails()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Причины\nи вид",
+                        textAlign = TextAlign.Center,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onSecondaryContainer
+                    )
+                }
             }
             Box(
                 Modifier.weight(1f).fillMaxHeight()
@@ -519,11 +564,27 @@ private fun WheelRow(
                     lineHeight = 18.sp,
                     fontWeight = FontWeight.Medium
                 )
-                val sub = buildList {
-                    if (row.extra) add("нет в плане") else add("план ${fmtQ(planD)}")
-                    if (defD > 0) add("брак ${fmtQ(defD)}")
-                }.joinToString(" · ")
-                Text(sub, fontSize = 12.sp, maxLines = 1, color = scheme.onSurfaceVariant)
+                if (bware) {
+                    // срок годности: тап по строке под названием тоже открывает календарь
+                    val tail = if (onDetails == null) "" else {
+                        val r = row.reasons.size
+                        val d = row.damage.size
+                        if (r + d == 0) " · причины не выбраны" else " · причин $r · вид $d"
+                    }
+                    Text(
+                        (if (row.expiry.isBlank()) "срок: не указан" else "срок: ${row.expiry}") + tail,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        color = if (row.expiry.isBlank()) scheme.error else scheme.onSurfaceVariant,
+                        modifier = Modifier.clickable(enabled = editable) { onPickExpiry() }
+                    )
+                } else {
+                    val sub = buildList {
+                        if (row.extra) add("нет в плане") else add("план ${fmtQ(planD)}")
+                        if (defD > 0) add("брак ${fmtQ(defD)}")
+                    }.joinToString(" · ")
+                    Text(sub, fontSize = 12.sp, maxLines = 1, color = scheme.onSurfaceVariant)
+                }
             }
             // количество — справа; тап по числу открывает барабан цифр
             Box(

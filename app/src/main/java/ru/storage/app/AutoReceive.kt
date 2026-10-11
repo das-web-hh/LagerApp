@@ -131,6 +131,14 @@ class ItemRow(
     var fact by mutableStateOf("")
     var defect by mutableStateOf("")
 
+    /** Срок годности (дд.мм.гггг), только «Приём B-Ware»; "" — не указан. */
+    var expiry by mutableStateOf("")
+
+    /** Инвентарь B-Ware: причины порчи, тип целостности и примечание к позиции. */
+    val reasons = mutableStateListOf<String>()
+    val damage = mutableStateListOf<String>()
+    var note by mutableStateOf("")
+
     /** Поля карточки (производитель, вес, тип), разобранные ИИ; только для товаров, которых нет в каталоге. */
     var parts by mutableStateOf<ProductParts?>(null)
 }
