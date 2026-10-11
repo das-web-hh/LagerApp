@@ -16,7 +16,7 @@ android {
         // versionCode = минуты с 1970 года: каждая следующая сборка всегда новее предыдущей
         // (даже если репозиторий создан заново и счётчик запусков GitHub начался с 1)
         versionCode = (System.currentTimeMillis() / 60000L).toInt()
-        versionName = "2.19.0"
+        versionName = "2.20.0"
     }
 
     // Один и тот же постоянный ключ для каждой сборки → Android обновляет приложение поверх старого.
@@ -68,6 +68,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation(platform("com.google.firebase:firebase-bom:33.4.0"))
     implementation("com.google.firebase:firebase-firestore")
+    implementation("org.osmdroid:osmdroid-android:6.1.18")
     implementation("com.google.guava:guava:33.3.1-android")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

@@ -239,6 +239,7 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val ctx = LocalContext.current
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
+    LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
     // снимки этикеток Post paket живут на телефоне двое суток; незаконченный анализ этикеток добирается
     // журнал и документы: отправляем на Диск то, что накопилось без связи
     LaunchedEffect(Unit) {

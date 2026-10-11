@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -67,6 +68,7 @@ fun OtherScreen(prefs: Prefs) {
         current == "Инфо" -> InfoScreen { section = null }
         current == "Журнал" -> JournalScreen { section = null }
         current == "Документы" -> DocsScreen { section = null }
+        current == "Рабочее время" -> WorkTimeScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Прочее", style = MaterialTheme.typography.headlineMedium)
@@ -78,7 +80,8 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("История", Icons.Default.DateRange) { section = "История" },
                     TileSpec("Инфо", Icons.Default.Info) { section = "Инфо" },
                     TileSpec("Журнал", Icons.AutoMirrored.Filled.List) { section = "Журнал" },
-                    TileSpec("Документы", Icons.Default.Create) { section = "Документы" }
+                    TileSpec("Документы", Icons.Default.Create) { section = "Документы" },
+                    TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" }
                 )
             )
         }
