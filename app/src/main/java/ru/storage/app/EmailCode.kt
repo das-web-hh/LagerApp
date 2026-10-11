@@ -54,14 +54,20 @@ object EmailCode {
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
                 val status = conn.responseCode
+                val errText = if (status in 200..299) "" else try {
+                    conn.errorStream?.bufferedReader()?.use { it.readText() }?.trim()?.take(160) ?: ""
+                } catch (e: Exception) { "" }
                 conn.disconnect()
                 if (status in 200..299) {
                     synchronized(this@EmailCode) {
                         email = to; code = c; expires = System.currentTimeMillis() + TTL_MS; tries = 0
                     }
                     null
+                } else if (status == 403) {
+                    "Не удалось отправить код на Email (ошибка 403). В EmailJS → Account → Security включите «Allow EmailJS API for non-browser applications»." +
+                        (if (errText.isNotEmpty()) " Ответ: $errText" else "")
                 } else {
-                    "Не удалось отправить код на Email (ошибка $status)"
+                    "Не удалось отправить код на Email (ошибка $status)" + (if (errText.isNotEmpty()) ": $errText" else "")
                 }
             } catch (e: Exception) {
                 "Нет связи. Не удалось отправить код на Email"
