@@ -77,6 +77,7 @@ object Signature {
         ".sigsvg{display:block;max-width:100%}" +
             ".sigbox{margin-top:26px;display:inline-block;max-width:100%}" +
             ".sigcap{font-size:11px;color:#444;padding-top:2px}" +
+            ".sigspace{height:90px;display:flex;align-items:flex-end}" +
             ".h1s{font-size:13px;font-weight:normal;color:#444}"
 
     /** Блок подписи без линии (для актов, где линий для подписи не было). Выключена автоподпись — ничего не выводится. */
@@ -88,6 +89,6 @@ object Signature {
     /** Ячейка с подписью над линией. Автоподпись выключена — только линия для подписи от руки. */
     fun cell(capKey: String, name: String, ms: Long, auto: Boolean = true): String {
         val s = if (auto && PrintCfg.sign) svg(name, ms) else ""
-        return s + "<div class='line'>" + tr(capKey) + "</div>"
+        return "<div class='sigspace'>" + s + "</div><div class='line'>" + tr(capKey) + "</div>"
     }
 }
