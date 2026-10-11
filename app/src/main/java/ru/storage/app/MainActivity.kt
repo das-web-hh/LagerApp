@@ -246,6 +246,10 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
     LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
     LaunchedEffect(Unit) {
+        delay(20_000)
+        withContext(Dispatchers.IO) { try { Updater.auto(ctx) } catch (e: Exception) { } }
+    }
+    LaunchedEffect(Unit) {
         BtScan.load(ctx)
         withContext(Dispatchers.IO) { try { BtScan.autoConnect(ctx) } catch (e: Exception) { } }
     }
@@ -315,6 +319,10 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                             } else if (i == 2) {
                                 val n = InvoiceProfiles.newCount
                                 BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
+                                    Icon(tab.icon, contentDescription = tab.title)
+                                }
+                            } else if (i == 3 && Updater.latestNewer != null) {
+                                BadgedBox(badge = { Badge() }) {
                                     Icon(tab.icon, contentDescription = tab.title)
                                 }
                             } else Icon(tab.icon, contentDescription = tab.title)

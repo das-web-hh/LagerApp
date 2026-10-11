@@ -21,6 +21,8 @@ object EmailCode {
      * {{to_email}} (поле «To Email»), {{to_name}}, {{from_name}}, {{subject}}, {{message}} и вставьте сюда его ID.
      */
     private const val MESSAGE_TEMPLATE_ID = "template_REPLACE_ME"
+    /** Private Key из EmailJS (Account → General). Нужен, если включено «Use Private Key». Можно оставить пустым и выключить эту галочку в EmailJS. */
+    private const val PRIVATE_KEY = ""
     private const val TTL_MS = 10 * 60 * 1000L
     private const val MAX_TRIES = 5
 
@@ -46,6 +48,7 @@ object EmailCode {
                     .put("template_id", TEMPLATE_ID)
                     .put("user_id", PUBLIC_KEY)
                     .put("template_params", params)
+                if (PRIVATE_KEY.isNotEmpty()) body.put("accessToken", PRIVATE_KEY)
                 val conn = URL("https://api.emailjs.com/api/v1.0/email/send").openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.connectTimeout = 15000
@@ -88,6 +91,7 @@ object EmailCode {
                 val body = JSONObject()
                     .put("service_id", SERVICE_ID).put("template_id", MESSAGE_TEMPLATE_ID)
                     .put("user_id", PUBLIC_KEY).put("template_params", params)
+                if (PRIVATE_KEY.isNotEmpty()) body.put("accessToken", PRIVATE_KEY)
                 val conn = URL("https://api.emailjs.com/api/v1.0/email/send").openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.connectTimeout = 15000

@@ -107,6 +107,11 @@ object DriveApi {
     fun upload(ctx: Context, name: String, f: File) {
         val ext = f.extension.lowercase()
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+        uploadBytes(ctx, name, mime, f.readBytes())
+    }
+
+    /** Загрузка готового массива байт (используется для частей APK). Файл с таким именем повторно не создаётся. */
+    fun uploadBytes(ctx: Context, name: String, mime: String, data: ByteArray) {
         val o = JSONObject()
             .put("action", "upload")
             .put("folderId", DriveCfg.folder(ctx))
@@ -115,7 +120,7 @@ object DriveApi {
             .put("mimeType", mime)
             .put("skipIfExists", true)
             .put("makePublic", false)
-            .put("contentBase64", Base64.encodeToString(f.readBytes(), Base64.NO_WRAP))
+            .put("contentBase64", Base64.encodeToString(data, Base64.NO_WRAP))
         check(http(DriveCfg.url(ctx), o.toString()))
     }
 

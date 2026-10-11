@@ -102,6 +102,7 @@ fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
     when {
         current == "Профиль" -> ProfileScreen(profile, prefs, onLogout) { section = null }
         current == "Настройки" -> SettingsScreen(prefs) { section = null }
+        current == "Обновление" -> UpdateScreen { section = null }
         current == "Лицензия" -> LicenseScreen(profile) { section = null }
         current == "О приложении" -> AboutAppScreen { section = null }
         current == "О системе" -> AboutSystemScreen { section = null }
@@ -118,6 +119,11 @@ fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
                 elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
             ) {
                 MoreRow(Icons.Default.Settings, "Настройки", "Сканер, печать, тема, Google Диск и др.") { section = "Настройки" }
+                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                MoreRow(
+                    Icons.Default.Refresh, "Обновление",
+                    Updater.latestNewer?.let { "Доступна версия ${it.version}" } ?: "Проверка и установка новой версии"
+                ) { section = "Обновление" }
                 HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
                 MoreRow(Icons.Default.Lock, "Лицензия", "Условия использования, компоненты") { section = "Лицензия" }
                 HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
