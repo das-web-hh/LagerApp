@@ -122,6 +122,8 @@ object Cloud {
         val nr = r.copy(updatedAt = System.currentTimeMillis())
         db.upsertReceipts(listOf(nr))
         fs.collection("receipts").document(nr.id).set(receiptMap(nr))
+        SendState.version++ // «Инфо» и другие окна перечитывают данные
+        if (isNew) Tasks.onAction("receive")
         val who = listOf(nr.sender, if (nr.orderNo.isNotBlank() && nr.orderNo != "none") "заказ ${nr.orderNo}" else "")
             .filter { it.isNotBlank() }.joinToString(" · ")
         Journal.log(

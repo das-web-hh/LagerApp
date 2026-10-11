@@ -264,6 +264,7 @@ object SendCloud {
         db.upsertPaket(np)
         fs.collection("shipments").document(np.id).set(paketMap(np))
         SendState.version++
+        Tasks.onAction("paket")
         val same = old != null && old.tracking == np.tracking && old.recipient == np.recipient &&
             old.note == np.note && old.photos.size == np.photos.size
         if (!same) {
@@ -321,6 +322,7 @@ object SendCloud {
             )
         )
         SendState.version++
+        if (oldW == null) Tasks.onAction("wagen")
         return nw
     }
 

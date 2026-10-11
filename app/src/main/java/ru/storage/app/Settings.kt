@@ -24,7 +24,13 @@ import kotlinx.coroutines.withContext
 
 /** Текущий пользователь (логин) — по нему настройки хранятся в Firebase. */
 object Session {
+    /** Ключ аккаунта для настроек и журнала (у администратора — прежний «admin», чтобы настройки не потерялись). */
     @Volatile var login: String = "admin"
+    /** Вошедший пользователь (имя, должность, роль). */
+    @Volatile var user: AppUser? = null
+    val isAdmin: Boolean get() = user?.isAdmin == true
+    /** Имя для подписей «кто добавил / кто принял». */
+    val displayName: String get() = user?.name?.ifBlank { null } ?: login
 }
 
 /**

@@ -1,6 +1,12 @@
 package ru.storage.app
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import android.content.Context
 import android.content.Intent
 import android.content.ContextWrapper
@@ -33,6 +39,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
+        Nav.target = intent?.getStringExtra("open")
         Journal.init(applicationContext)
         Ui.load(applicationContext)
         PrintCfg.load(applicationContext)
@@ -46,6 +53,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         Incoming.handleIntent(this, intent)
+        intent.getStringExtra("open")?.let { Nav.target = it }
     }
 }
 
@@ -66,19 +74,59 @@ data class UserProfile(
     val firstName: String,
     val lastName: String,
     val phone: String,
-    val email: String
+    val email: String,
+    val position: String = ""
 )
 
 @Composable
 fun AppRoot() {
     val context = LocalContext.current
     val prefs = remember { Prefs(context) }
-    val profile = remember { UserProfile("Admin", "", "", "") }
     // вход запоминается до выхода из аккаунта (кнопка в Профиле)
     val sessionSp = remember { context.getSharedPreferences("session", Context.MODE_PRIVATE) }
-    var userLogin by rememberSaveable { mutableStateOf(sessionSp.getString("login", "") ?: "") }
-    var loggedIn by rememberSaveable { mutableStateOf(userLogin.isNotEmpty()) }
-    Session.login = userLogin.ifBlank { "admin" }
+    fun loadUser(): AppUser? {
+        val l = sessionSp.getString("login", "") ?: ""
+        // старая сессия без статуса (временный вход admin/admin) больше не действует
+        if (l.isEmpty() || !sessionSp.contains("status")) return null
+        return AppUser(
+            l, sessionSp.getString("name", "") ?: "", sessionSp.getString("position", "") ?: "",
+            sessionSp.getString("role", "worker") ?: "worker", sessionSp.getString("status", "pending") ?: "pending"
+        )
+    }
+    var user by remember { mutableStateOf(loadUser()) }
+    fun applyUser(u: AppUser?) {
+        user = u
+        Session.user = u
+        Session.login = when {
+            u == null -> "admin"
+            u.isAdmin -> "admin" // прежний ключ: настройки и журнал администратора сохраняются
+            else -> u.login
+        }
+    }
+    fun saveUser(u: AppUser?) {
+        val e = sessionSp.edit()
+        if (u == null) {
+            e.clear()
+        } else {
+            e.putString("login", u.login).putString("name", u.name).putString("position", u.position)
+                .putString("role", u.role).putString("status", u.status)
+        }
+        e.apply()
+        applyUser(u)
+    }
+    remember {
+        Session.user = user
+        Session.login = user?.let { if (it.isAdmin) "admin" else it.login } ?: "admin"
+        0
+    }
+
+    val current = user
+    val loggedIn = current != null && current.status == "active"
+    val profile = remember(current) {
+        val n = current?.name ?: ""
+        UserProfile(n.substringBefore(' '), n.substringAfter(' ', ""), "", "", current?.position ?: "")
+    }
+
     // после входа сверяем настройки аккаунта с Firebase
     LaunchedEffect(loggedIn) {
         if (loggedIn) {
@@ -88,9 +136,37 @@ fun AppRoot() {
             }
         }
     }
+
+    // чат, задачи, уведомления: подписки работают, пока пользователь вошёл
+    DisposableEffect(current?.login, loggedIn) {
+        if (loggedIn && current != null) Live.start(context, current)
+        onDispose { if (loggedIn) Live.stop() }
+    }
+    // изменения в профиле (должность) и удаление аккаунта подхватываем из Firebase
+    DisposableEffect(current?.login, loggedIn) {
+        var reg: com.google.firebase.firestore.ListenerRegistration? = null
+        if (loggedIn && current != null && !current.isAdmin) {
+            reg = Users.listenUser(current.login) { u, fromCache ->
+                if (u == null) {
+                    if (!fromCache) saveUser(null)
+                } else if (u.status == "active" && (u.name != current.name || u.position != current.position)) {
+                    saveUser(u)
+                }
+            }
+        }
+        onDispose { reg?.remove() }
+    }
+    // разрешение на уведомления (Android 13+)
+    val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(loggedIn) {
+        if (loggedIn && Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     // после верного пароля: сначала анимация закрывает экран входа, и только потом открывается главный экран
     var splash by remember { mutableStateOf(false) }
-    var pendingLogin by remember { mutableStateOf("") }
+    var pendingUser by remember { mutableStateOf<AppUser?>(null) }
     Box(Modifier.fillMaxSize()) {
     if (loggedIn) {
         val receiver = "${profile.firstName} ${profile.lastName}".trim()
@@ -104,25 +180,34 @@ fun AppRoot() {
         } else {
             MainScreen(prefs = prefs, profile = profile, onLogout = {
                 Journal.log("Система", "Выход из аккаунта")
-                sessionSp.edit().remove("login").apply()
-                loggedIn = false
+                saveUser(null)
             })
             Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
         }
+    } else if (current != null) {
+        // зарегистрировался, но админ ещё не назначил должность и не подтвердил
+        PendingScreen(
+            current,
+            onApproved = { u -> pendingUser = u; splash = true },
+            onLogout = { saveUser(null) }
+        )
     } else {
-        LoginScreen(onSuccess = {
-            pendingLogin = it.lowercase()
-            splash = true
+        LoginScreen(onSuccess = { u ->
+            if (u.status == "active") {
+                pendingUser = u
+                splash = true
+            } else {
+                saveUser(u)
+            }
         })
     }
     if (splash) {
         WelcomeSplash(
             onCovered = {
-                Session.login = pendingLogin.ifBlank { "admin" }
-                Journal.log("Система", "Вход в аккаунт")
-                sessionSp.edit().putString("login", pendingLogin).apply()
-                userLogin = pendingLogin
-                loggedIn = true
+                pendingUser?.let {
+                    saveUser(it)
+                    Journal.log("Система", "Вход в аккаунт")
+                }
             },
             onFinished = { splash = false }
         )
@@ -142,6 +227,7 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     )
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val ctx = LocalContext.current
+    LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
     // снимки этикеток Post paket живут на телефоне двое суток; незаконченный анализ этикеток добирается
     // журнал и документы: отправляем на Диск то, что накопилось без связи
     LaunchedEffect(Unit) {

@@ -144,7 +144,7 @@ private fun createPaketFromScans(ctx: Context, uris: List<Uri>) {
     val now = System.currentTimeMillis()
     val p = Paket(
         id = newSendId(), createdAt = now, photos = names, status = "new",
-        author = Session.login, updatedAt = now
+        author = Session.displayName, updatedAt = now
     )
     SendCloud.savePaket(sdb, p)
     LabelProcessor.enqueue(app, p.id)
@@ -209,7 +209,7 @@ fun PostPaketScreen(onBack: () -> Unit) {
             id = newSendId(), createdAt = now,
             tracking = if (looksTracking) compactT.uppercase() else "",
             note = if (looksTracking) "" else t,
-            status = "manual", author = Session.login, updatedAt = now
+            status = "manual", author = Session.displayName, updatedAt = now
         )
         text = ""
         scope.launch(Dispatchers.IO) { SendCloud.savePaket(sdb, p) }
@@ -774,7 +774,7 @@ fun WagenAddScreen(onClose: () -> Unit) {
                     val now = System.currentTimeMillis()
                     val op = WagenOp(
                         id = newSendId(), createdAt = now, sent = sent, received = received,
-                        note = note.trim(), author = Session.login, updatedAt = now
+                        note = note.trim(), author = Session.displayName, updatedAt = now
                     )
                     scope.launch(Dispatchers.IO) { SendCloud.saveWagen(sdb, op) }
                     onClose()

@@ -50,9 +50,13 @@ private fun Appear(delayMs: Int, modifier: Modifier = Modifier, content: @Compos
 }
 
 @Composable
-fun LoginScreen(onSuccess: (String) -> Unit) {
+fun LoginScreen(onSuccess: (AppUser) -> Unit) {
+    var register by rememberSaveable { mutableStateOf(false) }
+    var name by rememberSaveable { mutableStateOf("") }
     var login by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
+    var password2 by rememberSaveable { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     var show by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val ctx = LocalContext.current
@@ -64,18 +68,34 @@ fun LoginScreen(onSuccess: (String) -> Unit) {
         try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName } catch (e: Exception) { null } ?: ""
     }
 
+    fun fail(text: String) {
+        error = text
+        scope.launch {
+            repeat(3) {
+                shake.animateTo(14f, tween(55))
+                shake.animateTo(-14f, tween(55))
+            }
+            shake.animateTo(0f, tween(55))
+        }
+    }
+
     fun submit() {
-        if (login.trim() == "admin" && password == "admin") {
-            focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
-            onSuccess(login.trim())
-        } else {
-            error = "Неверный логин или пароль"
-            scope.launch {
-                repeat(3) {
-                    shake.animateTo(14f, tween(55))
-                    shake.animateTo(-14f, tween(55))
+        if (busy) return
+        if (register && password != password2) {
+            fail("Пароли не совпадают")
+            return
+        }
+        busy = true
+        error = null
+        scope.launch {
+            val r = if (register) Users.register(name, login, password) else Users.signIn(login, password)
+            busy = false
+            when (r) {
+                is AuthResult.Ok -> {
+                    focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
+                    onSuccess(r.user)
                 }
-                shake.animateTo(0f, tween(55))
+                is AuthResult.Fail -> fail(r.text)
             }
         }
     }
@@ -108,6 +128,19 @@ fun LoginScreen(onSuccess: (String) -> Unit) {
             Spacer(Modifier.height(if (keyboard) 12.dp else 28.dp))
 
             Column(Modifier.fillMaxWidth().offset { IntOffset(shake.value.roundToInt(), 0) }) {
+                if (register) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it; error = null },
+                        label = { Text("Имя и фамилия") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
                 Appear(800, Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = login,
@@ -132,6 +165,26 @@ fun LoginScreen(onSuccess: (String) -> Unit) {
                         trailingIcon = {
                             TextButton(onClick = { show = !show }) { Text(if (show) "Скрыть" else "Показать") }
                         },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = if (register) ImeAction.Next else ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onNext = { focus.moveFocus(FocusDirection.Down) },
+                            onDone = { submit() }
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (register) {
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = password2,
+                        onValueChange = { password2 = it; error = null },
+                        label = { Text("Повторите пароль") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { submit() }),
                         modifier = Modifier.fillMaxWidth()
@@ -146,9 +199,20 @@ fun LoginScreen(onSuccess: (String) -> Unit) {
             Appear(1000, Modifier.fillMaxWidth()) {
                 Button(
                     onClick = { submit() },
+                    enabled = !busy,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth().height(54.dp)
-                ) { Text("Войти", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
+                ) {
+                    if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.onPrimary)
+                    else Text(if (register) "Зарегистрироваться" else "Войти", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Appear(1100, Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = { register = !register; error = null },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (register) "Уже есть аккаунт? Войти" else "Нет аккаунта? Зарегистрироваться") }
             }
         }
 

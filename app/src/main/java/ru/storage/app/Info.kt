@@ -192,9 +192,21 @@ fun InfoScreen(onBack: () -> Unit) {
     var openWagen by rememberSaveable { mutableStateOf<String?>(null) }
     var showAll by remember { mutableStateOf(false) }
     var data by remember { mutableStateOf<InfoData?>(null) }
+    val sync = remember { SyncState() }
+    var tick by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) { SendCloud.pull(sdb) }
-    LaunchedEffect(period, anchor, SendState.version) {
+    // при открытии подтягиваем новые приёмки из Firebase, а пока окно открыто — перечитываем данные
+    LaunchedEffect(Unit) {
+        try { SendCloud.pull(sdb) } catch (e: Exception) { }
+        try { Cloud.runReceipts(db, sync, true) } catch (e: Exception) { }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(4000)
+            tick++
+        }
+    }
+    LaunchedEffect(period, anchor, SendState.version, sync.version, Media.version, tick) {
         data = withContext(Dispatchers.IO) {
             val from = iAddDays(anchor, -(periodDays[period] - 1))
             val to = iAddDays(anchor, 1)

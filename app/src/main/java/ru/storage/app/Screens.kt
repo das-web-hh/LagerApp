@@ -152,9 +152,8 @@ fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit, onBa
         Spacer(Modifier.height(16.dp))
         ProfileRow("Имя", profile.firstName)
         ProfileRow("Фамилия", profile.lastName)
-        ProfileRow("Номер телефона", profile.phone)
-        ProfileRow("Электронная почта", profile.email)
-        ProfileRow("Пароль", "••••••••")
+        ProfileRow("Должность", profile.position)
+        ProfileRow("Логин", Session.user?.login ?: "")
         Spacer(Modifier.height(24.dp))
         OutlinedButton(
             onClick = onLogout,

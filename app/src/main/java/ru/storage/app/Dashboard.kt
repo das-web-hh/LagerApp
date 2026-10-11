@@ -163,7 +163,23 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
         }
         return
     }
+    // нажатие на уведомление открывает чат или задачи
+    LaunchedEffect(Nav.target) {
+        when (Nav.target) {
+            "chat" -> section = "Чат"
+            "tasks" -> section = "Задачи"
+        }
+        if (Nav.target != null) Nav.target = null
+    }
     val sec = section
+    if (sec == "Чат") {
+        ChatScreen { section = null }
+        return
+    }
+    if (sec == "Задачи") {
+        TasksScreen(onBack = { section = null }, onOpenTab = onOpenTab)
+        return
+    }
     if (sec != null) {
         SectionScreen(sec) { section = null }
         return
@@ -180,6 +196,21 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             placeholder = "Поиск товара"
         )
         Spacer(Modifier.height(8.dp))
+        if (query.isEmpty()) {
+            val me = Session.user
+            val rv = Live.readVersion
+            val unread = if (me != null) remember(Live.msgs, rv) { Live.unreadTotal(ctx, me) } else 0
+            val openTasks = if (me != null) Live.openTasksCount(me) else 0
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilledTonalButton(onClick = { section = "Чат" }, modifier = Modifier.weight(1f)) {
+                    BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) { Text("Чат") }
+                }
+                FilledTonalButton(onClick = { section = "Задачи" }, modifier = Modifier.weight(1f)) {
+                    BadgedBox(badge = { if (openTasks > 0) Badge { Text(openTasks.toString()) } }) { Text("Задачи") }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         if (query.isNotEmpty()) {
             SearchResultsList(
                 enough = enough,
@@ -382,11 +413,6 @@ private fun Dashboard(
             }
         }
 
-        SectionTitle("Разделы")
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            FilledTonalButton(onClick = { onSection("Задачи") }, modifier = Modifier.weight(1f)) { Text("Задачи") }
-            FilledTonalButton(onClick = { onSection("Чат") }, modifier = Modifier.weight(1f)) { Text("Чат") }
-        }
     }
 }
 

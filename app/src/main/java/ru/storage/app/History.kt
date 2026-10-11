@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -167,69 +168,68 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
     }
 
     BackHandler(onBack = onClose)
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Карточка приёма", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(sender, { sender = it }, label = { Text("Имя отправителя") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onClose, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("‹", fontSize = 26.sp) }
+            Text("Приём", style = MaterialTheme.typography.titleLarge)
+        }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(order, { order = it }, label = { Text("Номер заказа") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(time, { time = it }, label = { Text("Время приёма (дд.мм.гггг чч:мм)") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(receiver, { receiver = it }, label = { Text("Кто принял") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
+        MinField("Отправитель", sender) { sender = it }
+        MinField("Номер заказа", order) { order = it }
+        MinField("Время приёма (дд.мм.гггг чч:мм)", time) { time = it }
+        MinField("Кто принял", receiver) { receiver = it }
 
-        Spacer(Modifier.height(16.dp))
-        Text("Товары", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(20.dp))
+        Text("Товары", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         items.toList().forEach { l ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f).clickable {
                     scope.launch {
                         val pid = l.productId.ifEmpty { withContext(Dispatchers.IO) { db.findByName(l.name)?.id ?: "" } }
                         if (pid.isEmpty()) notInCatalog = true else histId = pid
                     }
                 }) {
-                    Text(l.name, color = MaterialTheme.colorScheme.primary)
+                    Text(l.name, style = MaterialTheme.typography.bodyLarge)
                     if (l.plan.isNotBlank()) {
                         Text(
                             "план ${l.plan}" + if (l.defect.isNotBlank() && l.defect != "0") " · брак ${l.defect}" else "",
-                            style = MaterialTheme.typography.bodySmall
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                OutlinedTextField(
+                TextField(
                     value = l.qty, onValueChange = { l.qty = it }, singleLine = true,
-                    label = { Text("Кол-во") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.width(100.dp)
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(textAlign = androidx.compose.ui.text.style.TextAlign.End),
+                    colors = minFieldColors(),
+                    modifier = Modifier.width(84.dp)
                 )
-                TextButton(onClick = { items.remove(l) }) { Text("✕") }
+                TextButton(onClick = { items.remove(l) }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text("✕", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-            HorizontalDivider()
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
 
-        Spacer(Modifier.height(16.dp))
-        Text("Фото", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(20.dp))
+        Text("Фото", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
         MediaStrip(photos) { photos.remove(it) }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
         MediaButtons(kind = "RC", allowFile = false) { photos.add(it) }
 
         Spacer(Modifier.height(16.dp))
-        Text("Накладные", style = MaterialTheme.typography.titleSmall)
+        Text("Накладные", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
         MediaStrip(invoices) { invoices.remove(it) }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
         MediaButtons(kind = "IN", allowFile = true) { invoices.add(it) }
 
         if (error.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(error, color = MaterialTheme.colorScheme.error)
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
         Button(
             onClick = {
                 val old = original
@@ -259,11 +259,10 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().height(50.dp)
         ) { Text("Сохранить") }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Удалить партию")
+        TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Удалить партию", color = MaterialTheme.colorScheme.error)
         }
     }
 
@@ -293,6 +292,30 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
                 }) { Text("Удалить") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } }
+        )
+    }
+}
+
+
+@Composable
+private fun minFieldColors() = TextFieldDefaults.colors(
+    focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+    unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+    disabledContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+    unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant
+)
+
+/** Минималистичное поле: маленькая подпись над строкой с тонкой линией, без рамок и заливки. */
+@Composable
+private fun MinField(label: String, value: String, onChange: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextField(
+            value = value, onValueChange = onChange, singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge,
+            colors = minFieldColors(),
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
