@@ -88,6 +88,8 @@ fun AppRoot() {
         val l = sessionSp.getString("login", "") ?: ""
         // старая сессия без статуса (временный вход admin/admin) больше не действует
         if (l.isEmpty() || !sessionSp.contains("status")) return null
+        // сессия администратора со старой схемой входа (зашитый логин) больше не действует — нужен вход по Email
+        if (sessionSp.getString("role", "") == "admin" && sessionSp.getInt("v", 0) < 2) return null
         return AppUser(
             l, sessionSp.getString("name", "") ?: "", sessionSp.getString("position", "") ?: "",
             sessionSp.getString("role", "worker") ?: "worker", sessionSp.getString("status", "pending") ?: "pending"
@@ -109,7 +111,7 @@ fun AppRoot() {
             e.clear()
         } else {
             e.putString("login", u.login).putString("name", u.name).putString("position", u.position)
-                .putString("role", u.role).putString("status", u.status)
+                .putString("role", u.role).putString("status", u.status).putInt("v", 2)
         }
         e.apply()
         applyUser(u)

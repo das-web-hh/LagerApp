@@ -5,6 +5,11 @@ service cloud.firestore {
     // Вход в приложении сделан через коллекцию users (логин + хэш пароля), а не через Firebase Auth,
     // поэтому правила остаются открытыми. Закрыть их можно только после перехода на Firebase Auth.
 
+    // Настройки приложения: config/admin = администратор настроен, одноразовый вход admin/admin удалён
+    match /config/{id} {
+      allow read, write: if true;
+    }
+
     // Работники: логин, имя, должность, роль, статус (pending/active), хэш пароля
     match /users/{id} {
       allow read, write: if true;

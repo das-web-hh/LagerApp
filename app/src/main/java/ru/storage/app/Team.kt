@@ -15,12 +15,14 @@ import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Transaction
 import java.security.MessageDigest
 import java.util.UUID
 
 /*
  * Firestore:
- *  users/{login}: name, login, position, role (admin|worker), status (pending|active), passHash, createdAt
+ *  users/{email}: name, login, email, position, role (admin|worker), status (pending|active), passHash, createdAt
+ *  config/admin: login (email администратора), createdAt — есть документ = одноразовый вход admin/admin уже удалён
  *  tasks/{id}: title, text, type (app|text|approve), action (receive|paket|wagen), assignee, assigneeName, assigneePos,
  *              createdBy, createdByName, createdAt, status (open|done), doneAt, doneAuto, doneByName, target
  *  chat/{id}: chatId, participants[2], from, fromName, to, text, ts
@@ -40,13 +42,18 @@ data class AppUser(
 sealed class AuthResult {
     class Ok(val user: AppUser) : AuthResult()
     class Fail(val text: String) : AuthResult()
+    /** Верный одноразовый вход admin/admin: нужно задать настоящие email и пароль администратора. */
+    object Setup : AuthResult()
 }
 
 object Users {
-    /** Логин администратора (в нижнем регистре). Пароль в коде не хранится — только его хэш. */
-    const val ADMIN_LOGIN = "washingto1a#"
-    private const val ADMIN_HASH = "9f90a344be39061ce0370469fef75c1644f7271fe4622062a69f94df3035ec58"
+    /** Email администратора из index.html — подставляется в окно первой настройки (можно изменить). */
+    const val ADMIN_EMAIL = "khazratbek@gmail.com"
     const val ADMIN_NAME = "Администратор"
+
+    /** Одноразовый вход. Работает только пока администратор не задал свои данные, потом удаляется. */
+    private const val BOOT_LOGIN = "admin"
+    private const val BOOT_PASS = "admin"
 
     private val fs get() = FirebaseFirestore.getInstance()
 
@@ -56,6 +63,8 @@ object Users {
         val d = MessageDigest.getInstance("SHA-256").digest("lager:${key(login)}:$pw".toByteArray(Charsets.UTF_8))
         return d.joinToString("") { "%02x".format(it) }
     }
+
+    fun validEmail(e: String): Boolean = Regex("^[^@\\s/]+@[^@\\s/]+\\.[^@\\s/]{2,}$").matches(e.trim())
 
     private fun DocumentSnapshot.toUser(): AppUser? {
         if (!exists()) return null
@@ -68,25 +77,21 @@ object Users {
         )
     }
 
-    private fun ensureAdminDoc() {
-        fs.collection("users").document(ADMIN_LOGIN).set(
-            hashMapOf<String, Any>(
-                "name" to ADMIN_NAME, "login" to ADMIN_LOGIN, "position" to ADMIN_NAME,
-                "role" to "admin", "status" to "active", "createdAt" to System.currentTimeMillis()
-            ),
-            com.google.firebase.firestore.SetOptions.merge()
-        )
+    /** Логин (email) настоящего администратора; null — администратор ещё не настроен. */
+    suspend fun adminLogin(): String? {
+        val snap = fs.collection("config").document("admin").get().awaitIt()
+        return if (snap.exists()) snap.getString("login") else null
     }
 
     suspend fun signIn(login: String, pw: String): AuthResult {
         val k = key(login)
         if (k.isEmpty() || pw.isEmpty()) return AuthResult.Fail("Введите логин и пароль")
-        if (k == ADMIN_LOGIN) {
-            if (hash(k, pw) != ADMIN_HASH) return AuthResult.Fail("Неверный логин или пароль")
-            try { ensureAdminDoc() } catch (e: Exception) { }
-            return AuthResult.Ok(AppUser(k, ADMIN_NAME, ADMIN_NAME, "admin", "active"))
-        }
         return try {
+            if (k == BOOT_LOGIN) {
+                // admin/admin: пускаем на настройку только один раз, пока config/admin не создан
+                if (pw == BOOT_PASS && adminLogin() == null) return AuthResult.Setup
+                return AuthResult.Fail("Неверный логин или пароль")
+            }
             val snap = fs.collection("users").document(k).get().awaitIt()
             if (!snap.exists() || snap.getString("passHash") != hash(k, pw)) {
                 AuthResult.Fail("Неверный логин или пароль")
@@ -98,24 +103,77 @@ object Users {
         }
     }
 
-    suspend fun register(name: String, login: String, pw: String): AuthResult {
-        val n = name.trim().replace(Regex("\\s+"), " ")
-        val k = key(login)
-        if (n.length < 2) return AuthResult.Fail("Введите имя и фамилию")
-        if (k.length < 3) return AuthResult.Fail("Логин — минимум 3 символа")
-        if (pw.length < 4) return AuthResult.Fail("Пароль — минимум 4 символа")
-        if (k == ADMIN_LOGIN) return AuthResult.Fail("Этот логин занят")
+    /**
+     * Первая настройка: администратор задаёт свои email и пароль. Запись config/admin создаётся
+     * в транзакции — после этого вход admin/admin больше не работает ни на одном телефоне.
+     */
+    suspend fun setupAdmin(email: String, pw: String): AuthResult {
+        val k = key(email)
+        if (!validEmail(k)) return AuthResult.Fail("Введите корректный Email")
+        if (pw.length < 6) return AuthResult.Fail("Пароль — минимум 6 символов")
         return try {
-            val ref = fs.collection("users").document(k)
-            if (ref.get().awaitIt().exists()) return AuthResult.Fail("Такой логин уже зарегистрирован")
+            val cfg = fs.collection("config").document("admin")
+            val usr = fs.collection("users").document(k)
             val now = System.currentTimeMillis()
+            fs.runTransaction(Transaction.Function<Void?> { tr ->
+                if (tr.get(cfg).exists()) throw IllegalStateException("done")
+                tr.set(
+                    usr,
+                    hashMapOf<String, Any>(
+                        "name" to ADMIN_NAME, "login" to k, "email" to k, "position" to ADMIN_NAME,
+                        "role" to "admin", "status" to "active", "passHash" to hash(k, pw), "createdAt" to now
+                    )
+                )
+                tr.set(cfg, hashMapOf<String, Any>("login" to k, "createdAt" to now))
+                null
+            }).awaitIt()
+            Journal.log("Система", "Настроен администратор: $k (вход admin/admin удалён)")
+            AuthResult.Ok(AppUser(k, ADMIN_NAME, ADMIN_NAME, "admin", "active"))
+        } catch (e: Exception) {
+            if (e.message?.contains("done") == true || e.cause?.message?.contains("done") == true)
+                AuthResult.Fail("Администратор уже настроен. Войдите под своим Email")
+            else AuthResult.Fail("Нет связи с Firebase. Проверьте интернет и повторите")
+        }
+    }
+
+    /** Шаг 1 регистрации: Email свободен? null — да, иначе текст ошибки. */
+    suspend fun checkEmailFree(email: String): String? {
+        val k = key(email)
+        if (!validEmail(k)) return "Введите корректный Email"
+        return try {
+            if (adminLogin() == null) return "Администратор ещё не настроен. Регистрация пока закрыта"
+            if (fs.collection("users").document(k).get().awaitIt().exists()) "Пользователь с таким Email уже существует"
+            else null
+        } catch (e: Exception) {
+            "Нет связи с Firebase. Проверьте интернет и повторите"
+        }
+    }
+
+    /**
+     * Шаг 3 регистрации (Email уже подтверждён кодом). Должность и роль здесь НЕ выбираются:
+     * новый сотрудник всегда «worker» без должности, статус pending — должность назначает только администратор.
+     */
+    suspend fun register(email: String, firstName: String, lastName: String, pw: String): AuthResult {
+        val k = key(email)
+        val f = firstName.trim().replace(Regex("\\s+"), " ")
+        val l = lastName.trim().replace(Regex("\\s+"), " ")
+        if (!validEmail(k)) return AuthResult.Fail("Введите корректный Email")
+        if (f.isEmpty() || l.isEmpty()) return AuthResult.Fail("Введите имя и фамилию")
+        if (pw.length < 6) return AuthResult.Fail("Пароль — минимум 6 символов")
+        return try {
+            val admin = adminLogin() ?: return AuthResult.Fail("Администратор ещё не настроен. Регистрация пока закрыта")
+            val ref = fs.collection("users").document(k)
+            if (ref.get().awaitIt().exists()) return AuthResult.Fail("Пользователь с таким Email уже существует")
+            val now = System.currentTimeMillis()
+            val n = "$f $l"
             ref.set(
                 hashMapOf<String, Any>(
-                    "name" to n, "login" to k, "position" to "", "role" to "worker",
+                    "name" to n, "firstName" to f, "lastName" to l, "login" to k, "email" to k,
+                    "position" to "", "role" to "worker",
                     "status" to "pending", "passHash" to hash(k, pw), "createdAt" to now
                 )
             ).awaitIt()
-            Tasks.createApproval(k, n, now)
+            Tasks.createApproval(k, n, now, admin)
             AuthResult.Ok(AppUser(k, n, "", "worker", "pending"))
         } catch (e: Exception) {
             AuthResult.Fail("Нет связи с Firebase. Проверьте интернет и повторите")
@@ -226,13 +284,13 @@ object Tasks {
         Journal.log("Задачи", "Задача «$title» → ${to.name}")
     }
 
-    fun createApproval(login: String, name: String, now: Long) {
+    fun createApproval(login: String, name: String, now: Long, admin: String) {
         fs.collection("tasks").document("approve_$login").set(
             hashMapOf<String, Any>(
                 "title" to "Новый работник: $name",
                 "text" to "Назначьте должность и подтвердите регистрацию",
                 "type" to "approve", "action" to "",
-                "assignee" to Users.ADMIN_LOGIN, "assigneeName" to Users.ADMIN_NAME, "assigneePos" to Users.ADMIN_NAME,
+                "assignee" to admin, "assigneeName" to Users.ADMIN_NAME, "assigneePos" to Users.ADMIN_NAME,
                 "createdBy" to "system", "createdByName" to "Система", "createdAt" to now,
                 "status" to "open", "doneAt" to 0L, "doneAuto" to false, "doneByName" to "", "target" to login
             )

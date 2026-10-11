@@ -49,16 +49,46 @@ private fun Appear(delayMs: Int, modifier: Modifier = Modifier, content: @Compos
     }) { content() }
 }
 
+private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, SETUP }
+
+@Composable
+private fun Field(
+    value: String, onChange: (String) -> Unit, label: String,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    password: Boolean = false, show: Boolean = false, onToggle: (() -> Unit)? = null,
+    keyboard: KeyboardType = KeyboardType.Text, ime: ImeAction = ImeAction.Next,
+    focus: androidx.compose.ui.focus.FocusManager, onDone: () -> Unit = {}
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        singleLine = true,
+        shape = RoundedCornerShape(16.dp),
+        visualTransformation = if (password && !show) PasswordVisualTransformation() else VisualTransformation.None,
+        trailingIcon = if (password && onToggle != null) {
+            { TextButton(onClick = onToggle) { Text(if (show) "Скрыть" else "Показать") } }
+        } else null,
+        keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else keyboard, imeAction = ime),
+        keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }, onDone = { onDone() }),
+        modifier = modifier
+    )
+}
+
 @Composable
 fun LoginScreen(onSuccess: (AppUser) -> Unit) {
-    var register by rememberSaveable { mutableStateOf(false) }
-    var name by rememberSaveable { mutableStateOf("") }
+    var mode by rememberSaveable { mutableStateOf(Mode.LOGIN) }
     var login by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf("") }      // регистрация и настройка администратора
+    var code by rememberSaveable { mutableStateOf("") }
+    var firstName by rememberSaveable { mutableStateOf("") }
+    var lastName by rememberSaveable { mutableStateOf("") }
     var password2 by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var show by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var info by remember { mutableStateOf<String?>(null) }
     val ctx = LocalContext.current
     val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
@@ -70,6 +100,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
 
     fun fail(text: String) {
         error = text
+        info = null
         scope.launch {
             repeat(3) {
                 shake.animateTo(14f, tween(55))
@@ -79,23 +110,86 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
         }
     }
 
+    fun go(m: Mode) {
+        mode = m
+        error = null
+        info = null
+        password = ""
+        password2 = ""
+        show = false
+    }
+
+    fun finish(u: AppUser) {
+        focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
+        onSuccess(u)
+    }
+
     fun submit() {
         if (busy) return
-        if (register && password != password2) {
-            fail("Пароли не совпадают")
-            return
-        }
-        busy = true
         error = null
-        scope.launch {
-            val r = if (register) Users.register(name, login, password) else Users.signIn(login, password)
-            busy = false
-            when (r) {
-                is AuthResult.Ok -> {
-                    focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
-                    onSuccess(r.user)
+        info = null
+        when (mode) {
+            Mode.LOGIN -> {
+                busy = true
+                scope.launch {
+                    val r = Users.signIn(login, password)
+                    busy = false
+                    when (r) {
+                        is AuthResult.Ok -> finish(r.user)
+                        is AuthResult.Setup -> {
+                            // верный одноразовый вход: просим задать настоящие email и пароль администратора
+                            email = Users.ADMIN_EMAIL
+                            go(Mode.SETUP)
+                            info = "Вход admin/admin сработал один раз. Задайте свой Email и пароль — после этого admin/admin будет удалён."
+                        }
+                        is AuthResult.Fail -> fail(r.text)
+                    }
                 }
-                is AuthResult.Fail -> fail(r.text)
+            }
+            Mode.SETUP -> {
+                if (password != password2) { fail("Пароли не совпадают"); return }
+                busy = true
+                scope.launch {
+                    val r = Users.setupAdmin(email, password)
+                    busy = false
+                    when (r) {
+                        is AuthResult.Ok -> finish(r.user)
+                        is AuthResult.Fail -> fail(r.text)
+                        is AuthResult.Setup -> {}
+                    }
+                }
+            }
+            Mode.REG_EMAIL -> {
+                busy = true
+                scope.launch {
+                    val e = Users.key(email)
+                    val problem = Users.checkEmailFree(e) ?: EmailCode.send(e)
+                    busy = false
+                    if (problem != null) fail(problem)
+                    else {
+                        email = e
+                        code = ""
+                        go(Mode.REG_CODE)
+                        info = "Код отправлен на $e"
+                    }
+                }
+            }
+            Mode.REG_CODE -> {
+                val problem = EmailCode.check(Users.key(email), code)
+                if (problem != null) fail(problem) else { go(Mode.REG_DATA); info = "Email подтверждён" }
+            }
+            Mode.REG_DATA -> {
+                if (password != password2) { fail("Пароли не совпадают"); return }
+                busy = true
+                scope.launch {
+                    val r = Users.register(email, firstName, lastName, password)
+                    busy = false
+                    when (r) {
+                        is AuthResult.Ok -> finish(r.user)
+                        is AuthResult.Fail -> fail(r.text)
+                        is AuthResult.Setup -> {}
+                    }
+                }
             }
         }
     }
@@ -125,71 +219,72 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
             Appear(600) {
                 Text("v$ver", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Spacer(Modifier.height(if (keyboard) 12.dp else 28.dp))
+            Spacer(Modifier.height(if (keyboard) 8.dp else 20.dp))
+
+            val title = when (mode) {
+                Mode.LOGIN -> ""
+                Mode.SETUP -> "Настройка администратора"
+                Mode.REG_EMAIL -> "Регистрация — шаг 1 из 3"
+                Mode.REG_CODE -> "Регистрация — шаг 2 из 3"
+                Mode.REG_DATA -> "Регистрация — шаг 3 из 3"
+            }
+            if (title.isNotEmpty()) {
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+            }
 
             Column(Modifier.fillMaxWidth().offset { IntOffset(shake.value.roundToInt(), 0) }) {
-                if (register) {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it; error = null },
-                        label = { Text("Имя и фамилия") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(12.dp))
+                when (mode) {
+                    Mode.LOGIN -> {
+                        Appear(800, Modifier.fillMaxWidth()) {
+                            Field(login, { login = it; error = null }, "Email / Логин", keyboard = KeyboardType.Email, focus = focus)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Appear(900, Modifier.fillMaxWidth()) {
+                            Field(
+                                password, { password = it; error = null }, "Пароль",
+                                password = true, show = show, onToggle = { show = !show },
+                                ime = ImeAction.Done, focus = focus, onDone = { submit() }
+                            )
+                        }
+                    }
+                    Mode.SETUP -> {
+                        Field(email, { email = it; error = null }, "Email администратора", keyboard = KeyboardType.Email, focus = focus)
+                        Spacer(Modifier.height(12.dp))
+                        Field(password, { password = it; error = null }, "Новый пароль", password = true, show = show, onToggle = { show = !show }, focus = focus)
+                        Spacer(Modifier.height(12.dp))
+                        Field(password2, { password2 = it; error = null }, "Повторите пароль", password = true, show = show, ime = ImeAction.Done, focus = focus, onDone = { submit() })
+                    }
+                    Mode.REG_EMAIL -> {
+                        Field(email, { email = it; error = null }, "Email", keyboard = KeyboardType.Email, ime = ImeAction.Done, focus = focus, onDone = { submit() })
+                    }
+                    Mode.REG_CODE -> {
+                        Field(
+                            code, { code = it.filter(Char::isDigit).take(6); error = null }, "Код из Email (6 цифр)",
+                            keyboard = KeyboardType.Number, ime = ImeAction.Done, focus = focus, onDone = { submit() }
+                        )
+                    }
+                    Mode.REG_DATA -> {
+                        Field(firstName, { firstName = it; error = null }, "Имя", focus = focus)
+                        Spacer(Modifier.height(12.dp))
+                        Field(lastName, { lastName = it; error = null }, "Фамилия", focus = focus)
+                        Spacer(Modifier.height(12.dp))
+                        Field(password, { password = it; error = null }, "Пароль (минимум 6 символов)", password = true, show = show, onToggle = { show = !show }, focus = focus)
+                        Spacer(Modifier.height(12.dp))
+                        Field(password2, { password2 = it; error = null }, "Повторите пароль", password = true, show = show, ime = ImeAction.Done, focus = focus, onDone = { submit() })
+                    }
                 }
-                Appear(800, Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = login,
-                        onValueChange = { login = it; error = null },
-                        label = { Text("Логин") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Appear(900, Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it; error = null },
-                        label = { Text("Пароль") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            TextButton(onClick = { show = !show }) { Text(if (show) "Скрыть" else "Показать") }
-                        },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = if (register) ImeAction.Next else ImeAction.Done
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onNext = { focus.moveFocus(FocusDirection.Down) },
-                            onDone = { submit() }
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                if (register) {
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = password2,
-                        onValueChange = { password2 = it; error = null },
-                        label = { Text("Повторите пароль") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { submit() }),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+            }
+            if (mode == Mode.REG_DATA) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Должность вам назначит администратор после проверки.",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            info?.let {
+                Spacer(Modifier.height(10.dp))
+                Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
             }
             error?.let {
                 Spacer(Modifier.height(10.dp))
@@ -204,15 +299,45 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     modifier = Modifier.fillMaxWidth().height(54.dp)
                 ) {
                     if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.onPrimary)
-                    else Text(if (register) "Зарегистрироваться" else "Войти", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    else Text(
+                        when (mode) {
+                            Mode.LOGIN -> "Войти"
+                            Mode.SETUP -> "Сохранить и войти"
+                            Mode.REG_EMAIL -> "Получить код"
+                            Mode.REG_CODE -> "Подтвердить код"
+                            Mode.REG_DATA -> "Завершить регистрацию"
+                        },
+                        fontSize = 17.sp, fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
             Spacer(Modifier.height(4.dp))
             Appear(1100, Modifier.fillMaxWidth()) {
-                TextButton(
-                    onClick = { register = !register; error = null },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(if (register) "Уже есть аккаунт? Войти" else "Нет аккаунта? Зарегистрироваться") }
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    when (mode) {
+                        Mode.LOGIN -> TextButton(onClick = { go(Mode.REG_EMAIL) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Нет аккаунта? Зарегистрироваться")
+                        }
+                        Mode.REG_CODE -> {
+                            TextButton(
+                                enabled = !busy,
+                                onClick = {
+                                    busy = true
+                                    scope.launch {
+                                        val p = EmailCode.send(Users.key(email))
+                                        busy = false
+                                        if (p != null) fail(p) else { error = null; info = "Новый код отправлен на ${Users.key(email)}" }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Отправить код ещё раз") }
+                            TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) { Text("Уже есть аккаунт? Войти") }
+                        }
+                        else -> TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (mode == Mode.SETUP) "Назад" else "Уже есть аккаунт? Войти")
+                        }
+                    }
+                }
             }
         }
 

@@ -103,7 +103,8 @@ fun PendingScreen(user: AppUser, onApproved: (AppUser) -> Unit, onLogout: () -> 
             Text("Ждём подтверждения", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
             Text(
-                "${user.name}, администратор получил уведомление: он назначит вам должность и подтвердит вход. " +
+                "${user.name}, ваш Email подтверждён. Администратор получил уведомление: только он назначает должности — " +
+                    "он назначит вам должность и подтвердит вход. " +
                     "Это окно откроется само, как только вас подтвердят.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center
             )
