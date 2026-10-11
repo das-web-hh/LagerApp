@@ -25,7 +25,7 @@ private fun Tile(t: TileSpec, modifier: Modifier) {
     val shape = RoundedCornerShape(28.dp)
     Card(
         onClick = t.onClick,
-        modifier = modifier.height(118.dp),
+        modifier = modifier.height(100.dp),
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
@@ -35,10 +35,10 @@ private fun Tile(t: TileSpec, modifier: Modifier) {
             Icon(
                 t.icon, contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                modifier = Modifier.size(92.dp).align(Alignment.CenterEnd).offset(x = 22.dp)
+                modifier = Modifier.size(78.dp).align(Alignment.CenterEnd).offset(x = 18.dp)
             )
             Column(
-                Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp),
+                Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 if (t.count > 0) {

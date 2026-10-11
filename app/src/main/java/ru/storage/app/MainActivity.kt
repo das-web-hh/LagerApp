@@ -180,7 +180,7 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (selected) {
-                0 -> HomeScreen(prefs)
+                0 -> HomeScreen(prefs, profile.firstName) { selected = it }
                 1 -> ReceiveScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
                 2 -> OtherScreen(prefs)
                 else -> MoreScreen(profile, prefs, onLogout)

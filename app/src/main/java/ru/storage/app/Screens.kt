@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
@@ -49,42 +50,6 @@ fun Placeholder(title: String) {
     }
 }
 
-private val homeSections = listOf(
-    "Поиск",
-    "История",
-    "Задачи",
-    "Чат"
-)
-
-@Composable
-fun HomeScreen(prefs: Prefs) {
-    var section by rememberSaveable { mutableStateOf<String?>(null) }
-    val current = section
-    val hctx = LocalContext.current
-    LaunchedEffect(Unit) {
-        InvoiceProfiles.load(hctx)
-        try { withContext(Dispatchers.IO) { InvoiceProfiles.refresh(hctx) } } catch (e: Exception) { }
-    }
-
-    when {
-        current == "Поиск" -> SearchScreen(prefs) { section = null }
-        current == "История" -> HistoryScreen { section = null }
-        current != null -> SectionScreen(current) { section = null }
-        else -> Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
-        ) {
-            homeSections.forEach { name ->
-                FilledTonalButton(
-                    onClick = { section = name },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                ) {
-                    Text(name)
-                }
-            }
-        }
-    }
-}
-
 /** Окно «Прочее»: шаблоны накладных, каталог товаров, инфо. */
 @Composable
 fun OtherScreen(prefs: Prefs) {
@@ -95,6 +60,7 @@ fun OtherScreen(prefs: Prefs) {
     when {
         current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
         current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
+        current == "История" -> HistoryScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Прочее", style = MaterialTheme.typography.headlineMedium)
@@ -103,6 +69,7 @@ fun OtherScreen(prefs: Prefs) {
                 listOf(
                     TileSpec("Шаблоны накладных", Icons.Default.Edit, InvoiceProfiles.newCount) { section = "Шаблоны накладных" },
                     TileSpec("Каталог товаров", Icons.Default.Menu) { section = "Каталог товаров" },
+                    TileSpec("История", Icons.Default.DateRange) { section = "История" },
                     TileSpec("Инфо", Icons.Default.Info) { section = "Инфо" }
                 )
             )
