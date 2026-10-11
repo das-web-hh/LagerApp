@@ -16,6 +16,21 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Шаблоны накладных поставщиков
+    match /invoice_profiles/{id} {
+      allow read, write: if true;
+    }
+
+    // Посылки Post paket (данные с этикеток DHL)
+    match /shipments/{id} {
+      allow read, write: if true;
+    }
+
+    // Операции DHL Postwagen
+    match /wagen_ops/{id} {
+      allow read, write: if true;
+    }
+
     // Настройки аккаунтов (документ = логин)
     match /settings/{id} {
       allow read, write: if true;

@@ -10,20 +10,35 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import java.io.File
+import java.util.UUID
 import kotlin.concurrent.thread
 
 data class IncomingFile(val name: String, val path: String)
 
-/** Файл, пришедший через «Поделиться» / «Открыть через приложение». */
+/** Файлы, пришедшие через «Поделиться» / «Открыть через приложение» / выбор из «Приёма». */
 object Incoming {
-    var file by mutableStateOf<IncomingFile?>(null)
-    var mode by mutableStateOf<String?>(null) // null — выбор, "auto" — автоприём, "name" — приём по имени
+    /** Файлы, которым ещё не выбран способ приёма (спрашиваем по очереди). */
+    val pending = mutableStateListOf<IncomingFile>()
 
-    fun clear() {
-        file = null
-        mode = null
+    /** Партия, открытая на экране сейчас. null — обычный интерфейс; все партии при этом продолжают жить в AutoReceiveHolder. */
+    var openPath by mutableStateOf<String?>(null)
+
+    /** Создать партию (или вернуться к уже существующей) и, если open, открыть её. */
+    fun start(ctx: Context, f: IncomingFile, mode: String, open: Boolean = true) {
+        pending.remove(f)
+        AutoReceiveHolder.create(ctx.applicationContext, f, mode == "name")
+        if (open) openPath = f.path
+    }
+
+    fun discardPending(f: IncomingFile) {
+        pending.remove(f)
+        try {
+            File(f.path).delete()
+        } catch (e: Exception) {
+        }
     }
 
     private fun displayName(ctx: Context, uri: Uri): String? = try {
@@ -34,17 +49,21 @@ object Incoming {
         null
     } ?: uri.lastPathSegment?.substringAfterLast('/')
 
-    /** Копия файла во внутреннем кэше (доступ по content:// может пропасть). Вызывать не в главном потоке. */
-    fun accept(ctx: Context, uri: Uri, startMode: String? = null) {
+    /**
+     * Копия файла во внутреннем кэше (доступ по content:// может пропасть). Вызывать не в главном потоке.
+     * У каждого файла своя папка — два файла с одинаковым именем не затирают друг друга, партии не путаются.
+     * startMode == null — спросить способ приёма; "auto"/"name" — сразу создать партию (open — открыть её на экране).
+     */
+    fun accept(ctx: Context, uri: Uri, startMode: String? = null, open: Boolean = true) {
         try {
             val app = ctx.applicationContext
             val name = displayName(app, uri) ?: "file.pdf"
-            val dir = File(app.cacheDir, "incoming").also { it.mkdirs() }
+            val dir = File(app.cacheDir, "incoming/" + UUID.randomUUID().toString()).also { it.mkdirs() }
             val target = File(dir, name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
             val ins = app.contentResolver.openInputStream(uri) ?: return
             ins.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
-            mode = startMode
-            file = IncomingFile(name, target.path)
+            val f = IncomingFile(name, target.path)
+            if (startMode == null) pending.add(f) else start(app, f, startMode, open)
         } catch (e: Exception) {
         }
     }
@@ -54,35 +73,42 @@ object Incoming {
         if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
         else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
 
+    @Suppress("DEPRECATION")
+    private fun streamList(intent: Intent): List<Uri> =
+        (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        else intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)) ?: emptyList()
+
     fun handleIntent(ctx: Context, intent: Intent?) {
         if (intent == null) return
-        val uri: Uri? = when (intent.action) {
-            Intent.ACTION_SEND -> streamExtra(intent)
-            Intent.ACTION_VIEW -> intent.data
-            else -> null
+        val uris: List<Uri> = when (intent.action) {
+            Intent.ACTION_SEND -> listOfNotNull(streamExtra(intent))
+            Intent.ACTION_SEND_MULTIPLE -> streamList(intent)
+            Intent.ACTION_VIEW -> listOfNotNull(intent.data)
+            else -> emptyList()
         }
-        if (uri != null) thread { accept(ctx, uri) }
+        if (uris.isNotEmpty()) thread { uris.forEach { accept(ctx, it) } }
     }
 }
 
 @Composable
 fun IncomingChoiceDialog(f: IncomingFile) {
+    val ctx = LocalContext.current
     AlertDialog(
-        onDismissRequest = { Incoming.clear() },
+        onDismissRequest = { Incoming.discardPending(f) },
         title = { Text("Что сделать с файлом?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(f.name, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(4.dp))
-                Button(onClick = { Incoming.mode = "auto" }, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { Incoming.start(ctx, f, "auto") }, modifier = Modifier.fillMaxWidth()) {
                     Text("Автоприём")
                 }
-                OutlinedButton(onClick = { Incoming.mode = "name" }, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { Incoming.start(ctx, f, "name") }, modifier = Modifier.fillMaxWidth()) {
                     Text("Приём по имени")
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { Incoming.clear() }) { Text("Отмена") } }
+        confirmButton = { TextButton(onClick = { Incoming.discardPending(f) }) { Text("Отмена") } }
     )
 }
 

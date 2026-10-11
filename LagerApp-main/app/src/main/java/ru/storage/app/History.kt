@@ -144,6 +144,8 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
     val invoices = remember { mutableStateListOf<String>() }
     var error by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
+    var histId by remember { mutableStateOf<String?>(null) }
+    var notInCatalog by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) {
         val r = withContext(Dispatchers.IO) { db.getReceipt(id) }
@@ -155,6 +157,13 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
             photos.clear(); photos.addAll(r.photos)
             invoices.clear(); invoices.addAll(r.invoices)
         }
+    }
+
+    // нажатие на название товара — история приёма этого товара (без правки)
+    val hid = histId
+    if (hid != null) {
+        ProductHistoryScreen(hid) { histId = null }
+        return
     }
 
     BackHandler(onBack = onClose)
@@ -177,8 +186,13 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         Text("Товары", style = MaterialTheme.typography.titleSmall)
         items.toList().forEach { l ->
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(l.name)
+                Column(Modifier.weight(1f).clickable {
+                    scope.launch {
+                        val pid = l.productId.ifEmpty { withContext(Dispatchers.IO) { db.findByName(l.name)?.id ?: "" } }
+                        if (pid.isEmpty()) notInCatalog = true else histId = pid
+                    }
+                }) {
+                    Text(l.name, color = MaterialTheme.colorScheme.primary)
                     if (l.plan.isNotBlank()) {
                         Text(
                             "план ${l.plan}" + if (l.defect.isNotBlank() && l.defect != "0") " · брак ${l.defect}" else "",
@@ -251,6 +265,15 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Удалить партию")
         }
+    }
+
+    if (notInCatalog) {
+        AlertDialog(
+            onDismissRequest = { notInCatalog = false },
+            title = { Text("Товар не найден") },
+            text = { Text("Этого товара нет в каталоге, истории по нему нет.") },
+            confirmButton = { Button(onClick = { notInCatalog = false }) { Text("Понятно") } }
+        )
     }
 
     if (confirmDelete) {

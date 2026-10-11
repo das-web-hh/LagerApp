@@ -8,17 +8,129 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-/** Настройки ИИ — только на этом телефоне (ключ в Firebase не отправляется). */
+/** Один сохранённый API-ключ (провайдер + ключ + при необходимости модель и адрес). */
+data class AiKey(
+    val id: String,
+    val label: String,
+    val provider: String,
+    val key: String,
+    val model: String = "",
+    val base: String = ""
+)
+
+/** Список ключей ИИ — только на этом телефоне. Один из них активный: им идёт распознавание. */
+object AiKeys {
+    private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("ai", Context.MODE_PRIVATE)
+
+    fun newId(): String = java.util.UUID.randomUUID().toString()
+
+    fun providerName(p: String): String = when (p) {
+        "gemini" -> "Gemini (Google)"
+        "openai" -> "OpenAI-совместимый"
+        else -> "Claude (Anthropic)"
+    }
+
+    /** Подпись для списков: название (или провайдер) и последние 4 символа ключа. */
+    fun describe(k: AiKey): String {
+        val name = k.label.ifBlank { providerName(k.provider) }
+        val tail = if (k.key.length >= 4) " ···" + k.key.takeLast(4) else ""
+        return name + tail
+    }
+
+    private fun toJson(l: List<AiKey>): String {
+        val arr = JSONArray()
+        l.forEach {
+            arr.put(
+                JSONObject().put("id", it.id).put("label", it.label).put("provider", it.provider)
+                    .put("key", it.key).put("model", it.model).put("base", it.base)
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun fromJson(s: String?): List<AiKey> {
+        if (s.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = JSONArray(s)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val k = o.optString("key").trim()
+                if (k.isEmpty()) null
+                else AiKey(
+                    o.optString("id").ifBlank { newId() }, o.optString("label"),
+                    o.optString("provider", "claude"), k, o.optString("model"), o.optString("base")
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Старая одиночная настройка (provider/key/model/base) превращается в первый ключ списка. */
+    private fun migrate(ctx: Context) {
+        val p = sp(ctx)
+        if (p.contains("keys")) return
+        val old = (p.getString("key", "") ?: "").trim()
+        if (old.isEmpty()) {
+            p.edit().putString("keys", "[]").apply()
+            return
+        }
+        val k = AiKey(
+            newId(), "", p.getString("provider", "claude") ?: "claude", old,
+            (p.getString("model", "") ?: "").trim(), (p.getString("base", "") ?: "").trim()
+        )
+        p.edit().putString("keys", toJson(listOf(k))).putString("active", k.id).apply()
+    }
+
+    fun list(ctx: Context): List<AiKey> {
+        migrate(ctx)
+        return fromJson(sp(ctx).getString("keys", "[]"))
+    }
+
+    fun active(ctx: Context): AiKey? {
+        val l = list(ctx)
+        val id = sp(ctx).getString("active", "") ?: ""
+        return l.firstOrNull { it.id == id } ?: l.firstOrNull()
+    }
+
+    fun activeId(ctx: Context): String = active(ctx)?.id ?: ""
+
+    fun setActive(ctx: Context, id: String) {
+        sp(ctx).edit().putString("active", id).apply()
+    }
+
+    /** Добавить ключ в настройки (по умолчанию сразу сделать активным). */
+    fun add(ctx: Context, k: AiKey, makeActive: Boolean = true) {
+        val l = list(ctx) + k
+        val e = sp(ctx).edit().putString("keys", toJson(l))
+        if (makeActive || l.size == 1) e.putString("active", k.id)
+        e.apply()
+    }
+
+    fun update(ctx: Context, k: AiKey) {
+        val l = list(ctx).map { if (it.id == k.id) k else it }
+        sp(ctx).edit().putString("keys", toJson(l)).apply()
+    }
+
+    fun remove(ctx: Context, id: String) {
+        val l = list(ctx).filter { it.id != id }
+        val e = sp(ctx).edit().putString("keys", toJson(l))
+        if (activeId(ctx) == id) e.putString("active", l.firstOrNull()?.id ?: "")
+        e.apply()
+    }
+}
+
+/** Настройки ИИ — только на этом телефоне (ключи в Firebase не отправляются). */
 object AiCfg {
     private fun sp(ctx: Context) = ctx.getSharedPreferences("ai", Context.MODE_PRIVATE)
 
-    fun provider(ctx: Context): String = sp(ctx).getString("provider", "claude") ?: "claude"
-    fun key(ctx: Context): String = (sp(ctx).getString("key", "") ?: "").trim()
+    fun provider(ctx: Context): String = AiKeys.active(ctx)?.provider ?: "claude"
+    fun key(ctx: Context): String = AiKeys.active(ctx)?.key?.trim() ?: ""
     fun baseUrl(ctx: Context): String =
-        (sp(ctx).getString("base", "") ?: "").trim().ifBlank { "https://api.openai.com/v1" }
+        (AiKeys.active(ctx)?.base ?: "").trim().ifBlank { "https://api.openai.com/v1" }
     fun timeoutSec(ctx: Context): Int = sp(ctx).getInt("timeout", 60)
     fun attempts(ctx: Context): Int = sp(ctx).getInt("attempts", 3)
-    fun rawModel(ctx: Context): String = (sp(ctx).getString("model", "") ?: "").trim()
+    fun rawModel(ctx: Context): String = (AiKeys.active(ctx)?.model ?: "").trim()
     fun model(ctx: Context): String = rawModel(ctx).ifBlank { defaultModel(provider(ctx)) }
     fun ready(ctx: Context): Boolean = key(ctx).isNotEmpty()
 
@@ -28,10 +140,8 @@ object AiCfg {
         else -> "claude-haiku-5-5"
     }
 
-    fun save(ctx: Context, provider: String, key: String, model: String, base: String, timeout: Int, attempts: Int) {
-        sp(ctx).edit().putString("provider", provider).putString("key", key.trim())
-            .putString("model", model.trim()).putString("base", base.trim())
-            .putInt("timeout", timeout).putInt("attempts", attempts).apply()
+    fun saveCommon(ctx: Context, timeout: Int, attempts: Int) {
+        sp(ctx).edit().putInt("timeout", timeout).putInt("attempts", attempts).apply()
     }
 }
 
@@ -47,6 +157,9 @@ data class AiItem(
     val qtyCrossed: Boolean = false
 )
 data class PageResult(val sender: String, val order: String, val items: List<AiItem>)
+
+/** Лёгкий первый запрос: только отправитель и номер заказа (без товаров). */
+data class IdResult(val sender: String, val order: String)
 
 object Ai {
     private val ORDER = Regex("[ЕеEe][БбBb6]\\s*[-–]?\\s*(\\d{7})")
@@ -80,7 +193,7 @@ object Ai {
     }
 
     /** Один запрос к ИИ: текст + (необязательно) картинка. Возвращает текст ответа. */
-    fun call(ctx: Context, prompt: String, png: ByteArray?): String {
+    fun call(ctx: Context, prompt: String, png: ByteArray?, json: Boolean = png != null): String {
         val provider = AiCfg.provider(ctx)
         val key = AiCfg.key(ctx)
         val model = AiCfg.model(ctx)
@@ -94,7 +207,7 @@ object Ai {
                     parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", mime).put("data", b64)))
                 }
                 val cfg = JSONObject().put("temperature", 0)
-                if (png != null) cfg.put("responseMimeType", "application/json")
+                if (json) cfg.put("responseMimeType", "application/json")
                 val body = JSONObject()
                     .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
                     .put("generationConfig", cfg)
@@ -149,7 +262,7 @@ object Ai {
         }
     }
 
-    private fun prompt(page: Int, total: Int) = """
+    private fun prompt(page: Int, total: Int, rules: String = "") = """
         This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
         The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
         A warehouse worker has checked the printed lines with a pen (ticks, crosses, strike-throughs, handwritten numbers). Read these pen marks carefully: pen marks are often in blue (or other colored) ink, the printed text is black.
@@ -169,6 +282,15 @@ object Ai {
         - hand_qty: if a quantity is handwritten with a pen next to this line or its quantity (for example "9 stk", "15"), give that number only; otherwise "".
         - Ignore handwritten notes that do not belong to a line: names, dates, pallet counts like "6P" or "7P", signatures, scribbles, arrows.
         If the page has no goods lines, use an empty items array.
+    """.trimIndent() + (if (rules.isBlank()) "" else "\nNotes about the layout of THIS supplier's documents (checked by the warehouse manager; they are more important than the general rules above):\n" + rules.trim())
+
+    private fun idPrompt(page: Int, total: Int) = """
+        This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip / invoice). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
+        The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
+        Find ONLY two things on THIS page. Do not read the goods table. Answer with JSON only (no markdown, no comments):
+        {"sender": "...", "order_number": "..."}
+        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. If it is not on this page, use "none".
+        - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"). If it is not on this page, use "none".
     """.trimIndent()
 
     /** Достаём JSON из ответа; если ответ оборвался на длинной таблице — закрываем скобки. */
@@ -186,9 +308,16 @@ object Ai {
         throw RuntimeException("ИИ вернул неполный JSON")
     }
 
+    /** Быстрая проверка листа: только отправитель и номер заказа. Бросает исключение при ошибке/таймауте. */
+    fun identify(ctx: Context, png: ByteArray, page: Int, total: Int): IdResult {
+        val o = parseJson(call(ctx, idPrompt(page, total), png))
+        val sender = o.optString("sender", "none").trim().ifBlank { "none" }
+        return IdResult(sender, normalizeOrder(o.optString("order_number", "none")))
+    }
+
     /** Распознать один лист. Бросает исключение при ошибке/таймауте — вызывающий повторит. */
-    fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int): PageResult {
-        val text = call(ctx, prompt(page, total), png)
+    fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int, rules: String = ""): PageResult {
+        val text = call(ctx, prompt(page, total, rules), png)
         val o = parseJson(text)
         val items = ArrayList<AiItem>()
         val arr = o.optJSONArray("items")

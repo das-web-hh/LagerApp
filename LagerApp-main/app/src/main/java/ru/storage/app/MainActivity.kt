@@ -14,7 +14,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -24,12 +25,16 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
         Ui.load(applicationContext)
+        Speaker.init(applicationContext)
         setContent {
             AppTheme { AppRoot() }
         }
@@ -81,30 +86,42 @@ fun AppRoot() {
             }
         }
     }
+    // после верного пароля: сначала анимация закрывает экран входа, и только потом открывается главный экран
+    var splash by remember { mutableStateOf(false) }
+    var pendingLogin by remember { mutableStateOf("") }
+    Box(Modifier.fillMaxSize()) {
     if (loggedIn) {
-        val inc = Incoming.file
-        when {
-            inc != null && Incoming.mode == "auto" -> AutoReceiveScreen(
-                inc, "${profile.firstName} ${profile.lastName}".trim(), "auto"
-            ) { Incoming.clear() }
-            inc != null && Incoming.mode == "name" -> AutoReceiveScreen(
-                inc, "${profile.firstName} ${profile.lastName}".trim(), "name"
-            ) { Incoming.clear() }
-            else -> {
-                MainScreen(prefs = prefs, profile = profile, onLogout = {
-                    sessionSp.edit().remove("login").apply()
-                    loggedIn = false
-                })
-                if (inc != null) IncomingChoiceDialog(inc)
-            }
+        val receiver = "${profile.firstName} ${profile.lastName}".trim()
+        AutoReceiveHolder.receiver = receiver
+        val openJob = Incoming.openPath?.let { AutoReceiveHolder.find(it) }
+        if (openJob != null) {
+            // свёрнутые партии остаются в AutoReceiveHolder и продолжают работать
+            AutoReceiveScreen(
+                openJob.file, receiver, if (openJob.nameMode) "name" else "auto"
+            ) { Incoming.openPath = null }
+        } else {
+            MainScreen(prefs = prefs, profile = profile, onLogout = {
+                sessionSp.edit().remove("login").apply()
+                loggedIn = false
+            })
+            Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
         }
     } else {
         LoginScreen(onSuccess = {
-            val l = it.lowercase()
-            sessionSp.edit().putString("login", l).apply()
-            userLogin = l
-            loggedIn = true
+            pendingLogin = it.lowercase()
+            splash = true
         })
+    }
+    if (splash) {
+        WelcomeSplash(
+            onCovered = {
+                sessionSp.edit().putString("login", pendingLogin).apply()
+                userLogin = pendingLogin
+                loggedIn = true
+            },
+            onFinished = { splash = false }
+        )
+    }
     }
 }
 
@@ -114,12 +131,20 @@ private data class Tab(val title: String, val icon: ImageVector)
 fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     val tabs = listOf(
         Tab("Главная", Icons.Default.Home),
-        Tab("Приём", Icons.Default.Add),
-        Tab("Отправка", Icons.AutoMirrored.Filled.Send),
-        Tab("Профиль", Icons.Default.Person)
+        Tab("Работа", Icons.Default.Add),
+        Tab("Прочее", Icons.Default.Menu),
+        Tab("Еще", Icons.Default.Settings)
     )
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val ctx = LocalContext.current
+    // снимки этикеток Post paket живут на телефоне двое суток; незаконченный анализ этикеток добирается
+    LaunchedEffect(Unit) {
+        LabelProcessor.resume(ctx)
+        while (true) {
+            withContext(Dispatchers.IO) { try { SendRetention.sweep(ctx) } catch (e: Exception) { } }
+            delay(60 * 60 * 1000L)
+        }
+    }
     var lastBack by remember { mutableLongStateOf(0L) }
     // Системная «Назад»: с других вкладок — на главную; с главной — выход только двойным нажатием
     BackHandler {
@@ -145,7 +170,19 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                     NavigationBarItem(
                         selected = selected == i,
                         onClick = { selected = i },
-                        icon = { Icon(tab.icon, contentDescription = tab.title) },
+                        icon = {
+                            if (i == 1) {
+                                val n = AutoReceiveHolder.jobs.count { !it.saved }
+                                BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
+                                    Icon(tab.icon, contentDescription = tab.title)
+                                }
+                            } else if (i == 2) {
+                                val n = InvoiceProfiles.newCount
+                                BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
+                                    Icon(tab.icon, contentDescription = tab.title)
+                                }
+                            } else Icon(tab.icon, contentDescription = tab.title)
+                        },
                         label = { Text(tab.title) }
                     )
                 }
@@ -154,10 +191,10 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (selected) {
-                0 -> HomeScreen(prefs)
+                0 -> HomeScreen(prefs, profile.firstName) { selected = it }
                 1 -> ReceiveScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
-                2 -> Placeholder("Отправка")
-                else -> ProfileScreen(profile, prefs, onLogout)
+                2 -> OtherScreen(prefs)
+                else -> MoreScreen(profile, prefs, onLogout)
             }
         }
     }
