@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ВРЕМЕННО открыто: вход в приложении пока не через Firebase Auth.
+    // После перехода на Firebase Auth заменить `if true` на `if request.auth != null`
+    // (а для settings — на проверку, что документ принадлежит текущему пользователю).
+
+    // Каталог товаров
+    match /products/{id} {
+      allow read, write: if true;
+    }
+
+    // Приёмки (история)
+    match /receipts/{id} {
+      allow read, write: if true;
+    }
+
+    // Шаблоны накладных поставщиков
+    match /invoice_profiles/{id} {
+      allow read, write: if true;
+    }
+
+    // Посылки Post paket (данные с этикеток DHL)
+    match /shipments/{id} {
+      allow read, write: if true;
+    }
+
+    // Операции DHL Postwagen
+    match /wagen_ops/{id} {
+      allow read, write: if true;
+    }
+
+    // Настройки аккаунтов (документ = логин)
+    match /settings/{id} {
+      allow read, write: if true;
+    }
+  }
+}
