@@ -94,7 +94,8 @@ object Updater {
 
     private fun unmetered(ctx: Context): Boolean = try {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        !cm.isActiveNetworkMetered
+        val metered = cm.isActiveNetworkMetered
+        !metered
     } catch (e: Exception) {
         true
     }
