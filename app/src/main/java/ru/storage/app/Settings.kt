@@ -132,7 +132,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         Spacer(Modifier.height(8.dp))
         sections.forEach { (title, sub) ->
             Row(
-                Modifier.fillMaxWidth().clickable { onOpen(title) }.padding(vertical = 14.dp),
+                Modifier.fillMaxWidth().clickable { onOpen(title) }.padding(vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {

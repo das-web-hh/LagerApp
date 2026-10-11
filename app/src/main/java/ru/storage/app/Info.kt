@@ -419,7 +419,7 @@ fun InfoScreen(onBack: () -> Unit) {
             val shown = if (showAll) d.receipts else d.receipts.take(30)
             items(shown, key = { it.id }) { r ->
                 Row(
-                    Modifier.fillMaxWidth().clickable { openReceipt = r.id }.padding(vertical = 8.dp),
+                    Modifier.fillMaxWidth().clickable { openReceipt = r.id }.padding(vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {

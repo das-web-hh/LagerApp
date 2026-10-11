@@ -594,7 +594,7 @@ fun DocsScreen(onBack: () -> Unit) {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(shown, key = { it.id }) { d ->
                     Row(
-                        Modifier.fillMaxWidth().clickable { openId = d.id }.padding(vertical = 8.dp),
+                        Modifier.fillMaxWidth().clickable { openId = d.id }.padding(vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(48.dp)) {

@@ -99,11 +99,17 @@ object Users {
             if (k == BOOT_LOGIN) {
                 // admin/admin: пускаем на настройку только один раз, пока config/admin не создан
                 if (pw == BOOT_PASS && adminLogin() == null) return AuthResult.Setup
-                return AuthResult.Fail("Неверный логин или пароль")
+                return AuthResult.Fail(
+                    if (adminLogin() != null) "Вход admin/admin уже использован. Войдите по Email администратора"
+                    else "Неверный логин или пароль"
+                )
             }
             val snap = fs.collection("users").document(k).get().awaitIt()
-            if (!snap.exists() || snap.getString("passHash") != hash(k, pw)) {
-                AuthResult.Fail("Неверный логин или пароль")
+            val stored = snap.getString("passHash")
+            if (!snap.exists()) {
+                AuthResult.Fail("Аккаунт «$k» не найден. Проверьте Email или зарегистрируйтесь")
+            } else if (stored != hash(k, pw) && stored != hash(k, pw.trim())) {
+                AuthResult.Fail("Неверный пароль")
             } else if (snap.getBoolean("blocked") == true) {
                 AuthResult.Fail("Доступ заблокирован администратором")
             } else {
@@ -132,7 +138,7 @@ object Users {
                     usr,
                     hashMapOf<String, Any>(
                         "name" to ADMIN_NAME, "login" to k, "email" to k, "position" to ADMIN_NAME,
-                        "role" to "admin", "status" to "active", "passHash" to hash(k, pw), "createdAt" to now
+                        "role" to "admin", "status" to "active", "passHash" to hash(k, pw.trim()), "createdAt" to now
                     )
                 )
                 tr.set(cfg, hashMapOf<String, Any>("login" to k, "createdAt" to now))
@@ -181,7 +187,7 @@ object Users {
                 hashMapOf<String, Any>(
                     "name" to n, "firstName" to f, "lastName" to l, "login" to k, "email" to k,
                     "position" to "", "role" to "worker",
-                    "status" to "pending", "passHash" to hash(k, pw), "createdAt" to now
+                    "status" to "pending", "passHash" to hash(k, pw.trim()), "createdAt" to now
                 )
             ).awaitIt()
             Tasks.createApproval(k, n, now, admin)
@@ -222,6 +228,36 @@ object Users {
     fun endSession(login: String) {
         fs.collection("users").document(login).update("sess", FieldValue.increment(1))
         Journal.log("Система", "Администратор завершил сеанс: $login")
+    }
+
+    /** Смена пароля из профиля. null — готово, иначе текст ошибки. */
+    suspend fun changePassword(login: String, old: String, new: String): String? {
+        if (new.trim().length < 6) return "Новый пароль — минимум 6 символов"
+        return try {
+            val ref = fs.collection("users").document(key(login))
+            val snap = ref.get().awaitIt()
+            val stored = snap.getString("passHash")
+            if (!snap.exists() || (stored != hash(login, old) && stored != hash(login, old.trim()))) return "Текущий пароль неверный"
+            ref.update("passHash", hash(login, new.trim())).awaitIt()
+            Journal.log("Система", "Пароль изменён")
+            null
+        } catch (e: Exception) {
+            "Нет связи с Firebase. Проверьте интернет и повторите"
+        }
+    }
+
+    /** Смена имени и фамилии из профиля. null — готово, иначе текст ошибки. */
+    suspend fun updateName(login: String, firstName: String, lastName: String): String? {
+        val f = firstName.trim().replace(Regex("\\s+"), " ")
+        val l = lastName.trim().replace(Regex("\\s+"), " ")
+        if (f.isEmpty() || l.isEmpty()) return "Введите имя и фамилию"
+        return try {
+            fs.collection("users").document(key(login))
+                .update(mapOf("name" to "$f $l", "firstName" to f, "lastName" to l)).awaitIt()
+            null
+        } catch (e: Exception) {
+            "Нет связи с Firebase. Проверьте интернет и повторите"
+        }
     }
 
     /** Заблокировать / разблокировать: заблокированный сразу выходит и не может войти. */

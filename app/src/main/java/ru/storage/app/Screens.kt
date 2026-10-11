@@ -142,27 +142,6 @@ private fun ProfileRow(label: String, value: String) {
 }
 
 @Composable
-fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit, onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
-
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
-    ) {
-        Text("Профиль", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(16.dp))
-        ProfileRow("Имя", profile.firstName)
-        ProfileRow("Фамилия", profile.lastName)
-        ProfileRow("Должность", profile.position)
-        ProfileRow("Логин", Session.user?.login ?: "")
-        Spacer(Modifier.height(24.dp))
-        OutlinedButton(
-            onClick = onLogout,
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Выйти") }
-    }
-}
-
-@Composable
 fun ReceiveScreen(prefs: Prefs, receiver: String) {
     var mode by rememberSaveable { mutableStateOf<String?>(null) }
     val current = mode

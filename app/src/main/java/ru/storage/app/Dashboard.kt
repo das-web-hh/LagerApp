@@ -254,7 +254,7 @@ private fun SearchResultsList(
     Spacer(Modifier.height(4.dp))
     LazyColumn(Modifier.fillMaxSize()) {
         items(results, key = { it.id }) { p ->
-            Column(Modifier.fillMaxWidth().clickable { onOpen(p.id) }.padding(vertical = 10.dp)) {
+            Column(Modifier.fillMaxWidth().clickable { onOpen(p.id) }.padding(vertical = 6.dp)) {
                 Text(p.name, fontWeight = FontWeight.Medium)
                 val sub = listOf(
                     if (p.article.isNotBlank()) "арт. ${p.article}" else "",
@@ -311,12 +311,7 @@ private fun Dashboard(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         val dateText = SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(Date(now))
             .replaceFirstChar { it.uppercase() }
-        Text(
-            "Привет, ${userName.ifBlank { "друг" }}",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(dateText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(dateText, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -586,11 +581,11 @@ private fun RecentRow(r: Receipt, onClick: () -> Unit) {
         if (r.sender.isNotBlank() && r.orderNo.isNotBlank()) "заказ № ${r.orderNo}" else ""
     ).filter { it.isNotEmpty() }.joinToString(" · ")
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)

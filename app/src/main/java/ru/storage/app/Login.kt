@@ -49,7 +49,7 @@ private fun Appear(delayMs: Int, modifier: Modifier = Modifier, content: @Compos
     }) { content() }
 }
 
-private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, SETUP }
+private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, SETUP, PIN }
 
 @Composable
 private fun Field(
@@ -69,7 +69,7 @@ private fun Field(
         trailingIcon = if (password && onToggle != null) {
             { TextButton(onClick = onToggle) { Text(if (show) "Скрыть" else "Показать") } }
         } else null,
-        keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else keyboard, imeAction = ime),
+        keyboardOptions = KeyboardOptions(keyboardType = if (password && keyboard == KeyboardType.Text) KeyboardType.Password else keyboard, imeAction = ime),
         keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }, onDone = { onDone() }),
         modifier = modifier
     )
@@ -77,7 +77,9 @@ private fun Field(
 
 @Composable
 fun LoginScreen(onSuccess: (AppUser) -> Unit) {
-    var mode by rememberSaveable { mutableStateOf(Mode.LOGIN) }
+    val ctx = LocalContext.current
+    var mode by rememberSaveable { mutableStateOf(if (LocalAuth.pinEnabled(ctx)) Mode.PIN else Mode.LOGIN) }
+    var pin by remember { mutableStateOf("") }
     var login by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }      // регистрация и настройка администратора
@@ -89,7 +91,6 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
     var show by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
-    val ctx = LocalContext.current
     val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val shake = remember { Animatable(0f) }
@@ -116,12 +117,53 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
         info = null
         password = ""
         password2 = ""
+        pin = ""
         show = false
     }
 
     fun finish(u: AppUser) {
         focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
         onSuccess(u)
+    }
+
+    /** Вход сохранёнными логином и паролем (после PIN или отпечатка): проверка всё равно идёт в Firebase. */
+    fun quickSignIn(login: String, pw: String) {
+        busy = true
+        scope.launch {
+            val r = Users.signIn(login, pw)
+            busy = false
+            when (r) {
+                is AuthResult.Ok -> finish(r.user)
+                is AuthResult.Fail -> {
+                    val stale = r.text.startsWith("Неверный пароль") || r.text.startsWith("Аккаунт")
+                    if (stale) {
+                        LocalAuth.clearAll(ctx)
+                        go(Mode.LOGIN)
+                        fail(r.text + ". Сохранённый вход сброшен — войдите паролем")
+                    } else {
+                        pin = ""
+                        fail(r.text)
+                    }
+                }
+                is AuthResult.Setup -> {}
+            }
+        }
+    }
+
+    fun tryBiometric() {
+        val act = ctx.findFragmentActivity() ?: return
+        LocalAuth.authenticate(
+            act,
+            onOk = {
+                val c = LocalAuth.credentials(ctx)
+                if (c == null) {
+                    LocalAuth.clearAll(ctx)
+                    go(Mode.LOGIN)
+                    fail("Сохранённый вход недоступен — войдите паролем")
+                } else quickSignIn(c.first, c.second)
+            },
+            onError = { if (it != null) fail(it) }
+        )
     }
 
     fun submit() {
@@ -144,6 +186,14 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                         }
                         is AuthResult.Fail -> fail(r.text)
                     }
+                }
+            }
+            Mode.PIN -> {
+                if (pin.length != 4) { fail("Введите 4 цифры"); return }
+                when (val r = LocalAuth.checkPin(ctx, pin)) {
+                    is PinResult.Ok -> quickSignIn(r.login, r.password)
+                    is PinResult.Wrong -> { pin = ""; fail("Неверный PIN-код. Осталось попыток: ${r.left}") }
+                    is PinResult.Locked -> { go(Mode.LOGIN); fail("PIN-код сброшен из-за ошибок — войдите паролем") }
                 }
             }
             Mode.SETUP -> {
@@ -194,6 +244,16 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
         }
     }
 
+    LaunchedEffect(Unit) {
+        if (!LocalAuth.autoPrompted && (mode == Mode.PIN || mode == Mode.LOGIN) &&
+            LocalAuth.bioEnabled(ctx) && LocalAuth.canBiometric(ctx)
+        ) {
+            LocalAuth.autoPrompted = true
+            kotlinx.coroutines.delay(400)
+            tryBiometric()
+        }
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // Клавиатура открыта — окно стало ниже: уменьшаем логотип и прячем год внизу, чтобы поля были на виду
         val h = maxHeight
@@ -223,6 +283,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
 
             val title = when (mode) {
                 Mode.LOGIN -> ""
+                Mode.PIN -> "Вход по PIN-коду"
                 Mode.SETUP -> "Настройка администратора"
                 Mode.REG_EMAIL -> "Регистрация — шаг 1 из 3"
                 Mode.REG_CODE -> "Регистрация — шаг 2 из 3"
@@ -247,6 +308,18 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                                 ime = ImeAction.Done, focus = focus, onDone = { submit() }
                             )
                         }
+                    }
+                    Mode.PIN -> {
+                        Text(
+                            "Аккаунт: ${LocalAuth.savedLogin(ctx) ?: ""}",
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Field(
+                            pin, { pin = it.filter(Char::isDigit).take(4); error = null; if (pin.length == 4) submit() },
+                            "PIN-код (4 цифры)", password = true, keyboard = KeyboardType.NumberPassword,
+                            ime = ImeAction.Done, focus = focus, onDone = { submit() }
+                        )
                     }
                     Mode.SETUP -> {
                         Field(email, { email = it; error = null }, "Email администратора", keyboard = KeyboardType.Email, focus = focus)
@@ -301,7 +374,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.onPrimary)
                     else Text(
                         when (mode) {
-                            Mode.LOGIN -> "Войти"
+                            Mode.LOGIN, Mode.PIN -> "Войти"
                             Mode.SETUP -> "Сохранить и войти"
                             Mode.REG_EMAIL -> "Получить код"
                             Mode.REG_CODE -> "Подтвердить код"
@@ -314,9 +387,25 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
             Spacer(Modifier.height(4.dp))
             Appear(1100, Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    if ((mode == Mode.LOGIN || mode == Mode.PIN) && LocalAuth.bioEnabled(ctx) && LocalAuth.canBiometric(ctx)) {
+                        OutlinedButton(
+                            onClick = { tryBiometric() },
+                            enabled = !busy,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                        ) { Text("Войти по отпечатку / лицу") }
+                    }
                     when (mode) {
-                        Mode.LOGIN -> TextButton(onClick = { go(Mode.REG_EMAIL) }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Нет аккаунта? Зарегистрироваться")
+                        Mode.PIN -> TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Войти по паролю")
+                        }
+                        Mode.LOGIN -> {
+                            if (LocalAuth.pinEnabled(ctx)) {
+                                TextButton(onClick = { go(Mode.PIN) }, modifier = Modifier.fillMaxWidth()) { Text("Войти по PIN-коду") }
+                            }
+                            TextButton(onClick = { go(Mode.REG_EMAIL) }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Нет аккаунта? Зарегистрироваться")
+                            }
                         }
                         Mode.REG_CODE -> {
                             TextButton(

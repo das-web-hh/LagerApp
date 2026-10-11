@@ -124,7 +124,7 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
             items(found ?: list, key = { it.id }) { p ->
                 Text(
                     p.name,
-                    modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 12.dp)
+                    modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 7.dp)
                 )
                 HorizontalDivider()
             }
