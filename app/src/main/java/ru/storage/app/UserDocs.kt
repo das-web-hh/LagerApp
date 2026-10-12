@@ -612,7 +612,7 @@ fun DocsScreen(onBack: () -> Unit) {
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
-                        TextButton(onClick = { toDelete = d }) { Text("✕") }
+                        if (Session.isAdmin) TextButton(onClick = { toDelete = d }) { Text("✕") }
                     }
                     HorizontalDivider()
                 }

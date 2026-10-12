@@ -102,8 +102,10 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { creating = true }) { Text("+ Товар") }
-            OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("📥 Excel") }
+            if (Session.isAdmin) {
+                Button(onClick = { creating = true }) { Text("+ Товар") }
+                OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("📥 Excel") }
+            }
             OutlinedButton(
                 onClick = { scope.launch { Cloud.runProducts(db, sync, true) } },
                 enabled = !sync.busy
@@ -265,6 +267,7 @@ fun ImportDialog(
 
 @Composable
 fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
+    val canEdit = Session.isAdmin
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     val scope = rememberCoroutineScope()
@@ -318,9 +321,9 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(name, { name = it }, label = { Text("Название") }, readOnly = !canEdit, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(4.dp))
-        OutlinedButton(
+        if (canEdit) OutlinedButton(
             enabled = !parsing && name.isNotBlank(),
             onClick = {
                 if (!AiCfg.ready(ctx)) {
@@ -349,44 +352,48 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
-                weight, { weight = it }, label = { Text("Вес / объём") }, singleLine = true,
+                weight, { weight = it }, label = { Text("Вес / объём") }, singleLine = true, readOnly = !canEdit,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(8.dp))
-            DropdownField(unit, UNITS) { unit = it }
+            if (canEdit) DropdownField(unit, UNITS) { unit = it } else Text(unit)
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(pack, { pack = it }, label = { Text("Тип (бутылка, коробка, мешок…)") },
+        OutlinedTextField(pack, { pack = it }, label = { Text("Тип (бутылка, коробка, мешок…)") }, readOnly = !canEdit,
             singleLine = true, modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+        if (canEdit) Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             PACKS.forEach { p -> TextButton(onClick = { pack = p }) { Text(p) } }
         }
-        OutlinedTextField(manufacturer, { manufacturer = it }, label = { Text("Производитель") },
+        OutlinedTextField(manufacturer, { manufacturer = it }, label = { Text("Производитель") }, readOnly = !canEdit,
             singleLine = true, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(article, { article = it }, label = { Text("Артикул") },
+        OutlinedTextField(article, { article = it }, label = { Text("Артикул") }, readOnly = !canEdit,
             singleLine = true, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(barcode, { barcode = it }, label = { Text("Штрих-код") },
+            OutlinedTextField(barcode, { barcode = it }, label = { Text("Штрих-код") }, readOnly = !canEdit,
                 singleLine = true, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(8.dp))
-            FilledTonalButton(onClick = { scanning = true }) { Text("📷 Скан") }
+            if (canEdit) {
+                Spacer(Modifier.width(8.dp))
+                FilledTonalButton(onClick = { scanning = true }) { Text("📷 Скан") }
+            }
         }
         Spacer(Modifier.height(16.dp))
         Text("Фото", style = MaterialTheme.typography.titleSmall)
         Spacer(Modifier.height(4.dp))
-        MediaStrip(photos) { photos.remove(it) }
-        Spacer(Modifier.height(8.dp))
-        MediaButtons(kind = "PR", allowFile = false) { photos.add(it) }
+        MediaStrip(photos, if (canEdit) fun(n: String) { photos.remove(n) } else null)
+        if (canEdit) {
+            Spacer(Modifier.height(8.dp))
+            MediaButtons(kind = "PR", allowFile = false) { photos.add(it) }
+        }
 
         if (error.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(error, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(20.dp))
-        Button(
+        if (canEdit) Button(
             onClick = {
                 if (name.isBlank()) {
                     error = "Введите название"
@@ -409,7 +416,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("Сохранить") }
-        if (id != null) {
+        if (id != null && canEdit) {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
                 Text("Удалить товар")

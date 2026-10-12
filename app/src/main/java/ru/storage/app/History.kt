@@ -103,7 +103,7 @@ fun HistoryScreen(onBack: () -> Unit) {
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
-                        TextButton(onClick = { toDelete = r }) { Text("Удалить") }
+                        if (Session.isAdmin) TextButton(onClick = { toDelete = r }) { Text("Удалить") }
                     }
                 }
             }
@@ -134,6 +134,8 @@ fun HistoryScreen(onBack: () -> Unit) {
 fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
+    // менять приёмку (отправителя, номер заказа, количества, файлы) может только администратор
+    val canEdit = Session.isAdmin
     val scope = rememberCoroutineScope()
     var original by remember { mutableStateOf<Receipt?>(null) }
     var sender by remember { mutableStateOf("") }
@@ -171,13 +173,19 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onClose, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("‹", fontSize = 26.sp) }
-            Text("Приём", style = MaterialTheme.typography.titleLarge)
+            Text(if (canEdit) "Приём" else "Приём (просмотр)", style = MaterialTheme.typography.titleLarge)
         }
         Spacer(Modifier.height(8.dp))
-        MinField("Отправитель", sender) { sender = it }
-        MinField("Номер заказа", order) { order = it }
-        MinField("Время приёма (дд.мм.гггг чч:мм)", time) { time = it }
-        MinField("Кто принял", receiver) { receiver = it }
+        if (!canEdit) {
+            Text(
+                "Менять приёмку может только администратор.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        MinField("Отправитель", sender, readOnly = !canEdit) { sender = it }
+        MinField("Номер заказа", order, readOnly = !canEdit) { order = it }
+        MinField("Время приёма (дд.мм.гггг чч:мм)", time, readOnly = !canEdit) { time = it }
+        MinField("Кто принял", receiver, readOnly = !canEdit) { receiver = it }
 
         Spacer(Modifier.height(20.dp))
         Text("Товары", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -198,13 +206,13 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
                     }
                 }
                 TextField(
-                    value = l.qty, onValueChange = { l.qty = it }, singleLine = true,
+                    value = l.qty, onValueChange = { l.qty = it }, singleLine = true, readOnly = !canEdit,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(textAlign = androidx.compose.ui.text.style.TextAlign.End),
                     colors = minFieldColors(),
                     modifier = Modifier.width(84.dp)
                 )
-                TextButton(onClick = { items.remove(l) }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                if (canEdit) TextButton(onClick = { items.remove(l) }, contentPadding = PaddingValues(horizontal = 6.dp)) {
                     Text("✕", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -214,23 +222,27 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         Spacer(Modifier.height(20.dp))
         Text("Фото", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
-        MediaStrip(photos) { photos.remove(it) }
-        Spacer(Modifier.height(4.dp))
-        MediaButtons(kind = "RC", allowFile = false) { photos.add(it) }
+        MediaStrip(photos, if (canEdit) fun(n: String) { photos.remove(n) } else null)
+        if (canEdit) {
+            Spacer(Modifier.height(4.dp))
+            MediaButtons(kind = "RC", allowFile = false) { photos.add(it) }
+        }
 
         Spacer(Modifier.height(16.dp))
         Text("Накладные", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
-        MediaStrip(invoices) { invoices.remove(it) }
-        Spacer(Modifier.height(4.dp))
-        MediaButtons(kind = "IN", allowFile = true) { invoices.add(it) }
+        MediaStrip(invoices, if (canEdit) fun(n: String) { invoices.remove(n) } else null)
+        if (canEdit) {
+            Spacer(Modifier.height(4.dp))
+            MediaButtons(kind = "IN", allowFile = true) { invoices.add(it) }
+        }
 
         if (error.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(error, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(24.dp))
-        Button(
+        if (canEdit) Button(
             onClick = {
                 val old = original
                 val t = parseTime(time)
@@ -261,7 +273,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
             },
             modifier = Modifier.fillMaxWidth().height(50.dp)
         ) { Text("Сохранить") }
-        TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
+        if (canEdit) TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Удалить партию", color = MaterialTheme.colorScheme.error)
         }
     }
@@ -308,11 +320,11 @@ private fun minFieldColors() = TextFieldDefaults.colors(
 
 /** Минималистичное поле: маленькая подпись над строкой с тонкой линией, без рамок и заливки. */
 @Composable
-private fun MinField(label: String, value: String, onChange: (String) -> Unit) {
+private fun MinField(label: String, value: String, readOnly: Boolean = false, onChange: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         TextField(
-            value = value, onValueChange = onChange, singleLine = true,
+            value = value, onValueChange = onChange, singleLine = true, readOnly = readOnly,
             textStyle = MaterialTheme.typography.bodyLarge,
             colors = minFieldColors(),
             modifier = Modifier.fillMaxWidth()

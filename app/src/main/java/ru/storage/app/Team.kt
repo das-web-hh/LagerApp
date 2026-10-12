@@ -260,6 +260,15 @@ object Users {
         }
     }
 
+    /** Удалить сотрудника (только администратор): аккаунт и его задачи исчезают, телефон сотрудника выходит из аккаунта. */
+    fun deleteUser(login: String, name: String) {
+        fs.collection("users").document(login).delete()
+        fs.collection("tasks").whereEqualTo("assignee", login).get().addOnSuccessListener { s ->
+            s.documents.forEach { it.reference.delete() }
+        }
+        Journal.log("Система", "Администратор удалил сотрудника: $name ($login)")
+    }
+
     /** Заблокировать / разблокировать: заблокированный сразу выходит и не может войти. */
     fun setBlocked(login: String, blocked: Boolean) {
         fs.collection("users").document(login).update(mapOf("blocked" to blocked, "sess" to FieldValue.increment(1)))

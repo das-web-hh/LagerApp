@@ -88,7 +88,7 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Bluetooth", Icons.Default.Settings) { section = "Bluetooth" },
                     TileSpec("Отправить приложение", Icons.AutoMirrored.Filled.Send) { section = "Отправить приложение" },
                     TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" }
-                )
+                ).filter { Session.isAdmin || it.title != "Файлы" }
             )
         }
     }
@@ -119,16 +119,16 @@ fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
                 elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
             ) {
                 MoreRow(Icons.Default.Settings, "Настройки", "Сканер, печать, тема, Google Диск и др.") { section = "Настройки" }
-                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                HorizontalDivider(Modifier.padding(start = 68.dp, end = 13.dp))
                 MoreRow(
                     Icons.Default.Refresh, "Обновление",
                     Updater.latestNewer?.let { "Доступна версия ${it.version}" } ?: "Проверка и установка новой версии"
                 ) { section = "Обновление" }
-                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                HorizontalDivider(Modifier.padding(start = 68.dp, end = 13.dp))
                 MoreRow(Icons.Default.Lock, "Лицензия", "Условия использования, компоненты") { section = "Лицензия" }
-                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                HorizontalDivider(Modifier.padding(start = 68.dp, end = 13.dp))
                 MoreRow(Icons.Default.Info, "О приложении", "Версия, возможности, что нового") { section = "О приложении" }
-                HorizontalDivider(Modifier.padding(start = 84.dp, end = 16.dp))
+                HorizontalDivider(Modifier.padding(start = 68.dp, end = 13.dp))
                 MoreRow(Icons.Default.Build, "О системе", "Телефон, память, сеть, батарея") { section = "О системе" }
             }
             Spacer(Modifier.height(12.dp))
@@ -159,6 +159,8 @@ private fun ProfileRow(label: String, value: String) {
 @Composable
 fun ReceiveScreen(prefs: Prefs, receiver: String) {
     var mode by rememberSaveable { mutableStateOf<String?>(null) }
+    var viewReceipt by rememberSaveable { mutableStateOf<String?>(null) }
+    val admin = Session.isAdmin
     val current = mode
     val ctx = LocalContext.current
     var pickMode by remember { mutableStateOf("auto") }
@@ -169,6 +171,16 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         if (uris.isNotEmpty()) thread { uris.forEach { Incoming.accept(ctx, it, m, open = uris.size == 1) } }
     }
 
+    val rid = viewReceipt
+    if (rid != null) {
+        ReceiptCardScreen(rid) { viewReceipt = null }
+        return
+    }
+    // принимать и записывать товар может только администратор
+    if (!admin && (current == "Ручной" || current == "По наименованию" || current == "Приём B-Ware")) {
+        mode = null
+        return
+    }
     if (current == "Ручной") {
         ManualReceiveScreen(prefs, receiver) { mode = null }
         return
@@ -218,11 +230,15 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
                 TileSpec("Инвентаризация", Icons.Default.Done) { mode = "Инвентаризация" },
                 TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
                 TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" }
-            )
+            ).filter { admin || it.title in setOf("Итог приёма", "Инвентаризация", "Инвентарь B-Ware", "Отправка") }
         )
 
+        if (!admin) {
+            ReceivedGoodsList { viewReceipt = it }
+        }
+
         val jobs = AutoReceiveHolder.jobs.filter { !it.nameMode }
-        if (jobs.isNotEmpty()) {
+        if (admin && jobs.isNotEmpty()) {
             Spacer(Modifier.height(20.dp))
             Text("Партии в работе: ${jobs.size}", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -246,6 +262,44 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
             },
             dismissButton = { TextButton(onClick = { deleteJob = null }) { Text("Отмена") } }
         )
+    }
+}
+
+/** Для сотрудников: принятый товар обычным списком, только просмотр. */
+@Composable
+private fun ReceivedGoodsList(onOpen: (String) -> Unit) {
+    val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    val sync = remember { SyncState() }
+    var list by remember { mutableStateOf(emptyList<Receipt>()) }
+    LaunchedEffect(Unit) {
+        try { Cloud.runReceipts(db, sync, false) } catch (e: Exception) { }
+    }
+    LaunchedEffect(sync.version, Media.version) {
+        list = withContext(Dispatchers.IO) { db.allReceipts() }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text("Принятый товар", style = MaterialTheme.typography.titleMedium)
+    Text(
+        "Принимать товар и менять приёмки может только администратор.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(Modifier.height(6.dp))
+    if (list.isEmpty()) Text("Приёмов пока нет", style = MaterialTheme.typography.bodyMedium)
+    list.take(60).forEach { r ->
+        Column(Modifier.fillMaxWidth().clickable { onOpen(r.id) }.padding(vertical = 8.dp)) {
+            val who = listOf(
+                r.sender.takeIf { it.isNotBlank() },
+                r.orderNo.takeIf { it.isNotBlank() }?.let { "заказ № $it" }
+            ).filterNotNull().joinToString(" · ")
+            Text(fmtTime(r.receivedAt) + if (who.isNotEmpty()) " · $who" else "", fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+            Text(
+                r.items.joinToString(", ") { "${it.name} × ${it.qty}" },
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+        HorizontalDivider()
     }
 }
 

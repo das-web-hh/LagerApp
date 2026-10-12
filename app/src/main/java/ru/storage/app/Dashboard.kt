@@ -1,6 +1,9 @@
 package ru.storage.app
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -31,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -39,14 +43,6 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
-
-private class StatPeriod(val label: String, val title: String, val days: Int)
-
-private val statPeriods = listOf(
-    StatPeriod("Сегодня", "за сегодня", 1),
-    StatPeriod("Неделя", "за 7 дней", 7),
-    StatPeriod("Месяц", "за 30 дней", 30)
-)
 
 private class Stats(
     val receipts: Int,
@@ -116,7 +112,6 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     var openProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var openReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var section by rememberSaveable { mutableStateOf<String?>(null) }
-    var periodIdx by rememberSaveable { mutableIntStateOf(0) }
     var all by remember { mutableStateOf(emptyList<Receipt>()) }
     var productCount by remember { mutableIntStateOf(0) }
     val enough = query.trim().length >= MIN_SEARCH_CHARS
@@ -196,6 +191,15 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     // «Назад» при введённом запросе очищает поиск и возвращает дашборд
     BackHandler(enabled = query.isNotEmpty()) { query = "" }
 
+    // сверху экрана мягкий цвет, плавно уходящий в фон: ничего не перекрывает
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(
+                listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), Color.Transparent),
+                endY = 900f
+            )
+        )
+    ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 12.dp)) {
         SearchBar(
             query = query,
@@ -214,7 +218,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
                     BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) { Text("Чат") }
                 }
                 FilledTonalButton(onClick = { section = "Задачи" }, modifier = Modifier.weight(1f)) {
-                    BadgedBox(badge = { if (openTasks > 0) Badge { Text(openTasks.toString()) } }) { Text("Задачи") }
+                    BadgedBox(badge = { if (openTasks > 0) Badge { Text(openTasks.toString()) } }) { Text(if (Session.isAdmin) "Управление" else "Задачи") }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -231,13 +235,12 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
                 userName = userName,
                 all = all,
                 productCount = productCount,
-                periodIdx = periodIdx,
-                onPeriod = { periodIdx = it },
                 onOpenReceipt = { openReceiptId = it },
                 onOpenTab = onOpenTab,
                 onSection = { section = it }
             )
         }
+    }
     }
 }
 
@@ -280,29 +283,26 @@ private fun Dashboard(
     userName: String,
     all: List<Receipt>,
     productCount: Int,
-    periodIdx: Int,
-    onPeriod: (Int) -> Unit,
     onOpenReceipt: (String) -> Unit,
     onOpenTab: (Int) -> Unit,
     onSection: (String) -> Unit
 ) {
-    val period = statPeriods[periodIdx.coerceIn(0, statPeriods.size - 1)]
     val now = System.currentTimeMillis()
     val today = dayStart(now)
-    val curStart = addDays(today, -(period.days - 1))
-    val curEnd = addDays(today, 1)
-    val prevStart = addDays(curStart, -period.days)
-    val cur = all.filter { it.receivedAt >= curStart && it.receivedAt < curEnd }
-    val prev = all.filter { it.receivedAt >= prevStart && it.receivedAt < curStart }
+    val cur = all.filter { it.receivedAt >= today && it.receivedAt < addDays(today, 1) }
     val st = statsOf(cur)
-    val prevUnits = statsOf(prev).units
+    val monthStart = Calendar.getInstance().apply {
+        timeInMillis = now; set(Calendar.DAY_OF_MONTH, 1)
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val month = all.filter { it.receivedAt >= monthStart }
 
-    val topProducts = cur.flatMap { it.items }
+    val topProducts = month.flatMap { it.items }
         .groupBy { it.name }
         .map { e -> e.key to e.value.sumOf { num(it.qty) } }
         .sortedByDescending { it.second }
         .take(3)
-    val topSenders = cur.filter { it.sender.isNotBlank() }
+    val topSenders = month.filter { it.sender.isNotBlank() }
         .groupBy { it.sender }
         .map { e -> e.key to e.value.size }
         .sortedByDescending { it.second }
@@ -322,15 +322,8 @@ private fun Dashboard(
         Text(dateText, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            statPeriods.forEachIndexed { i, p ->
-                FilterChip(selected = i == periodIdx, onClick = { onPeriod(i) }, label = { Text(p.label) })
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-
-        HeroCard(st, prevUnits, period.title)
-        Spacer(Modifier.height(12.dp))
+        PeriodWidget(all, now)
+        SectionTitle("Сегодня")
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             MetricCard(Icons.Default.Check, st.receipts.toString(), "Приёмок", Modifier.weight(1f), MaterialTheme.colorScheme.primary)
@@ -368,7 +361,7 @@ private fun Dashboard(
         }
 
         if (topProducts.isNotEmpty() || topSenders.isNotEmpty()) {
-            SectionTitle("Топ ${period.title}")
+            SectionTitle("Топ за месяц")
             Card(
                 Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(24.dp),
@@ -427,6 +420,96 @@ private fun SectionTitle(text: String) {
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(top = 20.dp, bottom = 8.dp)
     )
+}
+
+private class Span(val title: String, val from: Long, val to: Long, val prevFrom: Long, val prevTo: Long, val prevName: String)
+
+private fun calMs(ms: Long, f: Calendar.() -> Unit): Long =
+    Calendar.getInstance().apply {
+        timeInMillis = ms
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        f()
+    }.timeInMillis
+
+private fun spansOf(now: Long): List<Span> {
+    val d0 = dayStart(now)
+    val m0 = calMs(now) { set(Calendar.DAY_OF_MONTH, 1) }
+    val y0 = calMs(now) { set(Calendar.DAY_OF_YEAR, 1) }
+    return listOf(
+        Span("за сегодня", d0, addDays(d0, 1), addDays(d0, -1), d0, "вчерашнему дню"),
+        Span("за месяц", m0, calMs(m0) { add(Calendar.MONTH, 1) }, calMs(m0) { add(Calendar.MONTH, -1) }, m0, "прошлому месяцу"),
+        Span("за год", y0, calMs(y0) { add(Calendar.YEAR, 1) }, calMs(y0) { add(Calendar.YEAR, -1) }, y0, "прошлому году")
+    )
+}
+
+/** Виджет «Принято»: сам переходит с дня на месяц и на год, цифра плавно набирается. Нажатие — следующий счётчик. */
+@Composable
+private fun PeriodWidget(all: List<Receipt>, now: Long) {
+    val spans = remember(now / 60000L) { spansOf(now) }
+    var idx by remember { mutableIntStateOf(0) }
+    LaunchedEffect(idx) {
+        delay(5000)
+        idx = (idx + 1) % spans.size
+    }
+    val shape = RoundedCornerShape(28.dp)
+    Box(
+        Modifier.fillMaxWidth().clip(shape)
+            .background(Brush.linearGradient(listOf(BrandBlueDark, BrandBlue)))
+            .clickable { idx = (idx + 1) % spans.size }
+            .padding(20.dp)
+    ) {
+        Column {
+            Crossfade(targetState = idx, animationSpec = tween(600), label = "period") { i ->
+                val sp = spans[i]
+                val cur = all.filter { it.receivedAt >= sp.from && it.receivedAt < sp.to }
+                val prev = all.filter { it.receivedAt >= sp.prevFrom && it.receivedAt < sp.prevTo }
+                val units = cur.sumOf { receiptUnits(it) }
+                val prevUnits = prev.sumOf { receiptUnits(it) }
+                var target by remember { mutableStateOf(0f) }
+                LaunchedEffect(units) { target = units.toFloat() }
+                val shown by animateFloatAsState(target, tween(900), label = "count")
+                val delta = when {
+                    prevUnits <= 0.0 && units <= 0.0 -> "Операций пока нет"
+                    prevUnits <= 0.0 -> "Раньше приёмок не было"
+                    else -> {
+                        val pct = ((units - prevUnits) / prevUnits * 100.0).roundToInt()
+                        when {
+                            pct > 0 -> "▲ $pct% к ${sp.prevName}"
+                            pct < 0 -> "▼ ${abs(pct)}% к ${sp.prevName}"
+                            else -> "Как и раньше"
+                        }
+                    }
+                }
+                Column {
+                    Text("Принято ${sp.title}", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.8f))
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            fmtNum(shown.toDouble()),
+                            style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, color = Color.White
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "шт", style = MaterialTheme.typography.titleMedium,
+                            color = Color.White.copy(alpha = 0.8f), modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text("Приёмок: ${cur.size}", style = MaterialTheme.typography.bodyMedium, color = Color.White)
+                    Text(delta, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.85f))
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                spans.indices.forEach { k ->
+                    Box(
+                        Modifier.height(6.dp).width(if (k == idx) 22.dp else 6.dp).clip(CircleShape)
+                            .background(Color.White.copy(alpha = if (k == idx) 1f else 0.4f))
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /** Плитка окна «Работа» / «Прочее»: count > 0 — круглая отметка с числом сверху слева. */
 class TileSpec(val title: String, val icon: ImageVector, val count: Int = 0, val onClick: () -> Unit)
@@ -85,20 +86,20 @@ fun TileGrid(tiles: List<TileSpec>) {
 @Composable
 fun MoreRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 13.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(52.dp)) {
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(42.dp)) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
             }
         }
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
+            Text(title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 13.sp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
         }
-        Text("›", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("›", style = MaterialTheme.typography.headlineMedium.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -112,21 +113,21 @@ fun ProfileCard(name: String, onClick: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
-        Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.tertiaryContainer, modifier = Modifier.size(60.dp)) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.tertiaryContainer, modifier = Modifier.size(48.dp)) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         Icons.Default.Person, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(32.dp)
+                        tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(26.dp)
                     )
                 }
             }
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
-                Text("Профиль", style = MaterialTheme.typography.headlineSmall)
-                Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Профиль", style = MaterialTheme.typography.headlineSmall.copy(fontSize = 19.sp))
+                Text(name, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 13.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text("›", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("›", style = MaterialTheme.typography.headlineMedium.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -136,12 +137,12 @@ fun ProfileCard(name: String, onClick: () -> Unit) {
 fun WideOutlinedButton(icon: ImageVector, text: String, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(60.dp),
+        modifier = Modifier.fillMaxWidth().height(48.dp),
         shape = CircleShape,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
     ) {
         Icon(icon, contentDescription = null)
-        Spacer(Modifier.width(12.dp))
-        Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Normal)
+        Spacer(Modifier.width(10.dp))
+        Text(text, style = MaterialTheme.typography.titleMedium.copy(fontSize = 14.sp), fontWeight = FontWeight.Normal)
     }
 }

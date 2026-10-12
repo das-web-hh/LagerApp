@@ -1,7 +1,10 @@
 package ru.storage.app
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -9,6 +12,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -24,7 +29,9 @@ data class InvoiceProfile(
     val sender: String,
     val rules: String,
     val status: String,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** Имя файла-образца накладной (фото первого листа, из которого сделан шаблон); "" — образца нет. */
+    val sample: String = ""
 )
 
 /**
@@ -37,7 +44,8 @@ object InvoiceProfiles {
     private var loaded = false
     @Volatile private var lastRefresh = 0L
 
-    val newCount: Int get() = list.count { it.status == "new" }
+    /** Сколько шаблонов ждут проверки: считается только у администратора — подтверждает их он. */
+    val newCount: Int get() = if (Session.isAdmin) list.count { it.status == "new" } else 0
 
     private val LEGAL = Regex("\\b(gmbh|mbh|ag|kg|ug|ohg|eg|se|ek|co|ltd|inc|llc|haftungsbeschränkt)\\b")
 
@@ -53,7 +61,7 @@ object InvoiceProfiles {
             val arr = JSONArray(sp(ctx).getString("list", "[]"))
             val l = (0 until arr.length()).mapNotNull { i ->
                 val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                InvoiceProfile(o.optString("key"), o.optString("sender"), o.optString("rules"), o.optString("status", "new"), o.optLong("updatedAt"))
+                InvoiceProfile(o.optString("key"), o.optString("sender"), o.optString("rules"), o.optString("status", "new"), o.optLong("updatedAt"), o.optString("sample"))
             }.filter { it.key.isNotEmpty() }
             list.clear()
             list.addAll(l)
@@ -65,13 +73,13 @@ object InvoiceProfiles {
         val arr = JSONArray()
         list.forEach {
             arr.put(JSONObject().put("key", it.key).put("sender", it.sender).put("rules", it.rules)
-                .put("status", it.status).put("updatedAt", it.updatedAt))
+                .put("status", it.status).put("updatedAt", it.updatedAt).put("sample", it.sample))
         }
         sp(ctx).edit().putString("list", arr.toString()).apply()
     }
 
     private fun map(p: InvoiceProfile) = hashMapOf<String, Any>(
-        "sender" to p.sender, "rules" to p.rules, "status" to p.status, "updatedAt" to p.updatedAt
+        "sender" to p.sender, "rules" to p.rules, "status" to p.status, "updatedAt" to p.updatedAt, "sample" to p.sample
     )
 
     fun find(ctx: Context, sender: String): InvoiceProfile? {
@@ -83,6 +91,35 @@ object InvoiceProfiles {
     /** Правила для ИИ — только подтверждённые. */
     fun confirmedRules(ctx: Context, sender: String): String? =
         find(ctx, sender)?.takeIf { it.status == "confirmed" && it.rules.isNotBlank() }?.rules
+
+    /** Сохранить фото первого листа накладной как образец шаблона (уходит на Google Диск, как остальные накладные). Возвращает имя файла или "". */
+    fun saveSample(ctx: Context, png: ByteArray): String {
+        return try {
+            val app = ctx.applicationContext
+            val bmp = BitmapFactory.decodeByteArray(png, 0, png.size) ?: return ""
+            val name = "IN-" + java.util.UUID.randomUUID().toString().replace("-", "").take(14) + ".jpg"
+            Media.file(app, name).outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 82, it) }
+            val db = ProductDb.get(app)
+            db.addUpload(name)
+            Media.uploadPending(app, db)
+            name
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    /** Образец накладной: свой, а если его нет (старый шаблон) — картинка накладной из последней приёмки этого поставщика. */
+    fun sampleFor(ctx: Context, p: InvoiceProfile): String? {
+        if (p.sample.isNotBlank()) return p.sample
+        return try {
+            ProductDb.get(ctx).allReceipts()
+                .filter { key(it.sender) == p.key }
+                .flatMap { it.invoices }
+                .firstOrNull { Media.isImage(it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     fun save(ctx: Context, p: InvoiceProfile) {
         load(ctx)
@@ -117,7 +154,7 @@ object InvoiceProfiles {
         lastRefresh = now
         val cloud = snap.documents.map {
             InvoiceProfile(it.id, it.getString("sender") ?: "", it.getString("rules") ?: "",
-                it.getString("status") ?: "new", it.getLong("updatedAt") ?: 0L)
+                it.getString("status") ?: "new", it.getLong("updatedAt") ?: 0L, it.getString("sample") ?: "")
         }
         for (c in cloud) {
             val i = list.indexOfFirst { it.key == c.key }
@@ -169,7 +206,8 @@ fun InvoiceProfilesScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Шаблоны накладных", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "Шаблон создаётся сам, когда приходит накладная от нового поставщика. Проверьте его и подтвердите — после этого ИИ читает накладные этого поставщика точнее.",
+            if (Session.isAdmin) "Шаблон создаётся сам, когда приходит накладная от нового поставщика. Проверьте его и подтвердите — после этого ИИ читает накладные этого поставщика точнее."
+            else "Шаблоны накладных поставщиков. Сотрудники только смотрят: проверять и подтверждать шаблоны может администратор.",
             style = MaterialTheme.typography.bodySmall
         )
         if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -183,7 +221,7 @@ fun InvoiceProfilesScreen(onBack: () -> Unit) {
             Card(Modifier.fillMaxWidth().padding(top = 8.dp).clickable { open = p.key }) {
                 Column(Modifier.padding(12.dp)) {
                     Text(p.sender, fontWeight = FontWeight.Medium)
-                    if (p.status == "new") Text("Новый — проверьте и подтвердите", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
+                    if (p.status == "new") Text(if (Session.isAdmin) "Новый — проверьте и подтвердите" else "Новый — ждёт проверки администратора", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
                     else Text("Подтверждён", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
                     Text(p.rules.lineSequence().firstOrNull { it.isNotBlank() } ?: "", style = MaterialTheme.typography.bodySmall, maxLines = 2)
                 }
@@ -195,26 +233,73 @@ fun InvoiceProfilesScreen(onBack: () -> Unit) {
 @Composable
 private fun ProfileEditor(p: InvoiceProfile, onBack: () -> Unit) {
     val ctx = LocalContext.current
+    val canEdit = Session.isAdmin
     var rules by remember(p.key) { mutableStateOf(p.rules) }
     var confirmDelete by remember { mutableStateOf(false) }
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text(p.sender, style = MaterialTheme.typography.headlineSmall)
         Text(
-            if (p.status == "new") "Новый шаблон: пока не используется. Исправьте правила и подтвердите."
-            else "Подтверждён: добавляется в инструкцию ИИ для накладных этого поставщика.",
+            when {
+                !canEdit -> "Только просмотр. Проверять и подтверждать шаблоны может администратор."
+                p.status == "new" -> "Новый шаблон: пока не используется. Сравните правила с накладной внизу, исправьте и подтвердите."
+                else -> "Подтверждён: добавляется в инструкцию ИИ для накладных этого поставщика."
+            },
             style = MaterialTheme.typography.bodySmall
         )
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(rules, { rules = it }, label = { Text("Правила чтения накладной") }, minLines = 8, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            rules, { rules = it }, readOnly = !canEdit,
+            label = { Text("Правила чтения накладной") }, minLines = 8, modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(12.dp))
-        Button(
-            enabled = rules.isNotBlank(),
-            onClick = { InvoiceProfiles.save(ctx, p.copy(rules = rules.trim(), status = "confirmed")); onBack() },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text(if (p.status == "new") "Подтвердить" else "Сохранить") }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) { Text("Удалить") }
+        if (canEdit) {
+            Button(
+                enabled = rules.isNotBlank(),
+                onClick = { InvoiceProfiles.save(ctx, p.copy(rules = rules.trim(), status = "confirmed")); onBack() },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(if (p.status == "new") "Подтвердить" else "Сохранить") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) { Text("Удалить") }
+            Spacer(Modifier.height(16.dp))
+        }
+
+        // фото накладной: по нему видно, что и как написано, и можно проверить правила
+        Text("Накладная этого поставщика", style = MaterialTheme.typography.titleMedium)
+        val sampleName by produceState<String?>(null, p.key, p.sample) {
+            value = withContext(Dispatchers.IO) { InvoiceProfiles.sampleFor(ctx, p) }
+        }
+        val bmp by produceState<Bitmap?>(null, sampleName) {
+            val n = sampleName
+            value = if (n == null) null else withContext(Dispatchers.IO) {
+                Media.load(ctx, n)?.let { f ->
+                    try {
+                        val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(f.path, b)
+                        var sc = 1
+                        while (b.outWidth / sc > 1800) sc *= 2
+                        BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = sc })
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        val img = bmp
+        if (img != null) {
+            Image(
+                img.asImageBitmap(), contentDescription = "Накладная",
+                modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth
+            )
+        } else {
+            Text(
+                if (sampleName == null) "Фото накладной для этого шаблона не сохранено. У новых шаблонов оно появляется само."
+                else "Загрузка фото накладной…",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.height(24.dp))
     }
     if (confirmDelete) {
         AlertDialog(

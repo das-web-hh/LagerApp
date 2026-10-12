@@ -29,6 +29,8 @@ object Session {
     /** Вошедший пользователь (имя, должность, роль). */
     @Volatile var user: AppUser? = null
     val isAdmin: Boolean get() = user?.isAdmin == true
+    /** Вызывается, когда администратор меняет своё имя: обновляет сохранённого пользователя. */
+    @Volatile var onUserUpdated: ((AppUser) -> Unit)? = null
     /** Имя для подписей «кто добавил / кто принял». */
     val displayName: String get() = user?.name?.ifBlank { null } ?: login
 }
@@ -53,24 +55,36 @@ object CloudSettings {
     }
 
     private fun push(ctx: Context, prefs: Prefs, ts: Long) {
-        docRef().set(
-            hashMapOf<String, Any>(
-                "driveUrl" to DriveCfg.url(ctx),
-                "driveFolder" to DriveCfg.folder(ctx),
-                "driveToken" to DriveCfg.token(ctx),
-                "useFront" to prefs.useFront,
-                "formats" to prefs.formats.toList(),
-                "theme" to Ui.mode,
-                "printLangs" to PrintCfg.codes(),
-                "printSign" to PrintCfg.sign,
-                "updatedAt" to ts
-            ),
-            SetOptions.merge()
+        val m = hashMapOf<String, Any>(
+            "useFront" to prefs.useFront,
+            "formats" to prefs.formats.toList(),
+            "theme" to Ui.mode,
+            "printLangs" to PrintCfg.codes(),
+            "printSign" to PrintCfg.sign,
+            "updatedAt" to ts
         )
+        // Google Диск настраивает только администратор; у остальных этих полей в аккаунте нет
+        if (Session.isAdmin) {
+            m["driveUrl"] = DriveCfg.url(ctx)
+            m["driveFolder"] = DriveCfg.folder(ctx)
+            m["driveToken"] = DriveCfg.token(ctx)
+        }
+        docRef().set(m, SetOptions.merge())
     }
 
     /** Сверка с Firebase (1 чтение). Возвращает true, если настройки на телефоне обновились. */
     suspend fun pull(ctx: Context, prefs: Prefs): Boolean {
+        // Диск у сотрудников такой же, как у администратора: берём его настройки (сами сотрудники их не меняют)
+        if (!Session.isAdmin) {
+            try {
+                val a = FirebaseFirestore.getInstance().collection("settings").document("admin").get().awaitIt()
+                val u = a.getString("driveUrl") ?: ""
+                if (a.exists() && u.isNotBlank()) {
+                    DriveCfg.save(ctx, u, a.getString("driveFolder") ?: "", a.getString("driveToken") ?: "")
+                }
+            } catch (e: Exception) {
+            }
+        }
         val snap = docRef().get().awaitIt()
         val local = sp(ctx).getLong("updated", 0L)
         if (!snap.exists()) {
@@ -79,12 +93,14 @@ object CloudSettings {
         }
         val remote = snap.getLong("updatedAt") ?: 0L
         if (remote > local) {
-            DriveCfg.save(
-                ctx,
-                snap.getString("driveUrl") ?: "",
-                snap.getString("driveFolder") ?: "",
-                snap.getString("driveToken") ?: ""
-            )
+            if (Session.isAdmin) {
+                DriveCfg.save(
+                    ctx,
+                    snap.getString("driveUrl") ?: "",
+                    snap.getString("driveFolder") ?: "",
+                    snap.getString("driveToken") ?: ""
+                )
+            }
             prefs.useFront = snap.getBoolean("useFront") ?: false
             prefs.formats = (snap.get("formats") as? List<*>)
                 ?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
@@ -126,7 +142,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
         "Вибрация" to "Тап и прокрутка: сила и длительность",
         "Просмотр накладных" to "Листать сверху вниз или слева направо"
-    )
+    ).filter { Session.isAdmin || it.first != "Google Диск" && it.first != "Распознавание документов" }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))

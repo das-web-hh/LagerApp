@@ -193,7 +193,7 @@ object Media {
         for (n in names) {
             file(app, n).delete()
             db.removeUpload(n)
-            if (n !in pending && DriveCfg.ready(app)) {
+            if (n !in pending && DriveCfg.ready(app) && Session.isAdmin) {
                 bg.launch {
                     try {
                         DriveApi.delete(app, n)

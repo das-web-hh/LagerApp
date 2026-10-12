@@ -314,12 +314,27 @@ private fun TaskHead(text: String) {
 }
 
 @Composable
+private fun TabButton(text: String, selected: Boolean, badge: Int, modifier: Modifier, onClick: () -> Unit) {
+    val label: @Composable () -> Unit = {
+        BadgedBox(badge = { if (badge > 0) Badge { Text(badge.toString()) } }) { Text(text) }
+    }
+    if (selected) Button(onClick = onClick, modifier = modifier) { label() }
+    else OutlinedButton(onClick = onClick, modifier = modifier) { label() }
+}
+
+/** Администратор: «Управление» с вкладками «Задачи» и «Управление» (сотрудники). Сотрудник: свои задачи. */
+@Composable
 fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
     val me = Session.user ?: return
     var creating by rememberSaveable { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }          // 0 — «Задачи», 1 — «Управление»
+    var showDone by rememberSaveable { mutableStateOf(false) }     // фильтр списка: не выполненные / выполненные
     var posFor by remember { mutableStateOf<AppUser?>(null) }
     var mgFor by remember { mutableStateOf<AppUser?>(null) }
     var mailFor by remember { mutableStateOf<AppUser?>(null) }
+    var nameFor by remember { mutableStateOf<AppUser?>(null) }
+    var delFor by remember { mutableStateOf<AppUser?>(null) }
+    var endAll by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     if (creating) {
@@ -328,19 +343,30 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
     }
     BackHandler(onBack = onBack)
     val all = Live.tasks
+    val approvals = all.filter { it.type == "approve" && it.open }
+    val mine = if (me.isAdmin) all.filter { it.type != "approve" } else all
+    val openCount = mine.count { it.open }
+    val doneCount = mine.size - openCount
+    val shown = mine.filter { it.open != showDone }.let { if (showDone) it.take(40) else it }
+    val staff = Live.users.filter { !it.isAdmin }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
         item {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("‹", fontSize = 26.sp) }
-                Text("Задачи", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                Text(if (me.isAdmin) "Управление" else "Задачи", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             }
         }
         if (me.isAdmin) {
             item {
-                Button(onClick = { creating = true }, modifier = Modifier.fillMaxWidth()) { Text("Новая задача") }
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TabButton("Задачи", tab == 0, 0, Modifier.weight(1f)) { tab = 0 }
+                    TabButton("Управление", tab == 1, approvals.size, Modifier.weight(1f)) { tab = 1 }
+                }
             }
-            val approvals = all.filter { it.type == "approve" && it.open }
+        }
+        if (me.isAdmin && tab == 1) {
+            // ---------- управление сотрудниками
             if (approvals.isNotEmpty()) {
                 item { TaskHead("Подтверждение работников") }
                 items(approvals, key = { it.id }) { t ->
@@ -348,51 +374,74 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
                     Spacer(Modifier.height(8.dp))
                 }
             }
-            val issued = all.filter { it.type != "approve" }
-            item { TaskHead("Выданные задачи") }
-            if (issued.isEmpty()) {
-                item { Text("Пока нет задач", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            item { TaskHead("Сотрудники") }
+            if (staff.isEmpty()) {
+                item { Text("Подтверждённых сотрудников пока нет", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            } else {
+                item {
+                    OutlinedButton(onClick = { endAll = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Завершить сеансы всех сотрудников")
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
             }
-            items(issued, key = { it.id }) { t ->
-                TaskCard(t, admin = true, onOpenTab = onOpenTab, onBack = onBack)
-                Spacer(Modifier.height(8.dp))
-            }
-            val staff = Live.users.filter { !it.isAdmin }
-            if (staff.isNotEmpty()) {
-                item { TaskHead("Сотрудники") }
-                items(staff, key = { "u" + it.login }) { u ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(u.name, 38)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(u.name, fontWeight = FontWeight.Medium)
-                            Text(
-                                u.position.ifBlank { "без должности" } + if (u.blocked) " · заблокирован" else "",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (u.blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                            )
+            items(staff, key = { "u" + it.login }) { u ->
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp), shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Avatar(u.name, 40)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(u.name, fontWeight = FontWeight.Medium)
+                                Text(
+                                    u.position.ifBlank { "без должности" } + if (u.blocked) " · заблокирован" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (u.blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                )
+                                if (u.email.isNotBlank()) Text(u.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
-                        TextButton(onClick = { mgFor = u }) { Text("Управление") }
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { mgFor = u }, modifier = Modifier.weight(1f)) { Text("Управление") }
+                            Button(
+                                onClick = { Users.setBlocked(u.login, !u.blocked) },
+                                colors = if (u.blocked) ButtonDefaults.buttonColors()
+                                else ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.weight(1f)
+                            ) { Text(if (u.blocked) "Разблокировать" else "Заблокировать") }
+                        }
+                        TextButton(onClick = { delFor = u }) { Text("Удалить аккаунт", color = MaterialTheme.colorScheme.error) }
                     }
                 }
             }
         } else {
-            val open = all.filter { it.open }
-            val done = all.filter { !it.open }.take(20)
-            item { TaskHead("В работе") }
-            if (open.isEmpty()) {
-                item { Text("Новых задач нет", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-            items(open, key = { it.id }) { t ->
-                TaskCard(t, admin = false, onOpenTab = onOpenTab, onBack = onBack)
-                Spacer(Modifier.height(8.dp))
-            }
-            if (done.isNotEmpty()) {
-                item { TaskHead("Выполнено") }
-                items(done, key = { it.id }) { t ->
-                    TaskCard(t, admin = false, onOpenTab = onOpenTab, onBack = onBack)
-                    Spacer(Modifier.height(8.dp))
+            // ---------- задачи
+            if (me.isAdmin) {
+                item {
+                    Button(onClick = { creating = true }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { Text("Добавить задачу") }
                 }
+            }
+            item {
+                Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !showDone, onClick = { showDone = false }, label = { Text("Не выполненные ($openCount)") })
+                    FilterChip(selected = showDone, onClick = { showDone = true }, label = { Text("Выполненные ($doneCount)") })
+                }
+            }
+            if (shown.isEmpty()) {
+                item {
+                    Text(
+                        if (showDone) "Выполненных задач пока нет" else if (me.isAdmin) "Невыполненных задач нет" else "Новых задач нет",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
+            items(shown, key = { it.id }) { t ->
+                TaskCard(t, admin = me.isAdmin, onOpenTab = onOpenTab, onBack = onBack)
+                Spacer(Modifier.height(8.dp))
             }
         }
     }
@@ -413,6 +462,7 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
                         u.email.ifBlank { "Email не указан" },
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    OutlinedButton(onClick = { nameFor = u; mgFor = null }, modifier = Modifier.fillMaxWidth()) { Text("Изменить имя и фамилию") }
                     OutlinedButton(onClick = { posFor = u; mgFor = null }, modifier = Modifier.fillMaxWidth()) { Text("Изменить должность") }
                     OutlinedButton(
                         enabled = u.email.isNotBlank(),
@@ -433,6 +483,9 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
                         else ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (u.blocked) "Разблокировать" else "Заблокировать") }
+                    OutlinedButton(onClick = { delFor = u; mgFor = null }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Удалить аккаунт", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = { mgFor = null }) { Text("Закрыть") } }
@@ -489,6 +542,76 @@ fun TasksScreen(onBack: () -> Unit, onOpenTab: (Int) -> Unit) {
                 Button(enabled = v.isNotBlank(), onClick = { Users.setPosition(u.login, v.trim()); posFor = null }) { Text("Сохранить") }
             },
             dismissButton = { TextButton(onClick = { posFor = null }) { Text("Отмена") } }
+        )
+    }
+
+    nameFor?.let { u ->
+        var f by remember(u.login) { mutableStateOf(u.name.substringBefore(' ')) }
+        var l by remember(u.login) { mutableStateOf(u.name.substringAfter(' ', "")) }
+        var busy by remember(u.login) { mutableStateOf(false) }
+        var err by remember(u.login) { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { if (!busy) nameFor = null },
+            title = { Text("Имя и фамилия") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(f, { f = it; err = null }, label = { Text("Имя") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(l, { l = it; err = null }, label = { Text("Фамилия") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    err?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                Button(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        val e = Users.updateName(u.login, f, l)
+                        busy = false
+                        if (e == null) {
+                            Journal.log("Система", "Администратор изменил имя: ${u.name} → ${f.trim()} ${l.trim()}")
+                            Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
+                            nameFor = null
+                        } else err = e
+                    }
+                }) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(enabled = !busy, onClick = { nameFor = null }) { Text("Отмена") } }
+        )
+    }
+
+    delFor?.let { u ->
+        AlertDialog(
+            onDismissRequest = { delFor = null },
+            title = { Text("Удалить аккаунт?") },
+            text = {
+                Text("${u.name}: аккаунт и его задачи будут удалены, телефон сотрудника выйдет из аккаунта. Вернуться он сможет, только зарегистрировавшись заново.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        Users.deleteUser(u.login, u.name)
+                        Toast.makeText(ctx, "Удалён: ${u.name}", Toast.LENGTH_SHORT).show()
+                        delFor = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { delFor = null }) { Text("Отмена") } }
+        )
+    }
+
+    if (endAll) {
+        AlertDialog(
+            onDismissRequest = { endAll = false },
+            title = { Text("Завершить все сеансы?") },
+            text = { Text("Все сотрудники выйдут из аккаунтов на всех телефонах. Войти снова они смогут сами.") },
+            confirmButton = {
+                Button(onClick = {
+                    staff.forEach { Users.endSession(it.login) }
+                    Toast.makeText(ctx, "Сеансы завершены", Toast.LENGTH_SHORT).show()
+                    endAll = false
+                }) { Text("Завершить") }
+            },
+            dismissButton = { TextButton(onClick = { endAll = false }) { Text("Отмена") } }
         )
     }
 }

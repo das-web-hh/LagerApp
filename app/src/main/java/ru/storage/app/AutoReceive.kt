@@ -379,7 +379,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             withContext(Dispatchers.IO) { InvoiceProfiles.generate(app, sName, png, extracted) }
         }
         if (text.isNotBlank()) {
-            InvoiceProfiles.save(app, InvoiceProfile(InvoiceProfiles.key(sName), sName, text, "new", 0L))
+            val sample = withContext(Dispatchers.IO) { InvoiceProfiles.saveSample(app, png) }
+            InvoiceProfiles.save(app, InvoiceProfile(InvoiceProfiles.key(sName), sName, text, "new", 0L, sample))
             newProfileName = sName
         }
     }

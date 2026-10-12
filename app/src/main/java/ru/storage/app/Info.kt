@@ -304,6 +304,13 @@ fun InfoScreen(onBack: () -> Unit) {
                 MetricTile("Приёмок", d.receipts.size.toString(), Modifier.weight(1f))
                 MetricTile("Позиций", lines.toString(), Modifier.weight(1f))
             }
+            // считаются все приёмки из базы: по накладной (автоприём, по наименованию) и вручную
+            val byFile = d.receipts.count { it.fileName.isNotBlank() }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile("По накладной", byFile.toString(), Modifier.weight(1f))
+                MetricTile("Вручную", (d.receipts.size - byFile).toString(), Modifier.weight(1f))
+            }
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricTile("Брак, шт", iFmt(defects), Modifier.weight(1f))

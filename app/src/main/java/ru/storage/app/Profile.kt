@@ -65,8 +65,14 @@ fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit, onBa
         InfoRow("Должность", profile.position)
         InfoRow("Логин", me?.login ?: "")
         Spacer(Modifier.height(8.dp))
-        if (me != null && !me.isAdmin) {
+        if (me != null && me.isAdmin) {
             OutlinedButton(onClick = { dialog = "name" }, modifier = Modifier.fillMaxWidth()) { Text("Изменить имя и фамилию") }
+            Spacer(Modifier.height(8.dp))
+        } else if (me != null) {
+            Text(
+                "Имя и фамилию меняет администратор. Пароль вы можете изменить сами.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(8.dp))
         }
         if (me != null) {
@@ -152,6 +158,10 @@ private fun NameDialog(me: AppUser, onClose: () -> Unit) {
                     val e = Users.updateName(me.login, first, last)
                     busy = false
                     if (e == null) {
+                        if (me.isAdmin) {
+                            val full = listOf(first, last).joinToString(" ") { it.trim().replace(Regex("\\s+"), " ") }
+                            Session.onUserUpdated?.invoke(me.copy(name = full))
+                        }
                         Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
                         onClose()
                     } else err = e

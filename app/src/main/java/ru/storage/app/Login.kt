@@ -254,6 +254,14 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
         }
     }
 
+    // Пока открыт экран входа, окно уменьшается над клавиатурой (в остальных окнах — прежний режим «сдвиг»)
+    DisposableEffect(Unit) {
+        val act = ctx.findFragmentActivity()
+        val w = act?.window
+        w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        onDispose { w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN) }
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // Клавиатура открыта — окно стало ниже: уменьшаем логотип и прячем год внизу, чтобы поля были на виду
         val h = maxHeight

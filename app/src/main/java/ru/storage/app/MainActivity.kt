@@ -128,6 +128,9 @@ fun AppRoot() {
         0
     }
 
+    // администратор поменял своё имя в профиле — обновляем сохранённого пользователя
+    SideEffect { Session.onUserUpdated = { u -> saveUser(u) } }
+
     val current = user
     val loggedIn = current != null && current.status == "active"
     val profile = remember(current) {
@@ -198,7 +201,18 @@ fun AppRoot() {
                 Journal.log("Система", "Выход из аккаунта")
                 saveUser(null)
             })
-            Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
+            Incoming.pending.firstOrNull()?.let { f ->
+                if (Session.isAdmin) {
+                    IncomingChoiceDialog(f)
+                } else {
+                    AlertDialog(
+                        onDismissRequest = { Incoming.pending.remove(f) },
+                        title = { Text("Приём недоступен") },
+                        text = { Text("Принимать товар и добавлять накладные может только администратор.") },
+                        confirmButton = { Button(onClick = { Incoming.pending.remove(f) }) { Text("Понятно") } }
+                    )
+                }
+            }
         }
     } else if (current != null) {
         // зарегистрировался, но админ ещё не назначил должность и не подтвердил
@@ -260,7 +274,7 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
             withContext(Dispatchers.IO) {
                 try {
                     Folders.load(ctx)
-                    if (Folders.auto && Folders.folders.isNotEmpty()) Folders.scanAll(ctx, true)
+                    if (Session.isAdmin && Folders.auto && Folders.folders.isNotEmpty()) Folders.scanAll(ctx, true)
                 } catch (e: Exception) {
                 }
             }

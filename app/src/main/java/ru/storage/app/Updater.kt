@@ -262,7 +262,8 @@ object Updater {
         busy = true
         try {
             checkNow(app)
-            if (versions.none { it.version == current(app) } && unmetered(app)) publishSelf(app)
+            // сохранять версию на Диск может только администратор
+            if (Session.isAdmin && versions.none { it.version == current(app) } && unmetered(app)) publishSelf(app)
         } catch (e: Exception) {
         } finally {
             busy = false
@@ -302,16 +303,27 @@ fun UpdateScreen(onBack: () -> Unit) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        if (newer != null) {
+        val admin = Session.isAdmin
+        if (newer != null && admin) {
             Button(
                 onClick = { Updater.install(ctx, newer) },
                 enabled = !Updater.busy,
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Скачать и установить ${newer.version}") }
             Spacer(Modifier.height(8.dp))
+        } else if (newer != null) {
+            Text(
+                "Установить новую версию может только администратор.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
         }
         OutlinedButton(onClick = { Updater.check(ctx) }, enabled = !Updater.busy, modifier = Modifier.fillMaxWidth()) {
             Text("Проверить обновления")
+        }
+        if (!admin) {
+            Spacer(Modifier.height(24.dp))
+            return@Column
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { Updater.publish(ctx) }, enabled = !Updater.busy, modifier = Modifier.fillMaxWidth()) {
