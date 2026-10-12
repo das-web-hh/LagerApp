@@ -319,10 +319,6 @@ class ProductDb private constructor(context: Context) :
         readReceipts("SELECT $rcols FROM receipts WHERE $column = ? ORDER BY received_at DESC LIMIT 1", arrayOf(value))
             .firstOrNull()
 
-    fun findByName(name: String): Product? =
-        readProducts("SELECT $pcols FROM products WHERE name_lc = ? LIMIT 1", arrayOf(name.trim().lowercase()))
-            .firstOrNull()
-
     fun allReceipts(): List<Receipt> =
         readReceipts("SELECT $rcols FROM receipts ORDER BY received_at DESC", emptyArray())
 
