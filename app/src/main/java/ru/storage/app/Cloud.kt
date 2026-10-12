@@ -118,7 +118,10 @@ object Cloud {
     )
 
     fun saveReceipt(db: ProductDb, r: Receipt): Receipt {
-        val isNew = db.getReceipt(r.id) == null
+        val existing = db.getReceipt(r.id)
+        val isNew = existing == null
+        // уже записанную в базу приёмку сотрудник изменить не может — только администратор
+        if (existing != null && !Session.isAdmin) return existing
         val nr = r.copy(updatedAt = System.currentTimeMillis())
         db.upsertReceipts(listOf(nr))
         fs.collection("receipts").document(nr.id).set(receiptMap(nr))
@@ -131,6 +134,40 @@ object Cloud {
             (if (isNew) "Принята партия" else "Изменена партия") +
                 (if (who.isNotEmpty()) ": $who" else "") + " · позиций ${nr.items.size}"
         )
+        // после записи в историю смотрим каталог: новые товары попадают в каталог
+        return linkCatalog(db, nr)
+    }
+
+    /** Проверка каталога после записи приёмки: товары, которых там нет, добавляются; строки приёмки привязываются к товарам каталога. */
+    private fun linkCatalog(db: ProductDb, r: Receipt): Receipt {
+        var changed = false
+        var added = 0
+        val items = r.items.map { item ->
+            val name = item.name.trim()
+            if (name.isEmpty() || (item.productId.isNotEmpty() && db.getProduct(item.productId) != null)) {
+                item
+            } else {
+                val found = db.findByName(name)
+                changed = true
+                if (found != null) {
+                    item.copy(productId = found.id)
+                } else {
+                    val p = Product(
+                        id = java.util.UUID.randomUUID().toString(), name = name, article = "", barcode = "",
+                        weight = "", unit = "", pack = "", manufacturer = "", photos = emptyList(),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    saveProduct(db, p)
+                    added++
+                    item.copy(productId = p.id)
+                }
+            }
+        }
+        if (!changed) return r
+        val nr = r.copy(items = items)
+        db.upsertReceipts(listOf(nr))
+        fs.collection("receipts").document(nr.id).set(receiptMap(nr))
+        if (added > 0) Journal.log("Каталог", "Из приёмки добавлено в каталог новых товаров: $added")
         return nr
     }
 

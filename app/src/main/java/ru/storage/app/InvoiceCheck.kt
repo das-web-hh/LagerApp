@@ -171,6 +171,9 @@ object InvoiceCheck {
         stamp: String,
         hash: String
     ): String? = withContext(Dispatchers.IO) {
+        if (!Session.isAdmin) {
+            return@withContext "Приёмка уже записана в базу: дописать к ней накладную, отправителя или номер заказа может только администратор."
+        }
         try {
             val inv = Media.importFile(ctx, File(f.path), db, "IN")
             if (inv == null) {

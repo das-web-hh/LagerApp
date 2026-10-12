@@ -88,7 +88,7 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Bluetooth", Icons.Default.Settings) { section = "Bluetooth" },
                     TileSpec("Отправить приложение", Icons.AutoMirrored.Filled.Send) { section = "Отправить приложение" },
                     TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" }
-                ).filter { Session.isAdmin || it.title != "Файлы" }
+                )
             )
         }
     }
@@ -176,11 +176,6 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         ReceiptCardScreen(rid) { viewReceipt = null }
         return
     }
-    // принимать и записывать товар может только администратор
-    if (!admin && (current == "Ручной" || current == "По наименованию" || current == "Приём B-Ware")) {
-        mode = null
-        return
-    }
     if (current == "Ручной") {
         ManualReceiveScreen(prefs, receiver) { mode = null }
         return
@@ -230,7 +225,7 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
                 TileSpec("Инвентаризация", Icons.Default.Done) { mode = "Инвентаризация" },
                 TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
                 TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" }
-            ).filter { admin || it.title in setOf("Итог приёма", "Инвентаризация", "Инвентарь B-Ware", "Отправка") }
+            )
         )
 
         if (!admin) {
@@ -238,7 +233,7 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         }
 
         val jobs = AutoReceiveHolder.jobs.filter { !it.nameMode }
-        if (admin && jobs.isNotEmpty()) {
+        if (jobs.isNotEmpty()) {
             Spacer(Modifier.height(20.dp))
             Text("Партии в работе: ${jobs.size}", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -281,7 +276,7 @@ private fun ReceivedGoodsList(onOpen: (String) -> Unit) {
     Spacer(Modifier.height(8.dp))
     Text("Принятый товар", style = MaterialTheme.typography.titleMedium)
     Text(
-        "Принимать товар и менять приёмки может только администратор.",
+        "Приём товара доступен всем. Когда приёмка записана в базу, менять её может только администратор.",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     Spacer(Modifier.height(6.dp))

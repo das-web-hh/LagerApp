@@ -108,7 +108,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     val sync = remember { SyncState() }
     var query by rememberSaveable { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
-    var results by remember { mutableStateOf(emptyList<Product>()) }
+    var results by remember { mutableStateOf(emptyList<HistoryHit>()) }
     var openProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var openReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var section by rememberSaveable { mutableStateOf<String?>(null) }
@@ -132,9 +132,10 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             productCount = db.countProducts()
         }
     }
-    LaunchedEffect(query, sync.version) {
+    // поиск идёт по истории приёмов (не по каталогу); один и тот же товар, принятый в разное время, — отдельными строками, последний сверху
+    LaunchedEffect(query, sync.version, all) {
         results = if (query.trim().length < MIN_SEARCH_CHARS) emptyList()
-        else withContext(Dispatchers.IO) { db.search(query, 300, newestFirst = true) }
+        else withContext(Dispatchers.IO) { searchHistory(db, all, query) }
     }
 
     // код с Bluetooth-сканера попадает в строку поиска
@@ -228,7 +229,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
                 enough = enough,
                 busy = sync.busy,
                 results = results,
-                onOpen = { openProductId = it }
+                onOpen = { openReceiptId = it }
             )
         } else {
             Dashboard(
@@ -244,33 +245,55 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     }
 }
 
+/** Строка истории: товар в конкретной приёмке. */
+private class HistoryHit(val receipt: Receipt, val item: ReceiptItem, val key: String)
+
+private fun searchHistory(db: ProductDb, all: List<Receipt>, query: String): List<HistoryHit> {
+    val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (words.isEmpty()) return emptyList()
+    val products = db.allProducts().associateBy { it.id }
+    val out = ArrayList<HistoryHit>()
+    for (r in all) {
+        r.items.forEachIndexed { i, item ->
+            val p = products[item.productId]
+            val hay = listOf(item.name, p?.name ?: "", p?.article ?: "", p?.barcode ?: "", r.sender, r.orderNo)
+                .joinToString(" ").lowercase()
+            if (words.all { w -> hay.contains(w) }) out.add(HistoryHit(r, item, r.id + "#" + i))
+        }
+    }
+    out.sortByDescending { it.receipt.receivedAt }
+    return out.take(300)
+}
+
 @Composable
 private fun SearchResultsList(
     enough: Boolean,
     busy: Boolean,
-    results: List<Product>,
+    results: List<HistoryHit>,
     onOpen: (String) -> Unit
 ) {
     when {
         !enough -> Text(
-            "Введите минимум $MIN_SEARCH_CHARS символа: название, артикул или штрих-код",
+            "Введите минимум $MIN_SEARCH_CHARS символа: название, артикул, штрих-код или отправитель",
             style = MaterialTheme.typography.bodySmall
         )
         results.isEmpty() -> Text(
-            if (busy) "Загрузка каталога…" else "Ничего не найдено",
+            if (busy) "Загрузка истории…" else "В истории ничего не найдено",
             style = MaterialTheme.typography.bodySmall
         )
-        else -> Text("Найдено: ${results.size}", style = MaterialTheme.typography.bodySmall)
+        else -> Text("Найдено в истории: ${results.size} (последние сверху)", style = MaterialTheme.typography.bodySmall)
     }
     Spacer(Modifier.height(4.dp))
     LazyColumn(Modifier.fillMaxSize()) {
-        items(results, key = { it.id }) { p ->
-            Column(Modifier.fillMaxWidth().clickable { onOpen(p.id) }.padding(vertical = 6.dp)) {
-                Text(p.name, fontWeight = FontWeight.Medium)
+        items(results, key = { it.key }) { h ->
+            val r = h.receipt
+            Column(Modifier.fillMaxWidth().clickable { onOpen(r.id) }.padding(vertical = 6.dp)) {
+                Text(h.item.name, fontWeight = FontWeight.Medium)
+                Text(fmtTime(r.receivedAt) + " · количество ${h.item.qty}", style = MaterialTheme.typography.bodySmall)
                 val sub = listOf(
-                    if (p.article.isNotBlank()) "арт. ${p.article}" else "",
-                    if (p.barcode.isNotBlank()) "ШК ${p.barcode}" else ""
-                ).filter { it.isNotEmpty() }.joinToString(" · ")
+                    r.sender,
+                    if (r.orderNo.isNotBlank() && r.orderNo != "none") "заказ ${r.orderNo}" else ""
+                ).filter { it.isNotBlank() }.joinToString(" · ")
                 if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
             }
             HorizontalDivider()

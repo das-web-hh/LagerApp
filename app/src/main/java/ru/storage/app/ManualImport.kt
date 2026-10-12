@@ -66,7 +66,7 @@ object AiImport {
         if (head.size < 3) return null
         val date = head.last().trim()
         val order = clean(head[head.size - 2])
-        val sender = clean(head.dropLast(2).joinToString("/"))
+        val sender = cleanSenderName(clean(head.dropLast(2).joinToString("/")))
 
         val m = Regex("(\\d{2}\\.\\d{2}\\.\\d{4})\\s+(\\d{2}:\\d{2})").find(date)
         val at = m?.let { parseTime("${it.groupValues[1]} ${it.groupValues[2]}") }

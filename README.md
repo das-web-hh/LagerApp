@@ -43,6 +43,8 @@ Monopräparat MSM 800 g<TAB>3<TAB>штрих-код (необязательно)
 - Строка 2: отправитель / номер заказа (`EB` + 7 цифр) / дата и время из имени файла `Сканирование_ГГГГММДД-ЧЧММ`.
   Нет отправителя или номера заказа — `no_data` (также понимаются `no_name`, `EB_no_data`, `no_date`);
   время приёма тогда ставится текущее.
+- Если отправитель указан только электронной почтой, в приёме остаётся одно слово: `info@papier.com` → `papier`
+  (всё до `@` и последняя точка с доменом удаляются; это делает и промт, и приложение — `cleanSenderName` в `Ai.kt`).
 - Товар ищется в каталоге по названию (точно, без учёта регистра), затем по штрих-коду; не найден — сохраняется по названию.
 - Количество 0 — строка пропускается. Нечитаемая строка — приём не сохраняется, приложение показывает эту строку.
 - Заказ с уже принятым номером повторно не сохраняется.
@@ -83,7 +85,7 @@ Extract document data according to filtering marks and keyword exclusions, or ex
 # METADATA EXTRACTION (LINES 1 AND 2)
 Line 1 is ALWAYS the fixed marker, exactly as written: #LAGER
 Line 2 contains metadata separated by slashes (/):
-- Sender Name: Priority: Email domains (e.g., info@innopha.de -> Innopha), logos/headers, website URLs. Exclude creditor@stroeh.de, stroeh, ströh. Fallback: no_data.
+- Sender Name: Priority: logos/headers, e-mail, website URLs. NEVER output an e-mail address. If the sender is known only from an e-mail address, output just the word between "@" and the last dot: delete everything up to and including "@", and delete the last "." together with everything after it (the domain ending). Example: info@papier.com -> papier; sales@innopha.de -> innopha. Exclude creditor@stroeh.de, stroeh, ströh. Fallback: no_data.
 - Document Number: Number starting with "EB" followed by 7 digits (e.g., EB2613026). Fallback: no_data.
 - Date and Time (FROM FILENAME): Extract strictly from the source file name matching the pattern Сканирование_YYYYMMDD-HHMM (e.g., from Сканирование_20260817-1254.jpg extract date and time and format as DD.MM.YYYY HH:MM, resulting in 17.08.2026 12:54). Fallback: no_data.
 - Format for Line 2: [Sender Name]/[Document Number]/[Date and Time]
@@ -382,3 +384,15 @@ gh secret set KEY_PASSWORD      -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
   - Хранение: на телефоне (`userdocs/`) и на Диске — файлы `DC-<id>-<версия>.json` (при новой версии старый файл удаляется).
     Удаление документа удаляет и файл на Диске.
 - Для работы с Диском нужны только уже настроенные адрес скрипта и папка (Прочее → Еще → Настройки → Google Диск).
+
+## Версия 2.25: поиск по истории, каталог из приёмок, «Инфо», роли
+
+- **Поиск на главном окне** ищет по **истории приёмов** (название, артикул, штрих-код, отправитель, номер заказа), а не по каталогу.
+  Один и тот же товар, принятый в разное время, показывается отдельными строками; **последнее время — сверху**. Нажатие открывает приёмку.
+- **Каталог из приёмок.** Каждая приёмка сначала записывается в историю, затем проверяется каталог (`Cloud.linkCatalog`):
+  товара нет — он добавляется в каталог (в журнале «Добавлен товар»), есть — строка приёмки привязывается к нему.
+- **Инфо** — блок «Что добавлено и изменено»: новые товары в истории, добавлено/изменено в каталоге, изменено/удалено приёмок и список последних операций.
+- **Роли.** Приём товара (ручной, по наименованию, автоприём, B-Ware) доступен всем. Пока приёмка не записана в базу — её можно менять;
+  после записи менять приёмку, дописывать отправителя, номер заказа и накладную может только администратор (`Cloud.saveReceipt`, `InvoiceCheck.attach`).
+  Только администратор: подтверждение шаблонов накладных, настройки Google Диска, загрузка и установка обновлений, удаление с Диска, управление сотрудниками и их именами.
+- **Postwagen:** пока открыто окно «Новая операция», экран не гаснет 20 минут (каждое нажатие начинает отсчёт заново) — `ScreenAwake.kt`.

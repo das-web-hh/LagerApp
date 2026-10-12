@@ -201,18 +201,7 @@ fun AppRoot() {
                 Journal.log("Система", "Выход из аккаунта")
                 saveUser(null)
             })
-            Incoming.pending.firstOrNull()?.let { f ->
-                if (Session.isAdmin) {
-                    IncomingChoiceDialog(f)
-                } else {
-                    AlertDialog(
-                        onDismissRequest = { Incoming.pending.remove(f) },
-                        title = { Text("Приём недоступен") },
-                        text = { Text("Принимать товар и добавлять накладные может только администратор.") },
-                        confirmButton = { Button(onClick = { Incoming.pending.remove(f) }) { Text("Понятно") } }
-                    )
-                }
-            }
+            Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
         }
     } else if (current != null) {
         // зарегистрировался, но админ ещё не назначил должность и не подтвердил
@@ -274,7 +263,7 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
             withContext(Dispatchers.IO) {
                 try {
                     Folders.load(ctx)
-                    if (Session.isAdmin && Folders.auto && Folders.folders.isNotEmpty()) Folders.scanAll(ctx, true)
+                    if (Folders.auto && Folders.folders.isNotEmpty()) Folders.scanAll(ctx, true)
                 } catch (e: Exception) {
                 }
             }

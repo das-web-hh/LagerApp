@@ -156,6 +156,20 @@ data class AiItem(
     val handQty: String = "",
     val qtyCrossed: Boolean = false
 )
+/**
+ * Электронная почта в названии отправителя не нужна: оставляем только слово между «@» и последней точкой.
+ * info@papier.com → papier (всё до @ и последняя точка с доменом удаляются). Остальной текст не меняется.
+ */
+fun cleanSenderName(raw: String): String {
+    val re = Regex("""[A-Za-z0-9._%+\-]+@([A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*)""")
+    if (!re.containsMatchIn(raw)) return raw.trim()
+    return re.replace(raw) { m ->
+        val host = m.groupValues[1]
+        val i = host.lastIndexOf('.')
+        if (i > 0) host.substring(0, i) else host
+    }.trim().trimEnd('.', ',', ';').trim()
+}
+
 data class PageResult(val sender: String, val order: String, val items: List<AiItem>)
 
 /** Лёгкий первый запрос: только отправитель и номер заказа (без товаров). */
@@ -270,7 +284,7 @@ object Ai {
         Extract data from THIS page only and answer with JSON only (no markdown, no comments):
         {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "...", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
         Rules:
-        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. If it is not on this page, use "none".
+        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. NEVER output an e-mail address: if the sender is known only from an e-mail (for example info@papier.com), output just the word between "@" and the last dot, i.e. delete everything up to and including "@" and delete the last "." together with everything after it (info@papier.com -> papier). If it is not on this page, use "none".
         - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"); then use it as order_number and do NOT list that line as an item. If it is not on this page, use "none".
         - The document may also be an invoice (Rechnung) or an order confirmation instead of a delivery note: treat its goods table the same way. Prices (Einzelpreis, Gesamtpreis, Preis, EUR) are never a quantity; the position number (Pos) is not part of the name.
         - items: every GOODS line of this page, in the order of the page. Lines that are crossed out, struck through or have quantity 0 must be included too — never skip a goods line.
@@ -289,7 +303,7 @@ object Ai {
         The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
         Find ONLY two things on THIS page. Do not read the goods table. Answer with JSON only (no markdown, no comments):
         {"sender": "...", "order_number": "..."}
-        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. If it is not on this page, use "none".
+        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. NEVER output an e-mail address: if the sender is known only from an e-mail (for example info@papier.com), output just the word between "@" and the last dot, i.e. delete everything up to and including "@" and delete the last "." together with everything after it (info@papier.com -> papier). If it is not on this page, use "none".
         - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"). If it is not on this page, use "none".
     """.trimIndent()
 
@@ -311,7 +325,7 @@ object Ai {
     /** Быстрая проверка листа: только отправитель и номер заказа. Бросает исключение при ошибке/таймауте. */
     fun identify(ctx: Context, png: ByteArray, page: Int, total: Int): IdResult {
         val o = parseJson(call(ctx, idPrompt(page, total), png))
-        val sender = o.optString("sender", "none").trim().ifBlank { "none" }
+        val sender = cleanSenderName(o.optString("sender", "none").trim()).ifBlank { "none" }
         return IdResult(sender, normalizeOrder(o.optString("order_number", "none")))
     }
 
@@ -336,7 +350,7 @@ object Ai {
                 items.add(AiItem(name, q, mark, hand, it.optBoolean("qty_crossed", false)))
             }
         }
-        val sender = o.optString("sender", "none").trim().ifBlank { "none" }
+        val sender = cleanSenderName(o.optString("sender", "none").trim()).ifBlank { "none" }
         return PageResult(sender, normalizeOrder(o.optString("order_number", "none")), items)
     }
 }

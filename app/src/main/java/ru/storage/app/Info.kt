@@ -34,7 +34,11 @@ private class InfoData(
     val pakets: List<Paket>,
     val wagen: List<WagenOp>,
     val prevReceipts: Int,
-    val prevUnits: Double
+    val prevUnits: Double,
+    /** товары, которые за период впервые появились в истории приёмов */
+    val newProducts: Int = 0,
+    /** записи журнала этого аккаунта за период: всё, что добавлено, изменено, удалено */
+    val journal: List<JournalEntry> = emptyList()
 )
 
 private fun iNum(s: String): Double = normalizeQty(s).toDoubleOrNull() ?: 0.0
@@ -212,9 +216,22 @@ fun InfoScreen(onBack: () -> Unit) {
             val to = iAddDays(anchor, 1)
             val prevFrom = iAddDays(from, -periodDays[period])
             val prev = db.receiptsBetween(prevFrom, from)
+            // новые товары: название, которое за этот период встретилось в истории впервые (по всем приёмкам из базы)
+            val firstSeen = HashMap<String, Long>()
+            db.allReceipts().forEach { r ->
+                r.items.forEach { i ->
+                    val k = i.name.trim().lowercase()
+                    if (k.isNotEmpty()) {
+                        val t = firstSeen[k]
+                        if (t == null || r.receivedAt < t) firstSeen[k] = r.receivedAt
+                    }
+                }
+            }
+            val journal = try { Journal.entries(ctx).filter { it.t >= from && it.t < to } } catch (e: Exception) { emptyList() }
             InfoData(
                 db.receiptsBetween(from, to), sdb.paketsBetween(from, to), sdb.wagenBetween(from, to),
-                prev.size, prev.sumOf { iUnits(it) }
+                prev.size, prev.sumOf { iUnits(it) },
+                firstSeen.values.count { it >= from && it < to }, journal
             )
         }
     }
@@ -330,6 +347,34 @@ fun InfoScreen(onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricTile("Postwagen отправлено", d.wagen.sumOf { it.sent }.toString(), Modifier.weight(1f))
                 MetricTile("Postwagen получено", d.wagen.sumOf { it.received }.toString(), Modifier.weight(1f))
+            }
+            // всё, что появилось и изменилось: новые товары в истории и операции из других окон (каталог, приёмки, отправка…)
+            fun jc(cat: String, vararg starts: String) =
+                d.journal.count { e -> e.cat == cat && starts.any { e.text.startsWith(it) } }
+            SectionHead("Что добавлено и изменено")
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile("Новых товаров в истории", d.newProducts.toString(), Modifier.weight(1f))
+                MetricTile("Добавлено в каталог", jc("Каталог", "Добавлен товар", "Импорт").toString(), Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile("Изменено товаров", jc("Каталог", "Изменён товар").toString(), Modifier.weight(1f))
+                MetricTile("Изменено приёмок", jc("Приём", "Изменена партия").toString(), Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile("Удалено", (jc("Приём", "Удалена партия") + jc("Каталог", "Удалён товар")).toString(), Modifier.weight(1f))
+                MetricTile("Операций в журнале", d.journal.size.toString(), Modifier.weight(1f))
+            }
+            if (d.journal.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                d.journal.sortedByDescending { it.t }.take(8).forEach { e ->
+                    TopLine(iHm(e.t) + " · " + e.text, e.cat)
+                }
+                Text(
+                    "Показаны операции этого аккаунта; полный список — в «Прочее → Журнал».",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             val stamps = d.receipts.map { it.receivedAt } + d.pakets.map { it.createdAt } + d.wagen.map { it.createdAt }
             if (period == 0 && stamps.size > 1) {

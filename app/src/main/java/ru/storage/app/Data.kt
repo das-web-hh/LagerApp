@@ -215,6 +215,9 @@ class ProductDb private constructor(context: Context) :
     fun findByBarcode(code: String): Product? =
         readProducts("SELECT $pcols FROM products WHERE barcode = ? LIMIT 1", arrayOf(code)).firstOrNull()
 
+    fun findByName(name: String): Product? =
+        readProducts("SELECT $pcols FROM products WHERE name_lc = ? LIMIT 1", arrayOf(name.trim().lowercase())).firstOrNull()
+
     fun findByArticle(article: String): Product? =
         readProducts("SELECT $pcols FROM products WHERE article = ? LIMIT 1", arrayOf(article)).firstOrNull()
 
