@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=4, user-scalable=yes">
 <style>
 :root{--bg:#eef1f7;--bar:#ffffff;--bd:#d5dbe8;--fg:#0f172a;--ac:#016afd;--acbg:#d9e5ff}
 :root.dark{--bg:#14171d;--bar:#1e222b;--bd:#343a47;--fg:#e8ecf4;--ac:#7fb0ff;--acbg:#27406e}
@@ -20,9 +20,15 @@ button:active{background:var(--acbg)}
 #pal{position:fixed;z-index:9;left:8px;right:8px;top:54px;background:var(--bar);border:1px solid var(--bd);border-radius:12px;
   padding:10px;display:none;flex-wrap:wrap;gap:10px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
 #pal b{width:34px;height:34px;border-radius:50%;border:1px solid var(--bd);display:block}
-#wrap{padding:58px 8px 40px}
-#doc{background:#fff;color:#111;max-width:820px;margin:0 auto;min-height:calc(100vh - 110px);padding:20px 18px;
-  font-size:16px;line-height:1.45;outline:none;border-radius:4px;box-shadow:0 1px 6px rgba(0,0,0,.18);word-wrap:break-word;overflow-wrap:anywhere}
+html{overflow-x:hidden}
+#wrap{position:relative;min-height:100vh}
+/* лист A4 (210×297 мм) в натуральную ширину; на экране он масштабируется под ширину телефона.
+   Рамка — 8 мм от края бумаги, на каждой странице своя */
+#sheet{position:absolute;left:0;top:58px;width:210mm;min-height:297mm;transform-origin:0 0;background-color:#fff;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 210 297' preserveAspectRatio='none'><rect x='8' y='8' width='194' height='281' fill='none' stroke='%23555555' stroke-width='0.35'/><line x1='0' y1='296.6' x2='210' y2='296.6' stroke='%23c4cad6' stroke-width='0.8'/></svg>");
+  background-repeat:repeat-y;background-size:210mm 297mm;box-shadow:0 1px 8px rgba(0,0,0,.28)}
+#doc{background:transparent;color:#111;min-height:297mm;padding:14mm;font-size:16px;line-height:1.45;outline:none;
+  word-wrap:break-word;overflow-wrap:anywhere}
 #doc p,#doc div{margin:0 0 6px}
 #doc h1{font-size:26px;margin:10px 0 8px}#doc h2{font-size:21px;margin:10px 0 6px}
 #doc ul,#doc ol{margin:0 0 6px;padding-left:26px}
@@ -41,10 +47,10 @@ button:active{background:var(--acbg)}
  <div class="g"><button data-c="removeFormat">Tx</button></div>
 </div>
 <div id="pal"></div>
-<div id="wrap"><div id="doc" contenteditable="true"><p><br></p></div></div>
+<div id="wrap"><div id="sheet"><div id="doc" contenteditable="true"><p><br></p></div></div></div>
 <script>
 var doc=document.getElementById('doc'),pal=document.getElementById('pal'),saved=null,timer=null,palMode='';
-var SIZES=[10,12,14,16,18,20,24,28,32,40,48];
+var SIZES=[10,12,14,16,18,20,24,28,32,36,40,48,56,64,72];
 var COLORS=['#000000','#444444','#888888','#d32f2f','#f57c00','#fbc02d','#388e3c','#0097a7','#1976d2','#7b1fa2','#c2185b','#ffffff'];
 var BACKS=['transparent','#fff59d','#ffe0b2','#ffcdd2','#c8e6c9','#b3e5fc','#d1c4e9','#f8bbd0','#e0e0e0'];
 try{document.execCommand('defaultParagraphSeparator',false,'p');document.execCommand('styleWithCSS',false,true);}catch(e){}
@@ -52,7 +58,20 @@ try{document.execCommand('defaultParagraphSeparator',false,'p');document.execCom
 function inDoc(n){return n&&doc.contains(n)}
 function saveSel(){var s=getSelection();if(s.rangeCount&&inDoc(s.anchorNode))saved=s.getRangeAt(0).cloneRange()}
 function restoreSel(){doc.focus();if(saved){var s=getSelection();s.removeAllRanges();s.addRange(saved)}}
+var sheet=document.getElementById('sheet'),wrap=document.getElementById('wrap');
+function fit(){
+  var vw=document.documentElement.clientWidth,sw=sheet.offsetWidth;
+  if(!sw)return;
+  var z=Math.max(0.25,(vw-12)/sw),pageH=297*sw/210;
+  doc.style.minHeight='0';
+  var pages=Math.max(1,Math.ceil((doc.scrollHeight-2)/pageH));
+  doc.style.minHeight=(pages*297)+'mm';
+  sheet.style.transform='translateX('+Math.max(0,(vw-sw*z)/2)+'px) scale('+z+')';
+  wrap.style.height=(58+sheet.offsetHeight*z+40)+'px';
+}
+window.addEventListener('resize',fit);
 function changed(){
+  fit();
   clearTimeout(timer);
   timer=setTimeout(function(){if(window.Host&&Host.onChange)Host.onChange(doc.innerHTML)},500);
 }
@@ -144,13 +163,16 @@ doc.addEventListener('focus',function(){pal.style.display='none'});
 window.setDoc=function(html,dark){
   document.documentElement.classList.toggle('dark',!!dark);
   doc.innerHTML=(html&&html.length)?html:'<p><br></p>';
+  fit();
 };
 window.getDoc=function(){return doc.innerHTML};
 window.getPrintHtml=function(title){
   var css='@page{size:A4;margin:14mm}body{font-family:Roboto,Arial,sans-serif;font-size:16px;line-height:1.45;color:#000;margin:0}'+
    'p,div{margin:0 0 6px}h1{font-size:26px;margin:10px 0 8px}h2{font-size:21px;margin:10px 0 6px}ul,ol{margin:0 0 6px;padding-left:26px}'+
-   'table{border-collapse:collapse}td,th{border:1px solid #888;padding:4px 6px}';
+   'table{border-collapse:collapse}td,th{border:1px solid #888;padding:4px 6px}'+
+   'body::before{content:"";position:fixed;left:-6mm;top:-6mm;right:-6mm;bottom:-6mm;border:0.35mm solid #555}';
   return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+String(title||'').replace(/</g,'&lt;')+'</title><style>'+css+'</style></head><body>'+doc.innerHTML+'</body></html>';
 };
+fit();
 if(window.Host&&Host.ready)Host.ready();
 </script></body></html>

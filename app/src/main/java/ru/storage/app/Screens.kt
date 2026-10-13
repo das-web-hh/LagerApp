@@ -61,6 +61,7 @@ fun OtherScreen(prefs: Prefs) {
     val current = section
     val ctx = LocalContext.current
     LaunchedEffect(Unit) { InvoiceProfiles.load(ctx) }
+    SideEffect { TabRoot.set(2, section == null) }
     when {
         current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
         current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
@@ -99,6 +100,7 @@ fun OtherScreen(prefs: Prefs) {
 fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
     var section by rememberSaveable { mutableStateOf<String?>(null) }
     val current = section
+    SideEffect { TabRoot.set(3, section == null) }
     when {
         current == "Профиль" -> ProfileScreen(profile, prefs, onLogout) { section = null }
         current == "Настройки" -> SettingsScreen(prefs) { section = null }
@@ -163,6 +165,7 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     val admin = Session.isAdmin
     val current = mode
     val ctx = LocalContext.current
+    SideEffect { TabRoot.set(1, mode == null && viewReceipt == null) }
     var pickMode by remember { mutableStateOf("auto") }
     var deleteJob by remember { mutableStateOf<AutoJob?>(null) }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->

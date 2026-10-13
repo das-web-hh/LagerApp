@@ -115,6 +115,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     var all by remember { mutableStateOf(emptyList<Receipt>()) }
     var productCount by remember { mutableIntStateOf(0) }
     val enough = query.trim().length >= MIN_SEARCH_CHARS
+    SideEffect { TabRoot.set(0, !scanning && openProductId == null && openReceiptId == null && section == null && query.isEmpty()) }
 
     LaunchedEffect(Unit) {
         InvoiceProfiles.load(ctx)

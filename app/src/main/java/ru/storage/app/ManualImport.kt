@@ -233,3 +233,160 @@ object ExcelImport {
         return AiImport.parse(text)
     }
 }
+
+/** Как читать Excel в «По наименованию»: "auto" — приложение само находит столбцы, "ai" — столбцы выбирает ИИ. */
+object ExcelCfg {
+    private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("excel", Context.MODE_PRIVATE)
+    fun mode(ctx: Context): String = if (sp(ctx).getString("mode", "auto") == "ai") "ai" else "auto"
+    fun setMode(ctx: Context, m: String) = sp(ctx).edit().putString("mode", if (m == "ai") "ai" else "auto").apply()
+}
+
+/** Какие столбцы таблицы что значат (номера с нуля) и с какой строки идут товары. */
+class ColPick(
+    val dataStart: Int,
+    val name: Int,
+    val qty: Int,
+    val code: Int = -1,
+    val sender: String = "",
+    val order: String = "",
+    val date: String = ""
+)
+
+/** Выбор столбцов Excel: своими правилами (шапка таблицы или содержимое) либо через ИИ. */
+object ExcelColumns {
+    private val NAME_KEYS = listOf("наимен", "назван", "товар", "продук", "номенклат", "описан", "name", "item", "product", "bezeichn", "artikelbez", "beschreib", "ware")
+    private val QTY_KEYS = listOf("колич", "кол-во", "кол.", "qty", "quantity", "menge", "anzahl", "stück", "stueck", "pcs", "шт")
+    private val PLAN_KEYS = listOf("план", "заказ", "plan", "soll", "order", "bestell")
+    private val FACT_KEYS = listOf("факт", "fact", "ist", "принят", "received", "gelief")
+    private val BAD_QTY = listOf("цена", "price", "preis", "сумм", "sum", "amount", "итого", "total", "стоим", "вес", "weight", "gewicht")
+    private val CODE_KEYS = listOf("штрих", "barcode", "bar code", "ean", "gtin", "шк", "strich")
+    private val TOTAL_WORDS = listOf("итого", "всего", "total", "summe", "gesamt")
+    private val NUM = Regex("\\d+([.,]\\d+)?")
+    private val CODE = Regex("\\d{8,14}")
+
+    private fun has(s: String, keys: List<String>): Boolean = keys.any { s.contains(it) }
+    private fun cell(r: List<String>, i: Int): String = r.getOrElse(i) { "" }.trim()
+    private fun isNum(s: String) = s.isNotEmpty() && NUM.matches(s)
+
+    /** Способ 1: приложение само. Сначала ищет строку-шапку со словами «наименование / количество», иначе смотрит на данные. */
+    fun detect(rows: List<List<String>>): ColPick? {
+        val low = rows.map { r -> r.map { it.trim().lowercase() } }
+        // 1) шапка таблицы
+        for (ri in 0 until minOf(15, low.size)) {
+            val r = low[ri]
+            val nameC = r.indexOfFirst { has(it, NAME_KEYS) }
+            if (nameC < 0) continue
+            val qtyCands = r.indices.filter { c ->
+                c != nameC && has(r[c], QTY_KEYS) && !has(r[c], BAD_QTY) && !has(r[c], FACT_KEYS)
+            }
+            if (qtyCands.isEmpty()) continue
+            val qtyC = qtyCands.firstOrNull { has(r[it], PLAN_KEYS) } ?: qtyCands.first()
+            val codeC = r.indexOfFirst { has(it, CODE_KEYS) }
+            return ColPick(ri + 1, nameC, qtyC, codeC)
+        }
+        // 2) по содержимому
+        val data = rows.take(300)
+        val cols = data.maxOfOrNull { it.size } ?: return null
+        if (cols < 2) return null
+        class St(var text: Int = 0, var textLen: Long = 0, var small: Int = 0, var code: Int = 0, var filled: Int = 0)
+        val st = Array(cols) { St() }
+        for (r in data) for (c in 0 until cols) {
+            val v = cell(r, c)
+            if (v.isEmpty()) continue
+            st[c].filled++
+            when {
+                CODE.matches(v) -> st[c].code++
+                isNum(v) -> if ((v.replace(',', '.').toDoubleOrNull() ?: 0.0) in 0.0..99999.0) st[c].small++
+                else -> { st[c].text++; st[c].textLen += v.length }
+            }
+        }
+        val nameC = (0 until cols).maxByOrNull { st[it].textLen }?.takeIf { st[it].text >= 1 } ?: return null
+        val codeC = (0 until cols).firstOrNull { it != nameC && st[it].filled > 0 && st[it].code * 10 >= st[it].filled * 6 } ?: -1
+        val qtyC = (0 until cols).filter { it != nameC && it != codeC && st[it].filled > 0 && st[it].small * 10 >= st[it].filled * 6 }
+            .let { l -> l.firstOrNull { it > nameC } ?: l.firstOrNull() } ?: return null
+        val start = data.indexOfFirst { r -> cell(r, nameC).isNotEmpty() && !isNum(cell(r, nameC)) && isNum(cell(r, qtyC)) }
+        if (start < 0) return null
+        return ColPick(start, nameC, qtyC, codeC)
+    }
+
+    private fun aiPrompt(rows: List<List<String>>): String {
+        val sample = rows.take(25).mapIndexed { i, r ->
+            "$i\t" + r.joinToString("\t") { it.replace('\t', ' ').replace('\n', ' ').trim().take(60) }
+        }.joinToString("\n")
+        return """
+            Below are the first rows of a spreadsheet with a goods list (a delivery note / order). Columns are separated by TAB. The first number in every line is the row index (from 0); the columns after it are numbered from 0.
+            Decide which column is which. Answer with JSON only (no markdown, no comments):
+            {"dataStartRow": 0, "nameCol": 0, "qtyCol": 0, "barcodeCol": -1, "sender": "", "order": "", "date": ""}
+            Rules:
+            - dataStartRow: index of the FIRST row that is a real product (after any header rows).
+            - nameCol: the column with the product name / description (not the article number).
+            - qtyCol: the PLANNED / ordered / expected quantity. Not the received (fact) quantity, not a price, not a sum, not a weight.
+            - barcodeCol: the column with the barcode (EAN / GTIN, 8-14 digits), or -1.
+            - sender, order, date: only if they are clearly written in the rows above the table (sender name, order number, date as dd.mm.yyyy or dd.mm.yyyy hh:mm). Otherwise "".
+            Rows:
+            $sample
+        """.trimIndent()
+    }
+
+    /** Способ 2: столбцы выбирает ИИ. Бросает исключение при ошибке. Вызывать не в главном потоке. */
+    fun askAi(ctx: Context, rows: List<List<String>>): ColPick {
+        val answer = Ai.call(ctx, aiPrompt(rows), null)
+        val s = answer.indexOf('{')
+        val e = answer.lastIndexOf('}')
+        if (s < 0 || e <= s) throw RuntimeException("ИИ вернул ответ без JSON")
+        val o = org.json.JSONObject(answer.substring(s, e + 1))
+        val name = o.optInt("nameCol", -1)
+        val qty = o.optInt("qtyCol", -1)
+        if (name < 0 || qty < 0 || name == qty) throw RuntimeException("ИИ не нашёл столбцы названия и количества")
+        fun clean(x: String) = x.trim().let { if (it.equals("null", true) || it.equals("none", true)) "" else it }
+        return ColPick(
+            o.optInt("dataStartRow", 0).coerceAtLeast(0), name, qty, o.optInt("barcodeCol", -1),
+            clean(o.optString("sender")), clean(o.optString("order")), clean(o.optString("date"))
+        )
+    }
+
+    /** Строки товаров по выбранным столбцам → тот же разбор, что у вставки (#LAGER …). */
+    fun parse(rows: List<List<String>>, p: ColPick): ImportResult? {
+        fun one(s: String) = s.replace('\t', ' ').replace('\n', ' ').replace('\u00A0', ' ').trim()
+        val sb = StringBuilder(AiImport.MARKER).append('\n')
+        val sender = one(p.sender).replace('/', ' ').ifEmpty { "no_data" }
+        val order = one(p.order).replace('/', ' ').ifEmpty { "no_data" }
+        sb.append(sender).append('/').append(order).append('/').append(one(p.date)).append('\n')
+        var n = 0
+        for (i in p.dataStart until rows.size) {
+            val r = rows[i]
+            val name = one(cell(r, p.name))
+            if (name.isEmpty()) continue
+            if (TOTAL_WORDS.any { name.lowercase().startsWith(it) }) continue
+            val qty = one(cell(r, p.qty))
+            val code = if (p.code >= 0) one(cell(r, p.code)) else ""
+            sb.append(name).append('\t').append(qty).append('\t').append(code).append('\n')
+            n++
+        }
+        if (n == 0) return null
+        return AiImport.parse(sb.toString())
+    }
+}
+
+/** Что делать с таблицей: строгий формат #LAGER, иначе — выбор столбцов выбранным способом. Возвращает результат и пояснение. */
+fun readExcelRows(ctx: Context, rows: List<List<String>>): Pair<ImportResult?, String> {
+    val firstCell = rows.firstOrNull { r -> r.any { it.isNotBlank() } }?.firstOrNull()?.trim().orEmpty()
+    if (firstCell.startsWith(AiImport.MARKER, ignoreCase = true)) return ExcelImport.parse(rows) to ""
+    var note = ""
+    var pick: ColPick? = null
+    if (ExcelCfg.mode(ctx) == "ai") {
+        if (!AiCfg.ready(ctx)) note = "Нет ключа ИИ — столбцы выбрало приложение"
+        else try {
+            pick = ExcelColumns.askAi(ctx, rows)
+            note = "Столбцы выбрал ИИ"
+        } catch (e: Exception) {
+            note = "ИИ не ответил (${e.message ?: e.javaClass.simpleName}) — столбцы выбрало приложение"
+        }
+    }
+    if (pick == null) {
+        pick = ExcelColumns.detect(rows)
+        if (note.isEmpty()) note = "Столбцы выбрало приложение"
+    }
+    if (pick == null) return null to "Не удалось определить столбцы названия и количества"
+    return ExcelColumns.parse(rows, pick) to note
+}

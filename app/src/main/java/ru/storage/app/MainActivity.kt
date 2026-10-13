@@ -247,6 +247,12 @@ fun AppRoot() {
 
 private data class Tab(val title: String, val icon: ImageVector)
 
+/** Какие из четырёх главных вкладок сейчас на своём первом экране. Свайп между вкладками работает только там. */
+object TabRoot {
+    val flags = mutableStateListOf(true, true, true, true)
+    fun set(i: Int, root: Boolean) { if (flags[i] != root) flags[i] = root }
+}
+
 @Composable
 fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     val tabs = listOf(
@@ -366,8 +372,10 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                         onDragStart = { total = 0f },
                         onDragCancel = { total = 0f },
                         onDragEnd = {
-                            if (total <= -swipePx && selected < tabs.lastIndex) go(selected + 1)
-                            else if (total >= swipePx && selected > 0) go(selected - 1)
+                            // только на первом экране каждой из четырёх вкладок
+                            val canSwipe = TabRoot.flags[selected] && Incoming.openPath == null
+                            if (canSwipe && total <= -swipePx && selected < tabs.lastIndex) go(selected + 1)
+                            else if (canSwipe && total >= swipePx && selected > 0) go(selected - 1)
                             total = 0f
                         },
                         onHorizontalDrag = { _, dx -> total += dx }

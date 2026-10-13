@@ -443,9 +443,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         scope.launch {
             try {
                 val rows = Xlsx.read(app, android.net.Uri.fromFile(File(file.path)))
-                val res = ExcelImport.parse(rows)
+                val (res, how) = readExcelRows(app, rows)
                 if (res == null || res.items.isEmpty()) {
-                    message = "Ошибка: в файле нет товаров. Нужны столбцы: название, количество, штрих-код"
+                    message = "Ошибка: " + (how.ifBlank { "в файле нет товаров или не найдены столбцы названия и количества" })
                     return@launch
                 }
                 val db = ProductDb.get(app)
@@ -461,7 +461,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 pages.clear()
                 pages.add(PageState().also { it.ok = true; it.status = "готово" })
                 val skipped = res.badLines.size + res.zeroLines.size
-                message = "Готово: позиций — ${list.size}" + if (skipped > 0) ", пропущено строк: $skipped" else ""
+                message = "Готово: позиций — ${list.size}" + (if (skipped > 0) ", пропущено строк: $skipped" else "") +
+                    (if (how.isNotBlank()) ". $how" else "")
             } catch (e: Exception) {
                 message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
             } finally {

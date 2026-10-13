@@ -125,6 +125,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
         "Подключения" -> ConnectionSettings { section = null }
+        "Чтение Excel" -> ExcelSettings { section = null }
         "Распознавание документов" -> AiSettings { section = null }
         "Голос и подсчёт" -> VoiceSettings { section = null }
         "Вибрация" -> VibrationSettings { section = null }
@@ -143,6 +144,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
         "Подключения" to "Firebase, EmailJS, сохранить и загрузить все настройки файлом",
+        "Чтение Excel" to "Как находить столбцы названия и количества: приложение само или ИИ",
         "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
         "Вибрация" to "Тап и прокрутка: сила и длительность",
         "Просмотр накладных" to "Листать сверху вниз или слева направо"
@@ -540,6 +542,38 @@ private fun PrintSettings(prefs: Prefs, onBack: () -> Unit) {
                 Signature.CSS + "</style></head><body>" +
                 Signature.svg(name, System.currentTimeMillis()) + "</body></html>"
             HtmlPreview(html, Modifier.fillMaxWidth().height(110.dp))
+        }
+    }
+}
+
+@Composable
+fun ExcelSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var mode by remember { mutableStateOf(ExcelCfg.mode(ctx)) }
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Чтение Excel", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Как приложение выбирает столбцы, когда в «Приём по наименованию» загружен Excel-файл. " +
+                "Файл с меткой #LAGER в первой строке всегда читается по строгому формату.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth().clickable { mode = "auto"; ExcelCfg.setMode(ctx, "auto") }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = mode == "auto", onClick = { mode = "auto"; ExcelCfg.setMode(ctx, "auto") })
+            Column {
+                Text("Приложение само")
+                Text("Ищет шапку «Наименование / Количество», иначе смотрит на данные. Без ИИ и без интернета.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().clickable { mode = "ai"; ExcelCfg.setMode(ctx, "ai") }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = mode == "ai", onClick = { mode = "ai"; ExcelCfg.setMode(ctx, "ai") })
+            Column {
+                Text("ИИ")
+                Text("Первые строки таблицы уходят в ИИ, он сам выбирает столбцы названия и планового количества. Нужен ключ ИИ; если ИИ не ответит, столбцы выберет приложение.", style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }
