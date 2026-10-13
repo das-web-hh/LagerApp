@@ -432,13 +432,52 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     val liveStatus: String
         get() = pages.firstOrNull { !it.ok && it.status != "ожидает" }?.status ?: ""
 
+    /** Файл — таблица Excel (.xlsx): товары берутся из столбцов как при вставке в «Приём вручную», без ИИ. */
+    val isExcel: Boolean
+        get() = file.name.lowercase().let { it.endsWith(".xlsx") || it.endsWith(".xlsm") }
+
+    private fun loadExcel() {
+        if (running) return
+        running = true
+        message = "Чтение Excel…"
+        scope.launch {
+            try {
+                val rows = Xlsx.read(app, android.net.Uri.fromFile(File(file.path)))
+                val res = ExcelImport.parse(rows)
+                if (res == null || res.items.isEmpty()) {
+                    message = "Ошибка: в файле нет товаров. Нужны столбцы: название, количество, штрих-код"
+                    return@launch
+                }
+                val db = ProductDb.get(app)
+                val list = res.items.map {
+                    val p = db.findByName(it.name) ?: if (it.barcode.isNotBlank()) db.findByBarcode(it.barcode) else null
+                    ItemRow(it.name, it.qty, productId = p?.id ?: "")
+                }
+                if (res.sender.isNotBlank()) sender = res.sender
+                if (res.order.isNotBlank()) order = res.order
+                if (res.stamp.isNotBlank()) stamp = res.stamp
+                items.clear()
+                items.addAll(list)
+                pages.clear()
+                pages.add(PageState().also { it.ok = true; it.status = "готово" })
+                val skipped = res.badLines.size + res.zeroLines.size
+                message = "Готово: позиций — ${list.size}" + if (skipped > 0) ", пропущено строк: $skipped" else ""
+            } catch (e: Exception) {
+                message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
+            } finally {
+                running = false
+            }
+        }
+    }
+
     fun startOnce() {
         if (started) return
         started = true
-        start(false)
+        if (isExcel) loadExcel() else start(false)
     }
 
     fun start(onlyFailed: Boolean) {
+        if (isExcel) { loadExcel(); return }
         if (running) return
         running = true
         if (!saved) autoState = ""
@@ -1032,7 +1071,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     }
 
     BackHandler(onBack = onClose)
-    val ready = AiCfg.ready(ctx)
+    val ready = AiCfg.ready(ctx) || job.isExcel
     var checked by remember(f.path) { mutableStateOf(false) }
     var dup by remember(f.path) { mutableStateOf<Dup?>(null) }
     var forced by remember(f.path) { mutableStateOf(false) }

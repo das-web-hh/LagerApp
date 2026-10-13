@@ -15,7 +15,20 @@ import androidx.activity.compose.BackHandler
 import android.os.Bundle
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -190,19 +203,11 @@ fun AppRoot() {
     if (loggedIn) {
         val receiver = "${profile.firstName} ${profile.lastName}".trim()
         AutoReceiveHolder.receiver = receiver
-        val openJob = Incoming.openPath?.let { AutoReceiveHolder.find(it) }
-        if (openJob != null) {
-            // свёрнутые партии остаются в AutoReceiveHolder и продолжают работать
-            AutoReceiveScreen(
-                openJob.file, receiver, if (openJob.nameMode) "name" else "auto"
-            ) { Incoming.openPath = null }
-        } else {
-            MainScreen(prefs = prefs, profile = profile, onLogout = {
-                Journal.log("Система", "Выход из аккаунта")
-                saveUser(null)
-            })
-            Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
-        }
+        MainScreen(prefs = prefs, profile = profile, onLogout = {
+            Journal.log("Система", "Выход из аккаунта")
+            saveUser(null)
+        })
+        Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
     } else if (current != null) {
         // зарегистрировался, но админ ещё не назначил должность и не подтвердил
         PendingScreen(
@@ -246,6 +251,16 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     )
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val ctx = LocalContext.current
+    // у каждой вкладки свой цвет фона (у «Главной» — собственный синий); счётчик сбрасывает вкладку к корню
+    val accents = listOf<Color?>(null, Color(0xFF1FA971), Color(0xFFF08A24), Color(0xFF8E5BD6))
+    val resets = remember { mutableStateListOf(0, 0, 0, 0) }
+    /** Открыть вкладку из любого места: свёрнутая партия закрывается (остаётся в работе), вкладка открывается с начала. */
+    fun go(i: Int) {
+        Incoming.openPath = null
+        resets[i] = resets[i] + 1
+        selected = i
+    }
+    val swipePx = with(LocalDensity.current) { 90.dp.toPx() }
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
     LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
     LaunchedEffect(Unit) {
@@ -312,7 +327,7 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                 tabs.forEachIndexed { i, tab ->
                     NavigationBarItem(
                         selected = selected == i,
-                        onClick = { selected = i },
+                        onClick = { go(i) },
                         icon = {
                             if (i == 1) {
                                 val n = AutoReceiveHolder.jobs.count { !it.saved }
@@ -336,12 +351,56 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
             }
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (selected) {
-                0 -> HomeScreen(prefs, profile.firstName) { selected = it }
-                1 -> ReceiveScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
-                2 -> OtherScreen(prefs)
-                else -> MoreScreen(profile, prefs, onLogout)
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding)
+                // свайп справа налево — следующее окно, слева направо — предыдущее; строки со своим свайпом его не запускают
+                .pointerInput(selected) {
+                    var total = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { total = 0f },
+                        onDragCancel = { total = 0f },
+                        onDragEnd = {
+                            if (total <= -swipePx && selected < tabs.lastIndex) go(selected + 1)
+                            else if (total >= swipePx && selected > 0) go(selected - 1)
+                            total = 0f
+                        },
+                        onHorizontalDrag = { _, dx -> total += dx }
+                    )
+                }
+        ) {
+            AnimatedContent(
+                targetState = selected,
+                transitionSpec = {
+                    val dir = if (targetState > initialState) 1 else -1
+                    (slideInHorizontally(tween(220)) { w -> w * dir / 3 } + fadeIn(tween(220))) togetherWith
+                        (slideOutHorizontally(tween(220)) { w -> -w * dir / 3 } + fadeOut(tween(120)))
+                },
+                label = "tabs"
+            ) { tab ->
+                val accent = accents[tab]
+                Box(
+                    Modifier.fillMaxSize().then(
+                        if (accent == null) Modifier else Modifier.background(
+                            Brush.verticalGradient(listOf(accent.copy(alpha = 0.18f), Color.Transparent), endY = 900f)
+                        )
+                    )
+                ) {
+                    key(resets[tab]) {
+                        val openJob = Incoming.openPath?.let { AutoReceiveHolder.find(it) }
+                        if (openJob != null && tab == selected) {
+                            // свёрнутые партии остаются в AutoReceiveHolder и продолжают работать
+                            AutoReceiveScreen(
+                                openJob.file, "${profile.firstName} ${profile.lastName}".trim(),
+                                if (openJob.nameMode) "name" else "auto"
+                            ) { Incoming.openPath = null }
+                        } else when (tab) {
+                            0 -> HomeScreen(prefs, profile.firstName) { go(it) }
+                            1 -> ReceiveScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
+                            2 -> OtherScreen(prefs)
+                            else -> MoreScreen(profile, prefs, onLogout)
+                        }
+                    }
+                }
             }
         }
     }

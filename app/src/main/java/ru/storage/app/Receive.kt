@@ -58,18 +58,64 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf(emptyList<Product>()) }
-    val lines = remember { mutableStateListOf<EditItem>() }
+    // строки списка: qty — план (из вставки), fact — посчитано, defect — испорченные, expiry — срок годности
+    val rows = remember { mutableStateListOf<ItemRow>() }
+    var addTick by remember { mutableIntStateOf(0) }
+    var focusTarget by remember { mutableStateOf<ItemRow?>(null) }
     var showDialog by remember { mutableStateOf(false) }
-    var expiryItem by remember { mutableStateOf<EditItem?>(null) }
     var message by remember { mutableStateOf("") }
+    // данные шапки из вставки (отправитель / заказ / время)
+    var metaSender by remember { mutableStateOf("") }
+    var metaOrder by remember { mutableStateOf("") }
+    var metaStamp by remember { mutableStateOf("") }
+    var metaAt by remember { mutableStateOf<Long?>(null) }
     val clipboard = LocalClipboardManager.current
 
-    // приём из ИИ: текст с меткой #LAGER (из поля поиска или из буфера обмена)
+    fun addRow(p: Product) {
+        val existing = rows.firstOrNull { it.productId == p.id }
+        if (existing != null) {
+            focusTarget = existing
+        } else {
+            rows.add(ItemRow(p.name, "", extra = true, productId = p.id))
+            focusTarget = null
+        }
+        addTick++
+    }
+
+    // вставка из ИИ / Excel: текст с меткой #LAGER — товары попадают в список, дальше их считают тапами
     fun importAi(text: String) {
         val res = AiImport.parse(text)
+        if (res == null) {
+            message = "Не удалось разобрать текст"
+            return
+        }
         scope.launch {
-            message = if (res == null) "Не удалось разобрать текст"
-            else AiImport.save(ctx, db, res, receiver)
+            val found = withContext(Dispatchers.IO) {
+                res.items.map { it to (db.findByName(it.name) ?: if (it.barcode.isNotBlank()) db.findByBarcode(it.barcode) else null) }
+            }
+            var added = 0
+            for ((it, p) in found) {
+                val same = rows.firstOrNull { r ->
+                    (p != null && r.productId == p.id) || r.name.trim().equals(it.name.trim(), true)
+                }
+                if (same != null) {
+                    val sum = (normalizeQty(same.qty).toDoubleOrNull() ?: 0.0) + (it.qty.toDoubleOrNull() ?: 0.0)
+                    same.qty = cleanQty(sum.toString())
+                } else {
+                    rows.add(ItemRow(it.name, it.qty, productId = p?.id ?: ""))
+                    added++
+                }
+            }
+            if (res.sender.isNotBlank()) metaSender = res.sender
+            if (res.order.isNotBlank()) metaOrder = res.order
+            if (res.stamp.isNotBlank()) { metaStamp = res.stamp; metaAt = res.receivedAt }
+            focusTarget = null
+            addTick++
+            message = buildString {
+                append("В список добавлено позиций: $added")
+                if (res.zeroLines.isNotEmpty()) append(" · пропущено с количеством 0: ${res.zeroLines.size}")
+                if (res.badLines.isNotEmpty()) append(" · не разобрано строк: ${res.badLines.size}")
+            }
         }
     }
 
@@ -95,18 +141,18 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                 onClick = {
                     val t = clipboard.getText()?.text.orEmpty()
                     if (AiImport.looksLike(t)) importAi(t)
-                    else message = "В буфере нет данных ИИ: текст должен начинаться с метки ${AiImport.MARKER}"
+                    else message = "В буфере нет данных: текст должен начинаться с метки ${AiImport.MARKER}"
                 },
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                 modifier = Modifier.height(34.dp)
-            ) { Text("Вставить из буфера", style = MaterialTheme.typography.labelMedium) }
+            ) { Text("Вставить", style = MaterialTheme.typography.labelMedium) }
         }
         Spacer(Modifier.height(12.dp))
         SearchBar(
             query = query,
             onChange = { v ->
                 if (AiImport.looksLike(v)) {
-                    // вставлен ответ ИИ (метка #LAGER, отправитель/заказ/время, товары) — сразу принимаем
+                    // вставлен текст с меткой #LAGER — сразу кладём товары в список
                     query = ""
                     importAi(v)
                 } else {
@@ -121,6 +167,8 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         } else if (sync.text.isNotBlank() && (sync.busy || suggestions.isEmpty())) {
             Text(sync.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
         }
+        val head = listOf(metaSender, metaOrder, metaStamp).filter { it.isNotBlank() }.joinToString(" · ")
+        if (head.isNotEmpty()) Text(head, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
 
         if (suggestions.isNotEmpty()) {
             Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -129,7 +177,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                         Column(
                             Modifier.fillMaxWidth()
                                 .clickable {
-                                    if (lines.none { it.productId == p.id }) lines.add(0, EditItem(p.id, p.name, "1"))
+                                    addRow(p)
                                     query = ""
                                     message = ""
                                 }
@@ -151,68 +199,74 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         }
 
         Spacer(Modifier.height(12.dp))
-        if (lines.isNotEmpty()) Text("Принято позиций: ${lines.size}", style = MaterialTheme.typography.titleSmall)
-        LazyColumn(Modifier.weight(1f)) {
-            items(lines.toList(), key = { it.productId }) { l ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        // свайп вправо по строке — выбор срока годности
-                        .draggable(
-                            orientation = Orientation.Horizontal,
-                            state = rememberDraggableState { },
-                            onDragStopped = { v -> if (v > 900f) expiryItem = l }
-                        ),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(l.name)
-                        if (l.expiry.isNotBlank()) Text("срок ${l.expiry}", style = MaterialTheme.typography.bodySmall)
-                    }
-                    OutlinedTextField(
-                        value = l.qty, onValueChange = { l.qty = it },
-                        singleLine = true, label = { Text("Кол-во") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.width(100.dp)
-                    )
-                    TextButton(onClick = { lines.remove(l) }) { Text("✕") }
-                }
-                HorizontalDivider()
-            }
+        if (rows.isNotEmpty()) {
+            Text(
+                "Позиций: ${rows.size}. Тап по строке — +1, по числу — барабан; свайп вправо — срок годности, влево — брак и удаление.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(4.dp))
         }
-        if (lines.isNotEmpty()) {
-            val ok = lines.all { qtyValid(it.qty) }
-            if (!ok) Text("Укажите количество больше нуля", color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall)
-            Button(onClick = { showDialog = true }, enabled = ok, modifier = Modifier.fillMaxWidth()) {
+        // обычный список (без барабана): тап +1, тап по числу — барабан с вибрацией, голосом и числом на экране
+        CountWheelList(
+            rows = rows,
+            editable = true,
+            modifier = Modifier.weight(1f),
+            addTick = addTick,
+            emptyText = "Список пуст: найдите товар или нажмите «Вставить»",
+            showSearch = false,
+            plain = true,
+            focusTarget = focusTarget,
+            extraLabel = ""
+        )
+        if (rows.isNotEmpty()) {
+            fun d(x: String) = normalizeQty(x).toDoubleOrNull() ?: 0.0
+            val counted = rows.count { d(it.fact) > 0.0 }
+            val badDefect = rows.firstOrNull { d(it.defect) > d(it.fact) }
+            val err = when {
+                counted == 0 -> "Посчитайте хотя бы один товар"
+                badDefect != null -> "Брак больше количества: ${badDefect.name.trim()}"
+                else -> ""
+            }
+            if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            else if (rows.any { d(it.fact) == 0.0 && it.extra }) {
+                Text("Товары без количества в приём не попадут", style = MaterialTheme.typography.bodySmall)
+            }
+            Button(onClick = { showDialog = true }, enabled = err.isEmpty(), modifier = Modifier.fillMaxWidth()) {
                 Text("Сохранить приём")
             }
         }
     }
 
-    expiryItem?.let { it0 ->
-        ExpiryPickerDialog(
-            initial = it0.expiry,
-            onPick = { v -> it0.expiry = v; expiryItem = null },
-            onDismiss = { expiryItem = null }
-        )
-    }
-
     if (showDialog) {
         SaveReceiptDialog(
+            initialSender = metaSender,
+            initialOrder = metaOrder,
             onDismiss = { showDialog = false },
             onSave = { sender, order, photos, invoices ->
                 val now = System.currentTimeMillis()
+                fun q(x: String) = normalizeQty(x).ifEmpty { "0" }
+                val items = rows
+                    .filter { !(it.extra && (normalizeQty(it.fact).toDoubleOrNull() ?: 0.0) <= 0.0) }
+                    .map {
+                        ReceiptItem(
+                            it.productId, it.name.trim(), q(it.fact),
+                            if (it.extra) "" else q(it.qty),
+                            normalizeQty(it.defect).let { dft -> if ((dft.toDoubleOrNull() ?: 0.0) > 0.0) dft else "" },
+                            it.expiry.trim()
+                        )
+                    }
                 val r = Receipt(
                     id = UUID.randomUUID().toString(),
-                    sender = sender.trim(), orderNo = order.trim(), receivedAt = now, receiver = receiver,
-                    items = lines.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.'), it.plan, it.defect, it.expiry.trim()) },
-                    photos = photos, invoices = invoices, updatedAt = now
+                    sender = sender.trim(), orderNo = order.trim(), receivedAt = metaAt ?: now, receiver = receiver,
+                    items = items,
+                    photos = photos, invoices = invoices, updatedAt = now, stamp = metaStamp
                 )
                 scope.launch(Dispatchers.IO) {
                     Cloud.saveReceipt(db, r)
                     Media.uploadPending(ctx, db)
                 }
-                lines.clear()
+                rows.clear()
+                metaSender = ""; metaOrder = ""; metaStamp = ""; metaAt = null
                 showDialog = false
                 message = "Приём сохранён: ${fmtTime(now)}"
             }
@@ -222,14 +276,16 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
 
 @Composable
 private fun SaveReceiptDialog(
+    initialSender: String = "",
+    initialOrder: String = "",
     onDismiss: () -> Unit,
     onSave: (String, String, List<String>, List<String>) -> Unit
 ) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     val scope = rememberCoroutineScope()
-    var sender by remember { mutableStateOf("") }
-    var order by remember { mutableStateOf("") }
+    var sender by remember { mutableStateOf(initialSender) }
+    var order by remember { mutableStateOf(initialOrder) }
     val photos = remember { mutableStateListOf<String>() }
     val invoices = remember { mutableStateListOf<String>() }
 

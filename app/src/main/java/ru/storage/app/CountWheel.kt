@@ -281,8 +281,10 @@ fun CountWheelList(
     focusTarget: ItemRow? = null,
     /** не null — у строки третья кнопка свайпа «Причины» (инвентарь B-Ware); вызывается с этой строкой */
     onDetails: ((ItemRow) -> Unit)? = null,
-    /** true — обычный список (без колеса); используется в B-Ware */
-    plain: Boolean = false
+    /** true — обычный список (без колеса); используется в B-Ware и в «Приём вручную» */
+    plain: Boolean = false,
+    /** подпись под названием у строки, добавленной вручную (нет в плане); пусто — без подписи */
+    extraLabel: String = "нет в плане"
 ) {
     var query by remember { mutableStateOf("") }
     var picking by remember { mutableStateOf<Pair<ItemRow, Boolean>?>(null) } // true — факт, false — брак
@@ -348,6 +350,7 @@ fun CountWheelList(
                             editable = editable,
                             plain = true,
                             bware = bware,
+                            extraLabel = extraLabel,
                             onPickExpiry = { expiryRow = row },
                             onDetails = onDetails?.let { cb -> { cb(row) } },
                             onPickFact = { picking = row to true },
@@ -409,6 +412,7 @@ fun CountWheelList(
                                     editable = editable,
                                     plain = false,
                                     bware = bware,
+                                    extraLabel = extraLabel,
                                     onPickExpiry = { expiryRow = row },
                                     onDetails = onDetails?.let { cb -> { cb(row) } },
                                     onPickFact = { picking = row to true },
@@ -460,6 +464,7 @@ private fun WheelRow(
     editable: Boolean,
     plain: Boolean,
     bware: Boolean,
+    extraLabel: String,
     onPickExpiry: () -> Unit,
     onDetails: (() -> Unit)?,
     onPickFact: () -> Unit,
@@ -625,7 +630,7 @@ private fun WheelRow(
                     )
                 } else {
                     val sub = buildList {
-                        if (row.extra) add("нет в плане") else add("план ${fmtQ(planD)}")
+                        if (row.extra) { if (extraLabel.isNotEmpty()) add(extraLabel) } else add("план ${fmtQ(planD)}")
                         if (defD > 0) add("брак ${fmtQ(defD)}")
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")

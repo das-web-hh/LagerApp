@@ -155,3 +155,81 @@ object AiImport {
         }
     }
 }
+
+/**
+ * Excel-файл для приёма по наименованию. Столбцы строго те же, что при вставке в окне «Приём вручную»:
+ *
+ *   строка 1:  #LAGER
+ *   строка 2:  Отправитель/EB1234567/16.07.2026 16:48   (одной ячейкой или тремя: отправитель | заказ | дата и время)
+ *   строка 3+: A — название товара, B — количество, C — штрих-код (необязательно)
+ *
+ * Файл читается тем же разбором, что и вставка из буфера (AiImport.parse), поэтому правила одинаковые.
+ * Если метки #LAGER нет, таблица читается как «название | количество | штрих-код» без отправителя и заказа;
+ * первая строка пропускается, если в ней вместо количества текст (заголовок столбцов).
+ */
+object ExcelImport {
+    private val DATE = Regex("\\d{2}\\.\\d{2}\\.\\d{4}")
+    private val NUM = Regex("\\d+([.,]\\d+)?")
+
+    private fun isHeader(cells: List<String>): Boolean {
+        val first = cells.firstOrNull().orEmpty()
+        if (first.count { it == '/' } >= 2) return true
+        val nonEmpty = cells.filter { it.isNotEmpty() }
+        return nonEmpty.size >= 2 && nonEmpty.none { NUM.matches(it) } && DATE.containsMatchIn(nonEmpty.last())
+    }
+
+    private fun headerLine(cells: List<String>): String {
+        val first = cells.firstOrNull().orEmpty()
+        if (first.count { it == '/' } >= 2) return first
+        val parts = cells.filter { it.isNotEmpty() }
+        return when (parts.size) {
+            0 -> "no_data/no_data/"
+            1 -> "${parts[0]}/no_data/"
+            2 -> "${parts[0]}/${parts[1]}/"
+            else -> "${parts[0]}/${parts[1]}/${parts[2]}"
+        }
+    }
+
+    private fun itemLine(cells: List<String>): String =
+        listOf(cells.getOrElse(0) { "" }, cells.getOrElse(1) { "" }, cells.getOrElse(2) { "" })
+            .joinToString("\t").trimEnd('\t')
+
+    /** Строки таблицы → текст в формате вставки (#LAGER …). Пустая строка — таблица пустая. */
+    fun toPasteText(rows: List<List<String>>): String {
+        val clean = rows
+            .map { r -> r.map { it.replace('\u00A0', ' ').trim() } }
+            .filter { r -> r.any { it.isNotEmpty() } }
+        if (clean.isEmpty()) return ""
+        val sb = StringBuilder(AiImport.MARKER).append('\n')
+        val marked = clean[0].firstOrNull().orEmpty().startsWith(AiImport.MARKER, ignoreCase = true)
+        var rest = clean
+        if (marked) {
+            // заголовок может стоять в той же строке после метки или в следующей
+            val after = clean[0].drop(1).filter { it.isNotEmpty() }
+            val tail = clean[0][0].substring(AiImport.MARKER.length).trim()
+            rest = clean.drop(1)
+            when {
+                after.isNotEmpty() || tail.isNotEmpty() ->
+                    sb.append(headerLine(if (tail.isNotEmpty()) listOf(tail) + after else after)).append('\n')
+                rest.isNotEmpty() && isHeader(rest[0]) -> {
+                    sb.append(headerLine(rest[0])).append('\n')
+                    rest = rest.drop(1)
+                }
+                else -> sb.append("no_data/no_data/\n")
+            }
+        } else {
+            sb.append("no_data/no_data/\n")
+            val f = rest[0]
+            val q = f.getOrElse(1) { "" }
+            if (q.isEmpty() || !NUM.matches(q)) rest = rest.drop(1)
+        }
+        rest.forEach { sb.append(itemLine(it)).append('\n') }
+        return sb.toString()
+    }
+
+    fun parse(rows: List<List<String>>): ImportResult? {
+        val text = toPasteText(rows)
+        if (text.isEmpty()) return null
+        return AiImport.parse(text)
+    }
+}

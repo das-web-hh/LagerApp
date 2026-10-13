@@ -339,6 +339,9 @@ fun NameReceiveHub(onBack: () -> Unit) {
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (uris.isNotEmpty()) thread { uris.forEach { Incoming.accept(ctx, it, "name", open = uris.size == 1) } }
     }
+    val excelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) thread { uris.forEach { Incoming.accept(ctx, it, "name", open = uris.size == 1) } }
+    }
     val scanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
             val pdf = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
@@ -354,6 +357,15 @@ fun NameReceiveHub(onBack: () -> Unit) {
                 onClick = { filePicker.launch(arrayOf("application/pdf", "image/jpeg", "image/png")) },
                 modifier = Modifier.weight(1f)
             ) { Text("Файл") }
+            FilledTonalButton(
+                onClick = {
+                    excelPicker.launch(arrayOf(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "application/vnd.ms-excel.sheet.macroEnabled.12"
+                    ))
+                },
+                modifier = Modifier.weight(1f)
+            ) { Text("Excel") }
             FilledTonalButton(
                 onClick = {
                     val act = findActivity(ctx)
