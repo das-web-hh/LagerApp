@@ -67,7 +67,23 @@ data class WagenOp(
     val updatedAt: Long = 0L
 )
 
-class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "send.db", null, 2) {
+/** Выгрузка машины: сколько палет принято по типам, номер машины и прицепа. */
+data class UnloadOp(
+    val id: String,
+    val createdAt: Long,
+    val eur: Int = 0,
+    val ewBig: Int = 0,
+    val ewNorm: Int = 0,
+    val ewSmall: Int = 0,
+    val truck: String = "",
+    val trailer: String = "",
+    val author: String = "",
+    val updatedAt: Long = 0L
+) {
+    val total: Int get() = eur + ewBig + ewNorm + ewSmall
+}
+
+class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "send.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -84,6 +100,16 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
                 "received INTEGER NOT NULL, note TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL)"
         )
         db.execSQL("CREATE INDEX idx_wagen_created ON wagen(created_at)")
+        createUnloads(db)
+    }
+
+    private fun createUnloads(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS unloads (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, eur INTEGER NOT NULL, " +
+                "ew_big INTEGER NOT NULL, ew_norm INTEGER NOT NULL, ew_small INTEGER NOT NULL, truck TEXT NOT NULL, " +
+                "trailer TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_unloads_created ON unloads(created_at)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -92,6 +118,7 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
             db.execSQL("ALTER TABLE pakets ADD COLUMN reference TEXT NOT NULL DEFAULT ''")
             db.execSQL("ALTER TABLE pakets ADD COLUMN services TEXT NOT NULL DEFAULT ''")
         }
+        if (oldVersion < 3) createUnloads(db)
     }
 
     private val pcols = "id, created_at, tracking, product, recipient, street, zip, city, country, sender, " +
@@ -214,6 +241,60 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
             if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) else 0L
         }
 
+    // ---------- Выгрузка ----------
+
+    private val ucols = "id, created_at, eur, ew_big, ew_norm, ew_small, truck, trailer, author, updated_at"
+
+    private fun readUnloads(sql: String, args: Array<String>): List<UnloadOp> =
+        readableDatabase.rawQuery(sql, args).use { c ->
+            val out = ArrayList<UnloadOp>()
+            while (c.moveToNext()) {
+                out.add(
+                    UnloadOp(
+                        c.getString(0), c.getLong(1), c.getInt(2), c.getInt(3), c.getInt(4), c.getInt(5),
+                        c.getString(6), c.getString(7), c.getString(8), c.getLong(9)
+                    )
+                )
+            }
+            out
+        }
+
+    fun upsertUnload(u: UnloadOp) {
+        val v = ContentValues().apply {
+            put("id", u.id)
+            put("created_at", u.createdAt)
+            put("eur", u.eur)
+            put("ew_big", u.ewBig)
+            put("ew_norm", u.ewNorm)
+            put("ew_small", u.ewSmall)
+            put("truck", u.truck)
+            put("trailer", u.trailer)
+            put("author", u.author)
+            put("updated_at", u.updatedAt)
+        }
+        writableDatabase.insertWithOnConflict("unloads", null, v, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun getUnload(id: String): UnloadOp? =
+        readUnloads("SELECT $ucols FROM unloads WHERE id = ?", arrayOf(id)).firstOrNull()
+
+    fun allUnloads(): List<UnloadOp> =
+        readUnloads("SELECT $ucols FROM unloads ORDER BY created_at DESC", emptyArray())
+
+    fun unloadsBetween(from: Long, to: Long): List<UnloadOp> = readUnloads(
+        "SELECT $ucols FROM unloads WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC",
+        arrayOf(from.toString(), to.toString())
+    )
+
+    fun deleteUnload(id: String) {
+        writableDatabase.delete("unloads", "id = ?", arrayOf(id))
+    }
+
+    fun maxUnloadUpdated(): Long =
+        readableDatabase.rawQuery("SELECT MAX(updated_at) FROM unloads", null).use {
+            if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) else 0L
+        }
+
     companion object {
         @Volatile private var instance: SendDb? = null
         fun get(context: Context): SendDb = instance ?: synchronized(this) {
@@ -227,6 +308,7 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
  *  shipments/{id}: createdAt, tracking, product, recipient, street, zip, city, country, sender, weight,
  *                  routing, note, photos[], rawText, status, author, updatedAt, billing, reference, services, deleted
  *  wagen_ops/{id}: createdAt, sent, received, note, author, updatedAt, deleted
+ *  unload_ops/{id}: createdAt, eur, ewBig, ewNorm, ewSmall, truck, trailer, author, updatedAt, deleted
  * Снимки этикеток: Google Диск (имена DH-…), связь — список photos.
  */
 object SendCloud {
@@ -336,6 +418,44 @@ object SendCloud {
         SendState.version++
     }
 
+    fun saveUnload(db: SendDb, u: UnloadOp): UnloadOp {
+        val old = db.getUnload(u.id)
+        val nu = u.copy(updatedAt = System.currentTimeMillis())
+        db.upsertUnload(nu)
+        Journal.log(
+            "Приём",
+            (if (old == null) "Выгрузка: добавлена" else "Выгрузка: изменена") +
+                " · палет ${nu.total}" + (if (nu.truck.isNotBlank()) " · машина ${nu.truck}" else "")
+        )
+        fs.collection("unload_ops").document(nu.id).set(
+            hashMapOf<String, Any>(
+                "createdAt" to nu.createdAt,
+                "eur" to nu.eur,
+                "ewBig" to nu.ewBig,
+                "ewNorm" to nu.ewNorm,
+                "ewSmall" to nu.ewSmall,
+                "truck" to nu.truck,
+                "trailer" to nu.trailer,
+                "author" to nu.author,
+                "updatedAt" to nu.updatedAt,
+                "deleted" to false
+            )
+        )
+        SendState.version++
+        if (old == null) Tasks.onAction("unload")
+        return nu
+    }
+
+    fun deleteUnload(db: SendDb, id: String) {
+        db.deleteUnload(id)
+        Journal.log("Приём", "Выгрузка: удалена запись")
+        fs.collection("unload_ops").document(id).set(
+            hashMapOf<String, Any>("deleted" to true, "updatedAt" to System.currentTimeMillis()),
+            SetOptions.merge()
+        )
+        SendState.version++
+    }
+
     /** Подтянуть новые записи с других телефонов (не чаще раза в минуту; при ошибке сети молча пропускаем). */
     suspend fun pull(db: SendDb) {
         if (System.currentTimeMillis() - lastPull < 60_000L) return
@@ -389,6 +509,28 @@ object SendCloud {
                         sent = (d.getLong("sent") ?: 0L).toInt(),
                         received = (d.getLong("received") ?: 0L).toInt(),
                         note = d.getString("note") ?: "",
+                        author = d.getString("author") ?: "",
+                        updatedAt = d.getLong("updatedAt") ?: 0L
+                    )
+                )
+            }
+            val up = fs.collection("unload_ops").whereGreaterThan("updatedAt", db.maxUnloadUpdated()).get().awaitIt()
+            for (d in up.documents) {
+                changed = true
+                if (d.getBoolean("deleted") == true) {
+                    db.deleteUnload(d.id)
+                    continue
+                }
+                db.upsertUnload(
+                    UnloadOp(
+                        id = d.id,
+                        createdAt = d.getLong("createdAt") ?: 0L,
+                        eur = (d.getLong("eur") ?: 0L).toInt(),
+                        ewBig = (d.getLong("ewBig") ?: 0L).toInt(),
+                        ewNorm = (d.getLong("ewNorm") ?: 0L).toInt(),
+                        ewSmall = (d.getLong("ewSmall") ?: 0L).toInt(),
+                        truck = d.getString("truck") ?: "",
+                        trailer = d.getString("trailer") ?: "",
                         author = d.getString("author") ?: "",
                         updatedAt = d.getLong("updatedAt") ?: 0L
                     )

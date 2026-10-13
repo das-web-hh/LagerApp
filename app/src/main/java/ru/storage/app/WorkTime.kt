@@ -22,6 +22,7 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,11 +50,22 @@ data class WorkCfg(
     val radius: Int = 200,          // метров
     val fromMin: Int = 8 * 60,      // начало проверки, минут от полуночи
     val toMin: Int = 18 * 60,       // конец проверки
-    val intervalMin: Int = 5,       // как часто проверять, минут
+    val intervalMin: Int = 5,       // как часто проверять вблизи точки (в зоне подхода), минут
     val days: Set<Int> = setOf(
         Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY
-    )
-)
+    ),
+    /** Зона подхода: пока до точки не больше стольких километров — проверка каждые [intervalMin] минут. 0 — не использовать. */
+    val approachKm: Int = 5,
+    /** Как часто проверять, пока работник дальше зоны подхода, минут (интервал сам укорачивается при приближении). */
+    val farIntervalMin: Int = 30,
+    /** Короткие дни недели: проверка и учёт заканчиваются в [shortToMin], а не в [toMin]. */
+    val shortDays: Set<Int> = emptySet(),
+    val shortToMin: Int = 13 * 60
+) {
+    /** До какой минуты суток идёт проверка в этот день недели (полный или короткий день). */
+    fun endFor(dow: Int): Int =
+        if (dow in shortDays && fromMin <= toMin) shortToMin.coerceIn(fromMin, toMin) else toMin
+}
 
 class WorkSession(val start: Long, val end: Long) // end = 0 — запись идёт
 
@@ -74,7 +86,11 @@ object WorkStore {
             fromMin = s.getInt("from", d.fromMin),
             toMin = s.getInt("to", d.toMin),
             intervalMin = s.getInt("interval", d.intervalMin),
-            days = days
+            days = days,
+            approachKm = s.getInt("approachKm", d.approachKm),
+            farIntervalMin = s.getInt("farInterval", d.farIntervalMin),
+            shortDays = (s.getString("shortDays", "") ?: "").split(",").mapNotNull { it.trim().toIntOrNull() }.toSet(),
+            shortToMin = s.getInt("shortTo", d.shortToMin)
         )
     }
 
@@ -89,8 +105,16 @@ object WorkStore {
             .putInt("to", c.toMin)
             .putInt("interval", c.intervalMin)
             .putString("days", c.days.joinToString(","))
+            .putInt("approachKm", c.approachKm)
+            .putInt("farInterval", c.farIntervalMin)
+            .putString("shortDays", c.shortDays.joinToString(","))
+            .putInt("shortTo", c.shortToMin)
             .apply()
     }
+
+    /** Время последнего изменения общих настроек (мс): новее выигрывает при синхронизации через Firebase. */
+    fun cfgUpdated(ctx: Context): Long = sp(ctx).getLong("cfg_updated", 0L)
+    fun setCfgUpdated(ctx: Context, t: Long) { sp(ctx).edit().putLong("cfg_updated", t).apply() }
 
     @Synchronized
     fun sessions(ctx: Context): List<WorkSession> {
@@ -197,7 +221,7 @@ object WorkTracker {
         val dow = cal.get(Calendar.DAY_OF_WEEK)
         val m = WorkStore.minuteOfDay(now)
         return if (c.fromMin <= c.toMin) {
-            dow in c.days && m >= c.fromMin && m <= c.toMin
+            dow in c.days && m >= c.fromMin && m <= c.endFor(dow)
         } else {
             // окно через полночь
             if (m >= c.fromMin) dow in c.days
@@ -212,10 +236,28 @@ object WorkTracker {
     private fun windowEnd(c: WorkCfg, start: Long): Long {
         val ds = WorkStore.dayStart(start)
         val m = WorkStore.minuteOfDay(start)
+        val dow = Calendar.getInstance().apply { timeInMillis = start }.get(Calendar.DAY_OF_WEEK)
         val base = ds + c.toMin * 60000L
-        return if (c.toMin >= c.fromMin) base
+        return if (c.toMin >= c.fromMin) ds + c.endFor(dow) * 60000L
         else if (m <= c.toMin) base
         else WorkStore.plusDays(ds, 1) + c.toMin * 60000L
+    }
+
+    /**
+     * Через сколько миллисекунд проверять снова. Вблизи точки (зона подхода, км) и пока запись идёт — каждые [WorkCfg.intervalMin] минут;
+     * дальше — не реже [WorkCfg.farIntervalMin] минут, но интервал укорачивается так, чтобы не проскочить момент входа в зону подхода
+     * (считаем скорость до 90 км/ч).
+     */
+    fun nextWait(ctx: Context, c: WorkCfg): Long {
+        val near = maxOf(1, c.intervalMin) * 60_000L
+        if (WorkStore.open(ctx) != null) return near
+        val d = WorkStore.statusDist(ctx)
+        if (d < 0f || c.approachKm <= 0) return near
+        val approachM = c.approachKm * 1000f
+        if (d <= approachM) return near
+        val far = maxOf(c.farIntervalMin, c.intervalMin).coerceAtLeast(1) * 60_000L
+        val toEdgeMs = ((d - approachM) / 25f * 1000f).toLong()   // 25 м/с = 90 км/ч
+        return toEdgeMs.coerceIn(near, far)
     }
 
     fun check(ctx: Context, loc: Location?, now: Long) {
@@ -389,7 +431,7 @@ class WorkService : Service() {
                 if (WorkTracker.isActive(c, now)) {
                     val loc = try { WorkTracker.fix(this) } catch (e: Exception) { null }
                     WorkTracker.check(this, loc, System.currentTimeMillis())
-                    wait = maxOf(1, c.intervalMin) * 60_000L
+                    wait = WorkTracker.nextWait(this, c)
                 } else {
                     WorkTracker.check(this, null, now)
                     wait = 60_000L
@@ -425,5 +467,66 @@ class WorkService : Service() {
 class WorkBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         WorkTracker.ensureService(context)
+    }
+}
+
+/**
+ * Общие настройки рабочего времени (точка, радиус, зона подхода, расписание, короткие дни) меняет только администратор;
+ * они хранятся в Firebase config/worktime и подтягиваются на все телефоны. Включение учёта («enabled») — на каждом телефоне своё.
+ */
+object WorkCloud {
+    private fun ref() = FirebaseFirestore.getInstance().collection("config").document("worktime")
+
+    fun push(ctx: Context, c: WorkCfg) {
+        if (!Session.isAdmin) return
+        val now = System.currentTimeMillis()
+        WorkStore.setCfgUpdated(ctx, now)
+        try {
+            ref().set(
+                hashMapOf<String, Any>(
+                    "hasPoint" to c.hasPoint, "lat" to c.lat, "lon" to c.lon, "radius" to c.radius,
+                    "fromMin" to c.fromMin, "toMin" to c.toMin, "intervalMin" to c.intervalMin,
+                    "farIntervalMin" to c.farIntervalMin, "approachKm" to c.approachKm,
+                    "days" to c.days.toList(), "shortDays" to c.shortDays.toList(), "shortToMin" to c.shortToMin,
+                    "updatedAt" to now
+                )
+            )
+        } catch (e: Exception) {
+        }
+    }
+
+    /** true — настройки на телефоне обновились. Не в главном потоке не обязательно: функция приостанавливающая. */
+    suspend fun pull(ctx: Context): Boolean {
+        return try {
+            val d = ref().get().awaitIt()
+            val cur = WorkStore.cfg(ctx)
+            if (!d.exists()) {
+                if (Session.isAdmin && cur.hasPoint) push(ctx, cur)
+                return false
+            }
+            val upd = d.getLong("updatedAt") ?: 0L
+            if (upd <= WorkStore.cfgUpdated(ctx)) return false
+            fun ints(k: String): Set<Int> = (d.get(k) as? List<*>)?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
+            val n = cur.copy(
+                hasPoint = d.getBoolean("hasPoint") ?: cur.hasPoint,
+                lat = d.getDouble("lat") ?: cur.lat,
+                lon = d.getDouble("lon") ?: cur.lon,
+                radius = (d.getLong("radius") ?: cur.radius.toLong()).toInt(),
+                fromMin = (d.getLong("fromMin") ?: cur.fromMin.toLong()).toInt(),
+                toMin = (d.getLong("toMin") ?: cur.toMin.toLong()).toInt(),
+                intervalMin = (d.getLong("intervalMin") ?: cur.intervalMin.toLong()).toInt(),
+                farIntervalMin = (d.getLong("farIntervalMin") ?: cur.farIntervalMin.toLong()).toInt(),
+                approachKm = (d.getLong("approachKm") ?: cur.approachKm.toLong()).toInt(),
+                days = ints("days").ifEmpty { cur.days },
+                shortDays = ints("shortDays"),
+                shortToMin = (d.getLong("shortToMin") ?: cur.shortToMin.toLong()).toInt()
+            )
+            WorkStore.saveCfg(ctx, n)
+            WorkStore.setCfgUpdated(ctx, upd)
+            WorkTracker.ensureService(ctx)
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 }

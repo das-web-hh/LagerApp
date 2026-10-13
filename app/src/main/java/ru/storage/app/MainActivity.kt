@@ -275,6 +275,13 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     val swipePx = with(LocalDensity.current) { 90.dp.toPx() }
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
     LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
+    // общие настройки рабочего времени от администратора подтягиваются на этот телефон
+    LaunchedEffect(Unit) {
+        while (true) {
+            try { WorkCloud.pull(ctx) } catch (e: Exception) { }
+            delay(10 * 60_000L)
+        }
+    }
     LaunchedEffect(Unit) {
         delay(20_000)
         withContext(Dispatchers.IO) { try { Updater.auto(ctx) } catch (e: Exception) { } }

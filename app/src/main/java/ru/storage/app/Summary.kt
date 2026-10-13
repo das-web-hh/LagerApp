@@ -26,7 +26,7 @@ object Printer {
     private var current: WebView? = null
 
     /** record = true: копия напечатанного попадает в «Документы»; печать всегда пишется в «Журнал». */
-    fun print(ctx: Context, jobName: String, html: String, record: Boolean = true) {
+    fun print(ctx: Context, jobName: String, html: String, record: Boolean = true, noMargins: Boolean = false) {
         var c: Context? = ctx
         while (c is ContextWrapper && c !is Activity) c = c.baseContext
         val activity = c as? Activity ?: return
@@ -42,12 +42,55 @@ object Printer {
                 pm.print(
                     jobName,
                     view.createPrintDocumentAdapter(jobName),
-                    PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build()
+                    PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                        .apply { if (noMargins) setMinMargins(PrintAttributes.Margins.NO_MARGINS) }
+                        .build()
                 )
             }
         }
         current = wv
         wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+    }
+
+    /** Печать готового PDF-файла как есть. */
+    fun printPdf(ctx: Context, jobName: String, file: java.io.File) {
+        var c: Context? = ctx
+        while (c is ContextWrapper && c !is Activity) c = c.baseContext
+        val activity = c as? Activity ?: return
+        Journal.log("Печать", "Печать: " + jobName.replace('_', ' ').trim())
+        val pm = activity.getSystemService(Context.PRINT_SERVICE) as PrintManager
+        pm.print(jobName, object : android.print.PrintDocumentAdapter() {
+            override fun onLayout(
+                old: PrintAttributes?, new: PrintAttributes?, cancel: android.os.CancellationSignal?,
+                cb: LayoutResultCallback, extras: android.os.Bundle?
+            ) {
+                if (cancel?.isCanceled == true) {
+                    cb.onLayoutCancelled()
+                    return
+                }
+                cb.onLayoutFinished(
+                    android.print.PrintDocumentInfo.Builder(jobName.replace(Regex("[\\\\/:*?\"<>|]"), "_") + ".pdf")
+                        .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                        .setPageCount(android.print.PrintDocumentInfo.PAGE_COUNT_UNKNOWN)
+                        .build(),
+                    true
+                )
+            }
+
+            override fun onWrite(
+                pages: Array<out android.print.PageRange>?, dest: android.os.ParcelFileDescriptor,
+                cancel: android.os.CancellationSignal?, cb: WriteResultCallback
+            ) {
+                try {
+                    java.io.FileInputStream(file).use { i ->
+                        java.io.FileOutputStream(dest.fileDescriptor).use { o -> i.copyTo(o) }
+                    }
+                    cb.onWriteFinished(arrayOf(android.print.PageRange.ALL_PAGES))
+                } catch (e: Exception) {
+                    cb.onWriteFailed(e.message)
+                }
+            }
+        }, null)
     }
 }
 

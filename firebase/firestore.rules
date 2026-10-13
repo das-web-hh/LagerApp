@@ -50,6 +50,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Выгрузка: палеты по типам, номер машины и прицепа
+    match /unload_ops/{id} {
+      allow read, write: if true;
+    }
+
     // Настройки аккаунтов (документ = логин)
     match /settings/{id} {
       allow read, write: if true;

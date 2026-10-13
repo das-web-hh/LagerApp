@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.List
@@ -203,6 +204,26 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         SendHubScreen { mode = null }
         return
     }
+    if (current == "Выгрузка") {
+        UnloadScreen { mode = null }
+        return
+    }
+    if (current == "Автоприём") {
+        FilesScreen(
+            onBack = { mode = null },
+            title = "Автоприём",
+            onPickFiles = {
+                pickMode = "auto"
+                pdfPicker.launch(
+                    arrayOf(
+                        "application/pdf", "image/jpeg", "image/png",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                )
+            }
+        )
+        return
+    }
     if (current != null) {
         SectionScreen(current) { mode = null }
         return
@@ -219,15 +240,13 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
             listOf(
                 TileSpec("Ручной", Icons.Default.Edit) { mode = "Ручной" },
                 TileSpec("По наименованию", Icons.Default.Search, nameCount) { mode = "По наименованию" },
-                TileSpec("Автоприём", Icons.Default.Refresh, autoCount) {
-                    pickMode = "auto"
-                    pdfPicker.launch(arrayOf("application/pdf", "image/jpeg", "image/png"))
-                },
+                TileSpec("Автоприём", Icons.Default.Refresh, autoCount) { mode = "Автоприём" },
                 TileSpec("Итог приёма", Icons.Default.Check) { mode = "Итог приёма" },
                 TileSpec("Приём B-Ware", Icons.Default.Add) { mode = "Приём B-Ware" },
                 TileSpec("Инвентаризация", Icons.Default.Done) { mode = "Инвентаризация" },
                 TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
-                TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" }
+                TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" },
+                TileSpec("Выгрузка", Icons.Default.ShoppingCart) { mode = "Выгрузка" }
             )
         )
 

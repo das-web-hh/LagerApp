@@ -130,6 +130,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Голос и подсчёт" -> VoiceSettings { section = null }
         "Вибрация" -> VibrationSettings { section = null }
         "Просмотр накладных" -> ViewerSettings { section = null }
+        "Рабочее время" -> WorkSettingsScreen { section = null }
         else -> SettingsHome(onBack) { section = it }
     }
 }
@@ -147,7 +148,8 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Чтение Excel" to "Как находить столбцы названия и количества: приложение само или ИИ",
         "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
         "Вибрация" to "Тап и прокрутка: сила и длительность",
-        "Просмотр накладных" to "Листать сверху вниз или слева направо"
+        "Просмотр накладных" to "Листать сверху вниз или слева направо",
+        "Рабочее время" to "Учёт по геолокации, зона подхода, полные и короткие дни"
     ).filter { Session.isAdmin || it.first != "Google Диск" && it.first != "Распознавание документов" && it.first != "Подключения" }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)

@@ -109,9 +109,12 @@ object Folders {
         s
     }
 
+    /** Берём только PDF, картинки и Excel (.xlsx). */
     private fun isDoc(name: String, mime: String): Boolean =
         mime == "application/pdf" || mime == "image/jpeg" || mime == "image/png" || mime == "image/webp" ||
-            name.lowercase().endsWith(".pdf") || isImageName(name)
+            mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+            name.lowercase().endsWith(".pdf") || isImageName(name) ||
+            name.lowercase().endsWith(".xlsx") || name.lowercase().endsWith(".xlsm")
 
     private fun scan(ctx: Context, tree: Uri, docId: String, depth: Int, label: String, out: MutableList<FolderFile>) {
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
@@ -162,6 +165,22 @@ object Folders {
             all.filter { !isProcessed(it.id) }.sortedBy { it.modified }.forEach { FolderQueue.enqueue(ctx, it) }
         }
         return all
+    }
+
+    /** Пометка в списке: ✓ принят, ⏳ в работе, ⚠ не получилось, ● новый. */
+    fun mark(f: FolderFile): String {
+        if (f.id in FolderQueue.queued) return "⏳"
+        val path = FolderQueue.tracked[f.id]
+        if (path != null) {
+            val j = AutoReceiveHolder.find(path) ?: return "✓"
+            return when {
+                j.saved -> "✓"
+                j.running || j.saving -> "⏳"
+                j.failedState || j.blocked.isNotBlank() || j.autoState == "error" || j.autoState == "unmarked" || j.autoState == "samedup" -> "⚠"
+                else -> "✎"
+            }
+        }
+        return if (isProcessed(f.id)) "✓" else "●"
     }
 
     /** Подпись состояния файла в списке. */
@@ -218,6 +237,32 @@ object FolderQueue {
     }
 }
 
+/** Файл из папки → партия «По наименованию» (копия во внутреннем кэше), экран открывается сам. Не в главном потоке. */
+fun openFolderFileByName(ctx: Context, f: FolderFile) {
+    val app = ctx.applicationContext
+    val known = FolderQueue.tracked[f.id]?.let { AutoReceiveHolder.find(it) }
+    if (known != null) {
+        known.openInNameMode()
+        Incoming.openPath = known.file.path
+        return
+    }
+    try {
+        val dir = File(app.cacheDir, "incoming/" + UUID.randomUUID().toString()).also { it.mkdirs() }
+        val target = File(dir, f.name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        val ins = app.contentResolver.openInputStream(f.uri) ?: throw RuntimeException("Файл недоступен")
+        ins.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
+        val job = AutoReceiveHolder.create(app, IncomingFile(f.name, target.path), true)
+        FolderQueue.tracked[f.id] = target.path
+        Folders.markProcessed(app, listOf(f.id))
+        job.startOnce()
+        Incoming.openPath = target.path
+    } catch (e: Exception) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            Toast.makeText(app, "Не удалось открыть файл: " + (e.message ?: ""), Toast.LENGTH_LONG).show()
+        }
+    }
+}
+
 private val dateFmt = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
 
 private fun sizeText(b: Long): String = when {
@@ -227,9 +272,13 @@ private fun sizeText(b: Long): String = when {
     else -> ""
 }
 
-/** Окно «Файлы»: папки автоприёма и файлы из них. */
+/**
+ * Окно «Автоприём» (и «Файлы» в «Прочем»): папки (одна или несколько, в том числе Google Диск через системный выбор),
+ * список PDF, картинок и Excel из них, пометки статуса; нажатие на файл открывает его в «По наименованию».
+ * onPickFiles — кнопка «Выбрать файлы» (разовый выбор файлов без папки).
+ */
 @Composable
-fun FilesScreen(onBack: () -> Unit) {
+fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (() -> Unit)? = null) {
     BackHandler(onBack = onBack)
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -296,9 +345,9 @@ fun FilesScreen(onBack: () -> Unit) {
             Row(Modifier.height(48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("← Назад") }
             }
-            Text("Файлы", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             Text(
-                "PDF и картинки из выбранных папок. Новые файлы по очереди уходят в автоприём: ИИ распознаёт товары, затем приём сохраняется в базу, а файл — на Google Диск.",
+                "PDF, картинки и Excel из выбранных папок (можно несколько; папка может быть и на Google Диске). Новые файлы по очереди уходят в автоприём: ИИ читает накладную, приём сохраняется в базу, а файл — на Google Диск. Нажмите на файл — он откроется в «По наименованию».",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
@@ -325,6 +374,7 @@ fun FilesScreen(onBack: () -> Unit) {
         item {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { picker.launch(null) }) { Text("Добавить папку") }
+                if (onPickFiles != null) OutlinedButton(onClick = onPickFiles) { Text("Выбрать файлы") }
                 OutlinedButton(onClick = { reload++ }, enabled = !loading && Folders.folders.isNotEmpty()) {
                     Text(if (loading) "Проверка…" else "Проверить")
                 }
@@ -338,36 +388,53 @@ fun FilesScreen(onBack: () -> Unit) {
                 ) { Text("Отправить новые на распознавание ($newCount)") }
             }
             HorizontalDivider(Modifier.padding(top = 8.dp))
+            val marks = files.map { Folders.mark(it) }
             Text("Файлы: ${files.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
+            Text(
+                "✓ принято ${marks.count { it == "✓" }} · ✎ проверить ${marks.count { it == "✎" }} · ⏳ в работе ${marks.count { it == "⏳" }} · " +
+                    "⚠ не получилось ${marks.count { it == "⚠" }} · ● новых ${marks.count { it == "●" }}",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+            )
         }
         items(files, key = { it.id }) { f ->
             val st = Folders.status(f)
-            val path = FolderQueue.tracked[f.id]
-            Column(
+            val mk = Folders.mark(f)
+            Row(
                 Modifier.fillMaxWidth()
                     .clickable {
-                        val job = path?.let { AutoReceiveHolder.find(it) }
-                        when {
-                            job != null -> Incoming.openPath = job.file.path
-                            !Folders.isProcessed(f.id) && f.id !in FolderQueue.queued -> {
-                                FolderQueue.enqueue(ctx, f)
-                                Toast.makeText(ctx, "Поставлен в очередь", Toast.LENGTH_SHORT).show()
-                            }
+                        if (f.id in FolderQueue.queued) {
+                            Toast.makeText(ctx, "Файл в очереди на распознавание", Toast.LENGTH_SHORT).show()
+                        } else {
+                            scope.launch(Dispatchers.IO) { openFolderFileByName(ctx, f) }
                         }
                     }
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(f.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    listOf(dateFmt.format(Date(f.modified)).takeIf { f.modified > 0 }, sizeText(f.size).ifBlank { null }, f.folder)
-                        .filterNotNull().joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall
+                    mk,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = when (mk) {
+                        "✓" -> androidx.compose.ui.graphics.Color(0xFF1B8A4B)
+                        "⚠", "●" -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.primary
+                    },
+                    modifier = Modifier.width(32.dp)
                 )
-                Text(
-                    st, style = MaterialTheme.typography.bodySmall,
-                    color = if (st == "Новый") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(f.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        listOf(dateFmt.format(Date(f.modified)).takeIf { f.modified > 0 }, sizeText(f.size).ifBlank { null }, f.folder)
+                            .filterNotNull().joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        st, style = MaterialTheme.typography.bodySmall,
+                        color = if (st == "Новый" || mk == "⚠") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    )
+                }
             }
             HorizontalDivider()
         }

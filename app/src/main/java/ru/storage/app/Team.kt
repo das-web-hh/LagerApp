@@ -316,7 +316,8 @@ object Tasks {
     val ACTIONS = listOf(
         "receive" to "Принять товар (сохранить приём)",
         "paket" to "Post paket (сохранить посылку)",
-        "wagen" to "DHL Postwagen (посчитать и сохранить)"
+        "wagen" to "DHL Postwagen (посчитать и сохранить)",
+        "unload" to "Выгрузка (посчитать палеты и сохранить)"
     )
 
     fun actionLabel(a: String): String = ACTIONS.firstOrNull { it.first == a }?.second ?: a

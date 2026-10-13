@@ -369,7 +369,7 @@ private fun ScannerGlyph() {
 // ---------- карточка посылки ----------
 
 @Composable
-private fun InfoLine(label: String, value: String, onClick: (() -> Unit)? = null) {
+internal fun InfoLine(label: String, value: String, onClick: (() -> Unit)? = null) {
     Column(
         Modifier.fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
@@ -692,7 +692,7 @@ fun PostwagenScreen(onBack: () -> Unit) {
 
 /** Большая строка-счётчик: тап = +1 (вибрация и голос), число справа — барабан 0…9999, «−» убавляет на 1. */
 @Composable
-private fun BigCounter(
+internal fun BigCounter(
     title: String,
     value: Int,
     key: Any,

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=4, user-scalable=yes">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no">
 <style>
 :root{--bg:#eef1f7;--bar:#ffffff;--bd:#d5dbe8;--fg:#0f172a;--ac:#016afd;--acbg:#d9e5ff}
 :root.dark{--bg:#14171d;--bar:#1e222b;--bd:#343a47;--fg:#e8ecf4;--ac:#7fb0ff;--acbg:#27406e}
@@ -20,7 +20,7 @@ button:active{background:var(--acbg)}
 #pal{position:fixed;z-index:9;left:8px;right:8px;top:54px;background:var(--bar);border:1px solid var(--bd);border-radius:12px;
   padding:10px;display:none;flex-wrap:wrap;gap:10px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
 #pal b{width:34px;height:34px;border-radius:50%;border:1px solid var(--bd);display:block}
-html{overflow-x:hidden}
+html{overflow-x:auto}
 #wrap{position:relative;min-height:100vh}
 /* лист A4 (210×297 мм) в натуральную ширину; на экране он масштабируется под ширину телефона.
    Рамка — 8 мм от края бумаги, на каждой странице своя */
@@ -34,6 +34,7 @@ html{overflow-x:hidden}
 #doc ul,#doc ol{margin:0 0 6px;padding-left:26px}
 </style></head><body>
 <div id="bar">
+ <div class="g"><button id="zfit" title="Весь лист на экране">▣</button><button id="zm">🔍−</button><button id="zp">🔍+</button></div>
  <div class="g"><button data-c="undo">↶</button><button data-c="redo">↷</button></div>
  <div class="g"><button id="blk" data-c="blk">Аа</button></div>
  <div class="g"><button id="szm">−</button><span id="sz">16</span><button id="szp">+</button></div>
@@ -59,16 +60,36 @@ function inDoc(n){return n&&doc.contains(n)}
 function saveSel(){var s=getSelection();if(s.rangeCount&&inDoc(s.anchorNode))saved=s.getRangeAt(0).cloneRange()}
 function restoreSel(){doc.focus();if(saved){var s=getSelection();s.removeAllRanges();s.addRange(saved)}}
 var sheet=document.getElementById('sheet'),wrap=document.getElementById('wrap');
+var zoomMul=1,baseH=0,lastZ=1;
+/* Лист целиком (100%): масштаб подбирается и по ширине, и по высоте экрана; zoomMul — ручное увеличение (кнопки 🔍 или щипок) */
 function fit(){
   var vw=document.documentElement.clientWidth,sw=sheet.offsetWidth;
   if(!sw)return;
-  var z=Math.max(0.25,(vw-12)/sw),pageH=297*sw/210;
+  baseH=Math.max(baseH,window.innerHeight);
+  var pageH=297*sw/210;
+  var zW=(vw-12)/sw,zH=(baseH-58-14)/pageH;
+  var base=Math.max(0.15,Math.min(zW,zH)),z=base*zoomMul;
+  lastZ=z;
   doc.style.minHeight='0';
   var pages=Math.max(1,Math.ceil((doc.scrollHeight-2)/pageH));
   doc.style.minHeight=(pages*297)+'mm';
-  sheet.style.transform='translateX('+Math.max(0,(vw-sw*z)/2)+'px) scale('+z+')';
+  sheet.style.transform='translateX('+Math.max(6,(vw-sw*z)/2)+'px) scale('+z+')';
+  wrap.style.width=Math.max(vw,sw*z+12)+'px';
   wrap.style.height=(58+sheet.offsetHeight*z+40)+'px';
 }
+function setZoom(m){zoomMul=Math.max(1,Math.min(4,m));fit()}
+document.getElementById('zfit').onclick=function(){setZoom(1);window.scrollTo(0,0)};
+document.getElementById('zm').onclick=function(){setZoom(zoomMul/1.35)};
+document.getElementById('zp').onclick=function(){setZoom(zoomMul*1.35)};
+(function(){
+  var d0=0,m0=1;
+  function dist(t){var a=t[0],b=t[1];return Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY)}
+  document.addEventListener('touchstart',function(e){if(e.touches.length===2){d0=dist(e.touches);m0=zoomMul}},{passive:true});
+  document.addEventListener('touchmove',function(e){
+    if(e.touches.length===2&&d0>0){e.preventDefault();setZoom(m0*dist(e.touches)/d0)}
+  },{passive:false});
+  document.addEventListener('touchend',function(e){if(e.touches.length<2)d0=0},{passive:true});
+})();
 window.addEventListener('resize',fit);
 function changed(){
   fit();
@@ -167,11 +188,20 @@ window.setDoc=function(html,dark){
 };
 window.getDoc=function(){return doc.innerHTML};
 window.getPrintHtml=function(title){
-  var css='@page{size:A4;margin:14mm}body{font-family:Roboto,Arial,sans-serif;font-size:16px;line-height:1.45;color:#000;margin:0}'+
+  /* Лист A4 без полей страницы: рамка (8 мм от края бумаги) — настоящая рамка с границей, повторяется на каждой странице;
+     верхний и нижний отступ 14 мм на каждой странице дают повторяющиеся пустые строки таблицы. */
+  var css='@page{size:A4;margin:0}html,body{margin:0;padding:0}'+
+   'body{font-family:Roboto,Arial,sans-serif;font-size:16px;line-height:1.45;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+   '.frame{position:fixed;left:8mm;top:8mm;width:194mm;height:281mm;box-sizing:border-box;border:0.35mm solid #555;z-index:0}'+
+   'table.pg{width:100%;border-collapse:collapse;table-layout:fixed;border:0}'+
+   'table.pg>thead>tr>td,table.pg>tfoot>tr>td{height:14mm;padding:0;border:0}'+
+   'table.pg>tbody>tr>td.c{padding:0 14mm;border:0;vertical-align:top;word-wrap:break-word;overflow-wrap:anywhere}'+
    'p,div{margin:0 0 6px}h1{font-size:26px;margin:10px 0 8px}h2{font-size:21px;margin:10px 0 6px}ul,ol{margin:0 0 6px;padding-left:26px}'+
-   'table{border-collapse:collapse}td,th{border:1px solid #888;padding:4px 6px}'+
-   'body::before{content:"";position:fixed;left:-6mm;top:-6mm;right:-6mm;bottom:-6mm;border:0.35mm solid #555}';
-  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+String(title||'').replace(/</g,'&lt;')+'</title><style>'+css+'</style></head><body>'+doc.innerHTML+'</body></html>';
+   '.c table{border-collapse:collapse}.c td,.c th{border:1px solid #888;padding:4px 6px}';
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+String(title||'').replace(/</g,'&lt;')+'</title><style>'+css+'</style></head><body>'+
+   '<div class="frame"></div>'+
+   '<table class="pg"><thead><tr><td></td></tr></thead><tfoot><tr><td></td></tr></tfoot><tbody><tr><td class="c">'+doc.innerHTML+'</td></tr></tbody></table>'+
+   '</body></html>';
 };
 fit();
 if(window.Host&&Host.ready)Host.ready();

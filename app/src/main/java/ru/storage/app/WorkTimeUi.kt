@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -41,18 +42,47 @@ private val RU = Locale("ru")
 
 private fun capital(s: String) = s.replaceFirstChar { it.uppercase() }
 
-/** Окно «Рабочее время»: учёт времени в рабочей зоне по геолокации. */
+/** Окно «Рабочее время»: часы по дням, месяцам и произвольному периоду. Настройки — в «Настройки → Рабочее время». */
 @Composable
 fun WorkTimeScreen(onBack: () -> Unit) {
-    var picking by rememberSaveable { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var tick by remember { mutableIntStateOf(0) }
-    val ctx = LocalContext.current
     LaunchedEffect(Unit) {
         while (true) {
             delay(15_000L)
             tick++
         }
+    }
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.height(48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("← Назад") }
+        }
+        Text(
+            "Рабочее время", style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+        TabRow(selectedTabIndex = tab) {
+            listOf("Месяц", "Год", "Период").forEachIndexed { i, t ->
+                androidx.compose.material3.Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) })
+            }
+        }
+        when (tab) {
+            0 -> MonthTab(tick)
+            1 -> YearTab(tick)
+            else -> PeriodTab(tick)
+        }
+    }
+}
+
+/** Окно «Настройки → Рабочее время»: учёт на этом телефоне, права доступа; точку, радиус, зону подхода, расписание и короткие дни меняет администратор. */
+@Composable
+fun WorkSettingsScreen(onBack: () -> Unit) {
+    var picking by rememberSaveable { mutableStateOf(false) }
+    var tick by remember { mutableIntStateOf(0) }
+    val ctx = LocalContext.current
+    LaunchedEffect(Unit) {
+        if (WorkCloud.pull(ctx)) tick++
     }
     if (picking) {
         BackHandler { picking = false }
@@ -60,7 +90,9 @@ fun WorkTimeScreen(onBack: () -> Unit) {
         MapPicker(
             hasInit = c.hasPoint, initLat = c.lat, initLon = c.lon, radius = c.radius,
             onPick = { lat, lon ->
-                WorkStore.saveCfg(ctx, WorkStore.cfg(ctx).copy(hasPoint = true, lat = lat, lon = lon))
+                val n = WorkStore.cfg(ctx).copy(hasPoint = true, lat = lat, lon = lon)
+                WorkStore.saveCfg(ctx, n)
+                WorkCloud.push(ctx, n)
                 picking = false
                 tick++
             },
@@ -77,17 +109,143 @@ fun WorkTimeScreen(onBack: () -> Unit) {
             "Рабочее время", style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
-        TabRow(selectedTabIndex = tab) {
-            listOf("Месяц", "Год", "Настройки").forEachIndexed { i, t ->
-                androidx.compose.material3.Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) })
+        WorkSettingsTab(tick, onPickPoint = { picking = true }, onChanged = { tick++ })
+    }
+}
+
+/** Период «с … по …»: сколько часов отработано за выбранные дни и по каждому дню. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PeriodTab(tick: Int) {
+    val ctx = LocalContext.current
+    val now = System.currentTimeMillis()
+    val today = WorkStore.dayStart(now)
+    var from by rememberSaveable { mutableLongStateOf(Calendar.getInstance().apply { timeInMillis = today; set(Calendar.DAY_OF_MONTH, 1) }.timeInMillis) }
+    var to by rememberSaveable { mutableLongStateOf(today) }
+    var pick by remember { mutableStateOf(false) }
+    val sessions = remember(tick) { WorkStore.sessions(ctx) }
+    val dayFmt = remember { SimpleDateFormat("EEE, d MMM", RU) }
+    val fullFmt = remember { SimpleDateFormat("d MMM yyyy", RU) }
+
+    class Day(val ms: Long, val dur: Long, val spans: String)
+
+    val days = remember(tick, from, to) {
+        val out = ArrayList<Day>()
+        var d = from
+        var n = 0
+        while (d <= to && n < 400) {
+            val de = WorkStore.plusDays(d, 1)
+            val spans = sessions.filter { s ->
+                val e = if (s.end == 0L) now else s.end
+                e > d && s.start < de
+            }.joinToString(", ") { s ->
+                val a = WorkStore.hhmm(maxOf(s.start, d))
+                val b = if (s.end == 0L) "…" else if (s.end >= de) "24:00" else WorkStore.hhmm(s.end)
+                "$a–$b"
             }
+            out.add(Day(d, WorkStore.overlap(sessions, d, de, now), spans))
+            d = de
+            n++
         }
-        when (tab) {
-            0 -> MonthTab(tick)
-            1 -> YearTab(tick)
-            else -> WorkSettingsTab(tick, onPickPoint = { picking = true }, onChanged = { tick++ })
+        out
+    }
+    val total = days.sumOf { it.dur }
+    val worked = days.count { it.dur >= 60_000L }
+
+    fun preset(count: Int) {
+        to = today
+        from = WorkStore.plusDays(today, -(count - 1))
+    }
+
+    if (pick) {
+        val st = rememberDateRangePickerState(
+            initialSelectedStartDateMillis = utcMillisOfLocalDay(from),
+            initialSelectedEndDateMillis = utcMillisOfLocalDay(to)
+        )
+        DatePickerDialog(
+            onDismissRequest = { pick = false },
+            confirmButton = {
+                TextButton(
+                    enabled = st.selectedStartDateMillis != null,
+                    onClick = {
+                        val a = st.selectedStartDateMillis
+                        val b = st.selectedEndDateMillis ?: a
+                        if (a != null && b != null) {
+                            from = localDayOfUtcMillis(minOf(a, b))
+                            to = localDayOfUtcMillis(maxOf(a, b))
+                        }
+                        pick = false
+                    }
+                ) { Text("Готово") }
+            },
+            dismissButton = { TextButton(onClick = { pick = false }) { Text("Отмена") } }
+        ) {
+            DateRangePicker(state = st, modifier = Modifier.height(520.dp))
         }
     }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item { StatusCard(tick) }
+        item {
+            OutlinedButton(
+                onClick = { pick = true },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            ) { Text("С ${fullFmt.format(Date(from))} по ${fullFmt.format(Date(to))}") }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AssistChip(onClick = { preset(7) }, label = { Text("7 дней") })
+                AssistChip(onClick = { preset(14) }, label = { Text("14 дней") })
+                AssistChip(onClick = { preset(30) }, label = { Text("30 дней") })
+            }
+            Text(
+                "Всего за период: ${WorkStore.fmt(total).let { if (it == "—") "0 мин" else it }}",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            Text(
+                "Дней: ${days.size}, рабочих: $worked",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+            HorizontalDivider(Modifier.padding(top = 8.dp))
+        }
+        items(days.reversed()) { d ->
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(dayFmt.format(Date(d.ms)), style = MaterialTheme.typography.bodyLarge)
+                    if (d.spans.isNotEmpty()) Text(d.spans, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    WorkStore.fmt(d.dur),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (d.dur > 0L) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline
+                )
+            }
+            HorizontalDivider()
+        }
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+/** Выбор в календаре отдаёт полночь по UTC; приводим к началу этого же числа по местному времени и обратно. */
+private fun localDayOfUtcMillis(utc: Long): Long {
+    val u = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = utc }
+    return Calendar.getInstance().apply {
+        clear(); set(u.get(Calendar.YEAR), u.get(Calendar.MONTH), u.get(Calendar.DAY_OF_MONTH), 0, 0, 0)
+    }.timeInMillis
+}
+
+private fun utcMillisOfLocalDay(local: Long): Long {
+    val l = Calendar.getInstance().apply { timeInMillis = local }
+    return Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+        clear(); set(l.get(Calendar.YEAR), l.get(Calendar.MONTH), l.get(Calendar.DAY_OF_MONTH), 0, 0, 0)
+    }.timeInMillis
 }
 
 @Composable
@@ -97,7 +255,7 @@ private fun StatusCard(tick: Int) {
     val open = remember(tick) { WorkStore.open(ctx) }
     val now = System.currentTimeMillis()
     val title = when {
-        !c.enabled -> "Учёт выключен"
+        !c.enabled -> "Учёт выключен (Настройки → Рабочее время)"
         open != null -> "В рабочей зоне • идёт запись"
         else -> WorkStore.statusMsg(ctx).ifBlank { "Ожидание первой проверки" }
     }
@@ -271,15 +429,20 @@ private fun YearTab(tick: Int) {
 @Composable
 private fun WorkSettingsTab(tick: Int, onPickPoint: () -> Unit, onChanged: () -> Unit) {
     val ctx = LocalContext.current
+    val admin = Session.isAdmin
     var cfg by remember(tick) { mutableStateOf(WorkStore.cfg(ctx)) }
     var radiusText by remember { mutableStateOf(cfg.radius.toString()) }
     var intervalText by remember { mutableStateOf(cfg.intervalMin.toString()) }
+    var farText by remember { mutableStateOf(cfg.farIntervalMin.toString()) }
+    var approachText by remember { mutableStateOf(cfg.approachKm.toString()) }
     var showBgDialog by remember { mutableStateOf(false) }
     var permTick by remember { mutableIntStateOf(0) }
 
-    fun upd(n: WorkCfg) {
+    /** shared = общие настройки (их меняет администратор и они уходят на все телефоны); иначе только этот телефон. */
+    fun upd(n: WorkCfg, shared: Boolean = true) {
         cfg = n
         WorkStore.saveCfg(ctx, n)
+        if (shared && admin) WorkCloud.push(ctx, n)
         onChanged()
     }
 
@@ -324,10 +487,15 @@ private fun WorkSettingsTab(tick: Int, onPickPoint: () -> Unit, onChanged: () ->
         )
     }
 
+    val dayList = listOf(
+        Calendar.MONDAY to "Пн", Calendar.TUESDAY to "Вт", Calendar.WEDNESDAY to "Ср",
+        Calendar.THURSDAY to "Чт", Calendar.FRIDAY to "Пт", Calendar.SATURDAY to "Сб", Calendar.SUNDAY to "Вс"
+    )
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Учёт рабочего времени", style = MaterialTheme.typography.titleMedium)
+                Text("Учёт моего рабочего времени", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Время идёт, пока телефон находится в рабочей зоне",
                     style = MaterialTheme.typography.bodySmall
@@ -336,9 +504,9 @@ private fun WorkSettingsTab(tick: Int, onPickPoint: () -> Unit, onChanged: () ->
             Switch(checked = cfg.enabled, onCheckedChange = { on ->
                 if (on) {
                     if (!cfg.hasPoint) {
-                        Toast.makeText(ctx, "Сначала выберите точку на карте", Toast.LENGTH_LONG).show()
+                        Toast.makeText(ctx, "Администратор ещё не выбрал рабочую точку", Toast.LENGTH_LONG).show()
                     } else {
-                        upd(cfg.copy(enabled = true))
+                        upd(cfg.copy(enabled = true), shared = false)
                         if (!WorkTracker.hasFine(ctx)) requestLocation()
                         else {
                             WorkTracker.ensureService(ctx)
@@ -346,7 +514,7 @@ private fun WorkSettingsTab(tick: Int, onPickPoint: () -> Unit, onChanged: () ->
                         }
                     }
                 } else {
-                    upd(cfg.copy(enabled = false))
+                    upd(cfg.copy(enabled = false), shared = false)
                     WorkStore.closeOpen(ctx, System.currentTimeMillis())
                     WorkTracker.stopService(ctx)
                 }
@@ -360,61 +528,153 @@ private fun WorkSettingsTab(tick: Int, onPickPoint: () -> Unit, onChanged: () ->
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.padding(vertical = 4.dp)
         )
-        Button(onClick = onPickPoint) { Text(if (cfg.hasPoint) "Изменить точку на карте" else "Выбрать на карте") }
 
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
-            value = radiusText,
-            onValueChange = { t ->
-                val s = t.filter { it.isDigit() }.take(5)
-                radiusText = s
-                val v = s.toIntOrNull()
-                if (v != null && v >= 10) upd(cfg.copy(radius = v))
-            },
-            label = { Text("Радиус зоны, метров (от 10)") },
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = intervalText,
-            onValueChange = { t ->
-                val s = t.filter { it.isDigit() }.take(4)
-                intervalText = s
-                val v = s.toIntOrNull()
-                if (v != null && v >= 1) upd(cfg.copy(intervalMin = v))
-            },
-            label = { Text("Проверять каждые, минут") },
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+        if (admin) {
+            Button(onClick = onPickPoint) { Text(if (cfg.hasPoint) "Изменить точку на карте" else "Выбрать на карте") }
 
-        Spacer(Modifier.height(16.dp))
-        Text("Время проверки", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = { pickTime(cfg.fromMin) { upd(cfg.copy(fromMin = it)) } }) {
-                Text("С ${WorkStore.minToText(cfg.fromMin)}")
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = radiusText,
+                onValueChange = { t ->
+                    val s = t.filter { it.isDigit() }.take(5)
+                    radiusText = s
+                    val v = s.toIntOrNull()
+                    if (v != null && v >= 10) upd(cfg.copy(radius = v))
+                },
+                label = { Text("Радиус рабочей зоны, метров (от 10)") },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Text("Зона подхода", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Text(
+                "Пока до рабочей точки не больше N км, телефон проверяется часто — так приход на работу не потеряется между редкими проверками. " +
+                    "Дальше зоны подхода проверка редкая (интервал сам сокращается при приближении). 0 км — не использовать.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = approachText,
+                onValueChange = { t ->
+                    val s = t.filter { it.isDigit() }.take(3)
+                    approachText = s
+                    val v = s.toIntOrNull()
+                    if (v != null) upd(cfg.copy(approachKm = v))
+                },
+                label = { Text("Зона подхода, км (например 5)") },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = intervalText,
+                onValueChange = { t ->
+                    val s = t.filter { it.isDigit() }.take(4)
+                    intervalText = s
+                    val v = s.toIntOrNull()
+                    if (v != null && v >= 1) upd(cfg.copy(intervalMin = v))
+                },
+                label = { Text("В зоне подхода проверять каждые, минут") },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = farText,
+                onValueChange = { t ->
+                    val s = t.filter { it.isDigit() }.take(4)
+                    farText = s
+                    val v = s.toIntOrNull()
+                    if (v != null && v >= 1) upd(cfg.copy(farIntervalMin = v))
+                },
+                label = { Text("Вне зоны подхода проверять каждые, минут") },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Text("Полный день", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = { pickTime(cfg.fromMin) { upd(cfg.copy(fromMin = it)) } }) {
+                    Text("С ${WorkStore.minToText(cfg.fromMin)}")
+                }
+                OutlinedButton(onClick = { pickTime(cfg.toMin) { upd(cfg.copy(toMin = it)) } }) {
+                    Text("До ${WorkStore.minToText(cfg.toMin)}")
+                }
             }
-            OutlinedButton(onClick = { pickTime(cfg.toMin) { upd(cfg.copy(toMin = it)) } }) {
-                Text("До ${WorkStore.minToText(cfg.toMin)}")
-            }
-        }
 
-        Spacer(Modifier.height(16.dp))
-        Text("Дни проверки", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-        val dayList = listOf(
-            Calendar.MONDAY to "Пн", Calendar.TUESDAY to "Вт", Calendar.WEDNESDAY to "Ср",
-            Calendar.THURSDAY to "Чт", Calendar.FRIDAY to "Пт", Calendar.SATURDAY to "Сб", Calendar.SUNDAY to "Вс"
-        )
-        FlowRowCompat {
-            dayList.forEach { (d, name) ->
-                FilterChip(
-                    selected = d in cfg.days,
-                    onClick = { upd(cfg.copy(days = if (d in cfg.days) cfg.days - d else cfg.days + d)) },
-                    label = { Text(name) }
-                )
+            Spacer(Modifier.height(16.dp))
+            Text("Дни проверки", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            FlowRowCompat {
+                dayList.forEach { (d, name) ->
+                    FilterChip(
+                        selected = d in cfg.days,
+                        onClick = {
+                            val nd = if (d in cfg.days) cfg.days - d else cfg.days + d
+                            upd(cfg.copy(days = nd, shortDays = cfg.shortDays.intersect(nd)))
+                        },
+                        label = { Text(name) }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Text("Короткие дни", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Text(
+                "Отметьте дни, когда работают не полный день (например, суббота). В эти дни проверка и учёт заканчиваются в выбранное время.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            FlowRowCompat {
+                dayList.filter { it.first in cfg.days }.forEach { (d, name) ->
+                    FilterChip(
+                        selected = d in cfg.shortDays,
+                        onClick = { upd(cfg.copy(shortDays = if (d in cfg.shortDays) cfg.shortDays - d else cfg.shortDays + d)) },
+                        label = { Text(name) }
+                    )
+                }
+            }
+            if (cfg.days.isEmpty()) Text("Сначала выберите дни проверки", style = MaterialTheme.typography.bodySmall)
+            if (cfg.shortDays.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { pickTime(cfg.shortToMin) { upd(cfg.copy(shortToMin = it)) } },
+                    modifier = Modifier.padding(top = 8.dp)
+                ) { Text("Короткий день до ${WorkStore.minToText(cfg.shortToMin)}") }
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Настройки задал администратор", style = MaterialTheme.typography.titleSmall)
+                    Text("Рабочая зона: радиус ${cfg.radius} м", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Полный день: ${WorkStore.minToText(cfg.fromMin)}–${WorkStore.minToText(cfg.toMin)}, дни: " +
+                            (dayList.filter { it.first in cfg.days }.joinToString(", ") { it.second }.ifEmpty { "—" }),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (cfg.shortDays.isNotEmpty()) {
+                        Text(
+                            "Короткие дни: " + dayList.filter { it.first in cfg.shortDays }.joinToString(", ") { it.second } +
+                                " — до ${WorkStore.minToText(cfg.shortToMin)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    if (cfg.approachKm > 0) {
+                        Text(
+                            "Зона подхода ${cfg.approachKm} км: проверка каждые ${cfg.intervalMin} мин",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Text("Изменить может только администратор.", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
