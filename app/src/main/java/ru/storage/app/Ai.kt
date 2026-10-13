@@ -37,7 +37,7 @@ object AiKeys {
         return name + tail
     }
 
-    private fun toJson(l: List<AiKey>): String {
+    fun toJson(l: List<AiKey>): String {
         val arr = JSONArray()
         l.forEach {
             arr.put(
@@ -48,7 +48,7 @@ object AiKeys {
         return arr.toString()
     }
 
-    private fun fromJson(s: String?): List<AiKey> {
+    fun fromJson(s: String?): List<AiKey> {
         if (s.isNullOrBlank()) return emptyList()
         return try {
             val arr = JSONArray(s)
@@ -94,6 +94,12 @@ object AiKeys {
     }
 
     fun activeId(ctx: Context): String = active(ctx)?.id ?: ""
+
+    /** Заменить весь список ключей (загрузка файла настроек). */
+    fun replaceAll(ctx: Context, keys: List<AiKey>, activeId: String) {
+        val act = if (keys.any { it.id == activeId }) activeId else keys.firstOrNull()?.id ?: ""
+        sp(ctx).edit().putString("keys", toJson(keys)).putString("active", act).apply()
+    }
 
     fun setActive(ctx: Context, id: String) {
         sp(ctx).edit().putString("active", id).apply()

@@ -123,6 +123,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
 
     fun finish(u: AppUser) {
         focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
+        if (!u.local) ConnCfg.markConnected(ctx)
         onSuccess(u)
     }
 
@@ -145,7 +146,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                         fail(r.text)
                     }
                 }
-                is AuthResult.Setup -> {}
+                is AuthResult.Setup, is AuthResult.Local -> {}
             }
         }
     }
@@ -184,6 +185,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                             go(Mode.SETUP)
                             info = "Вход admin/admin сработал один раз. Задайте свой Email и пароль — после этого admin/admin будет удалён."
                         }
+                        is AuthResult.Local -> finish(r.user)
                         is AuthResult.Fail -> fail(r.text)
                     }
                 }
@@ -205,7 +207,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     when (r) {
                         is AuthResult.Ok -> finish(r.user)
                         is AuthResult.Fail -> fail(r.text)
-                        is AuthResult.Setup -> {}
+                        is AuthResult.Setup, is AuthResult.Local -> {}
                     }
                 }
             }
@@ -237,7 +239,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     when (r) {
                         is AuthResult.Ok -> finish(r.user)
                         is AuthResult.Fail -> fail(r.text)
-                        is AuthResult.Setup -> {}
+                        is AuthResult.Setup, is AuthResult.Local -> {}
                     }
                 }
             }

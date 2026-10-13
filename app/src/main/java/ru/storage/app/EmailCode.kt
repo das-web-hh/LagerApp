@@ -13,16 +13,16 @@ import java.security.SecureRandom
  * «Allow EmailJS API for non-browser applications», иначе письма из приложения не уходят.
  */
 object EmailCode {
-    private const val PUBLIC_KEY = "eVykpcx5pKB6QOkY_"
-    private const val SERVICE_ID = "service_gqzvbbf"
-    private const val TEMPLATE_ID = "template_43migsz"
+    private val PUBLIC_KEY: String get() = ConnCfg.mail().publicKey
+    private val SERVICE_ID: String get() = ConnCfg.mail().serviceId
+    private val TEMPLATE_ID: String get() = ConnCfg.mail().templateId
     /**
      * Шаблон для писем администратора. Создайте в EmailJS второй шаблон с переменными
      * {{to_email}} (поле «To Email»), {{to_name}}, {{from_name}}, {{subject}}, {{message}} и вставьте сюда его ID.
      */
-    private const val MESSAGE_TEMPLATE_ID = "template_REPLACE_ME"
+    private val MESSAGE_TEMPLATE_ID: String get() = ConnCfg.mail().messageTemplateId
     /** Private Key из EmailJS (Account → General). Нужен, если включено «Use Private Key». Можно оставить пустым и выключить эту галочку в EmailJS. */
-    private const val PRIVATE_KEY = ""
+    private val PRIVATE_KEY: String get() = ConnCfg.mail().privateKey
     private const val TTL_MS = 10 * 60 * 1000L
     private const val MAX_TRIES = 5
 

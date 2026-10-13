@@ -48,6 +48,7 @@ object CloudSettings {
 
     /** Вызывать после любого изменения настроек: ставит время и отправляет в Firebase (в очередь, работает и без сети). */
     fun save(ctx: Context, prefs: Prefs) {
+        if (Session.user?.local == true) return
         val now = System.currentTimeMillis()
         Journal.log("Система", "Изменены настройки")
         sp(ctx).edit().putLong("updated", now).apply()
@@ -74,6 +75,7 @@ object CloudSettings {
 
     /** Сверка с Firebase (1 чтение). Возвращает true, если настройки на телефоне обновились. */
     suspend fun pull(ctx: Context, prefs: Prefs): Boolean {
+        if (Session.user?.local == true) return false
         // Диск у сотрудников такой же, как у администратора: берём его настройки (сами сотрудники их не меняют)
         if (!Session.isAdmin) {
             try {
@@ -122,6 +124,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Печать" -> PrintSettings(prefs) { section = null }
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
+        "Подключения" -> ConnectionSettings { section = null }
         "Распознавание документов" -> AiSettings { section = null }
         "Голос и подсчёт" -> VoiceSettings { section = null }
         "Вибрация" -> VibrationSettings { section = null }
@@ -139,10 +142,11 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Сканер" to "Камера, типы штрих-кодов",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
+        "Подключения" to "Firebase, EmailJS, сохранить и загрузить все настройки файлом",
         "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
         "Вибрация" to "Тап и прокрутка: сила и длительность",
         "Просмотр накладных" to "Листать сверху вниз или слева направо"
-    ).filter { Session.isAdmin || it.first != "Google Диск" && it.first != "Распознавание документов" }
+    ).filter { Session.isAdmin || it.first != "Google Диск" && it.first != "Распознавание документов" && it.first != "Подключения" }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
@@ -248,7 +252,7 @@ private fun ScannerSettings(prefs: Prefs, onBack: () -> Unit) {
 }
 
 @Composable
-private fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
+fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf(DriveCfg.url(ctx)) }
@@ -322,7 +326,7 @@ private fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
 }
 
 @Composable
-private fun AiSettings(onBack: () -> Unit) {
+fun AiSettings(onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }

@@ -39,7 +39,9 @@ data class AppUser(
     /** Счётчик «завершений сеанса»: администратор увеличивает — все телефоны этого сотрудника выходят из аккаунта. */
     val sess: Long = 0L,
     /** Заблокирован администратором: вход закрыт, текущий сеанс завершается. */
-    val blocked: Boolean = false
+    val blocked: Boolean = false,
+    /** Локальный вход admin/admin: только окно настройки подключения, без доступа к данным и базе. */
+    val local: Boolean = false
 ) {
     val isAdmin: Boolean get() = role == "admin"
     val label: String get() = if (position.isBlank()) name else "$name · $position"
@@ -50,6 +52,8 @@ sealed class AuthResult {
     class Fail(val text: String) : AuthResult()
     /** Верный одноразовый вход admin/admin: нужно задать настоящие email и пароль администратора. */
     object Setup : AuthResult()
+    /** Вход admin/admin без настроенного подключения: открывается только окно загрузки настроек. */
+    class Local(val user: AppUser) : AuthResult()
 }
 
 object Users {
@@ -92,17 +96,26 @@ object Users {
         return if (snap.exists()) snap.getString("login") else null
     }
 
+    private fun localUser(): AuthResult =
+        AuthResult.Local(AppUser(BOOT_LOGIN, "Настройка подключения", "", "admin", "active", local = true))
+
+    /** Нет связи с Firebase: admin/admin открывает окно настройки (только если на телефоне ещё не было настоящего входа). */
+    private fun localOrFail(): AuthResult =
+        if (ConnCfg.appCtx.let { it == null || !ConnCfg.everConnected(it) }) localUser()
+        else AuthResult.Fail("Нет связи с Firebase. Проверьте интернет и повторите")
+
     suspend fun signIn(login: String, pw: String): AuthResult {
         val k = key(login)
         if (k.isEmpty() || pw.isEmpty()) return AuthResult.Fail("Введите логин и пароль")
         return try {
             if (k == BOOT_LOGIN) {
-                // admin/admin: пускаем на настройку только один раз, пока config/admin не создан
-                if (pw == BOOT_PASS && adminLogin() == null) return AuthResult.Setup
-                return AuthResult.Fail(
-                    if (adminLogin() != null) "Вход admin/admin уже использован. Войдите по Email администратора"
-                    else "Неверный логин или пароль"
-                )
+                if (pw != BOOT_PASS) return AuthResult.Fail("Неверный логин или пароль")
+                val admin = try { adminLogin() } catch (e: Exception) { return localOrFail() }
+                // базы нет или админ ещё не создан — прежняя первая настройка (Email и пароль)
+                if (admin == null) return AuthResult.Setup
+                // подключение не проверялось ни одним настоящим входом на этом телефоне — можно загрузить свои настройки
+                if (!ConnCfg.appCtx.let { it != null && ConnCfg.everConnected(it) }) return localUser()
+                return AuthResult.Fail("Вход admin/admin уже использован. Войдите по Email администратора")
             }
             val snap = fs.collection("users").document(k).get().awaitIt()
             val stored = snap.getString("passHash")

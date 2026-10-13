@@ -34,6 +34,7 @@
         </intent>
     </queries>
     <application
+        android:name=".LagerApp"
         android:label="Warehouse"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
