@@ -231,9 +231,8 @@ object Ai {
                 val body = JSONObject()
                     .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
                     .put("generationConfig", cfg)
-                val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=" +
-                    URLEncoder.encode(key, "UTF-8")
-                val r = post(url, emptyMap(), body.toString(), timeout)
+                val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+                val r = post(url, mapOf("x-goog-api-key" to key), body.toString(), timeout)
                 r.getJSONArray("candidates").getJSONObject(0).getJSONObject("content")
                     .getJSONArray("parts").getJSONObject(0).getString("text")
             }

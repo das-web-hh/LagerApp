@@ -198,7 +198,25 @@ object Updater {
             }
         }
         progress = 1f
+        if (!sameSigner(app, target)) {
+            target.delete()
+            status = "Файл обновления подписан чужим ключом — установка отменена"
+            throw RuntimeException("Подпись обновления не совпадает с подписью приложения")
+        }
         install(app, target)
+    }
+
+    /** Защита от подмены: APK принимается, только если подписан тем же сертификатом, что и установленное приложение. */
+    private fun sameSigner(app: Context, apk: File): Boolean = try {
+        val pm = app.packageManager
+        val flag = android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+        val newInfo = pm.getPackageArchiveInfo(apk.absolutePath, flag)
+        val oldInfo = pm.getPackageInfo(app.packageName, flag)
+        val n = newInfo?.signingInfo?.apkContentsSigners?.map { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).toList() }?.toSet()
+        val o = oldInfo.signingInfo?.apkContentsSigners?.map { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).toList() }?.toSet()
+        newInfo?.packageName == app.packageName && !n.isNullOrEmpty() && n == o
+    } catch (e: Exception) {
+        false
     }
 
     private fun install(app: Context, f: File) {

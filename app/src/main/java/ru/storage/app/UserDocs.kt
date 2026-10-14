@@ -564,6 +564,10 @@ fun DocEditorScreen(docId: String, onBack: () -> Unit) {
             factory = { c ->
                 WebView(c).apply {
                     settings.javaScriptEnabled = true
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
+                    @Suppress("DEPRECATION") settings.allowFileAccessFromFileURLs = false
+                    @Suppress("DEPRECATION") settings.allowUniversalAccessFromFileURLs = false
                     setBackgroundColor(if (dark) 0xFF14171D.toInt() else 0xFFEEF1F7.toInt())
                     addJavascriptInterface(bridge, "Host")
                     webViewClient = object : WebViewClient() {

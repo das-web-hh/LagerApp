@@ -19,23 +19,24 @@ android {
         versionName = "2.26.0"
     }
 
-    // Один и тот же постоянный ключ для каждой сборки → Android обновляет приложение поверх старого.
-    signingConfigs {
-        create("lager") {
-            // Ключ и пароли — из переменных окружения (GitHub Secrets). Пока секреты не заданы,
-            // используется прежний app/lager.jks, чтобы сборка не ломалась.
-            val envStore = System.getenv("LAGER_KEYSTORE_FILE")
-            storeFile = if (!envStore.isNullOrBlank()) file(envStore) else file("lager.jks")
-            storePassword = System.getenv("LAGER_STORE_PASSWORD") ?: "lager2026"
-            keyAlias = System.getenv("LAGER_KEY_ALIAS") ?: "lager"
-            keyPassword = System.getenv("LAGER_KEY_PASSWORD") ?: "lager2026"
+    // Ключ и пароли — ТОЛЬКО из переменных окружения (GitHub Secrets). В коде и в репозитории их нет.
+    // Без секретов release собирается неподписанным, а debug использует стандартный debug-ключ Android.
+    val envStore = System.getenv("LAGER_KEYSTORE_FILE")
+    val hasSigning = !envStore.isNullOrBlank()
+    if (hasSigning) {
+        signingConfigs {
+            create("lager") {
+                storeFile = file(envStore!!)
+                storePassword = System.getenv("LAGER_STORE_PASSWORD")
+                keyAlias = System.getenv("LAGER_KEY_ALIAS")
+                keyPassword = System.getenv("LAGER_KEY_PASSWORD")
+            }
         }
     }
     buildTypes {
-        debug { signingConfig = signingConfigs.getByName("lager") }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("lager")
+            if (hasSigning) signingConfig = signingConfigs.getByName("lager")
         }
     }
     lint {

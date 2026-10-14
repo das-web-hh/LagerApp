@@ -35,6 +35,8 @@
     </queries>
     <application
         android:name=".LagerApp"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false"
         android:label="Warehouse"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -81,7 +83,7 @@
             android:foregroundServiceType="location" />
         <receiver
             android:name=".WorkBootReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
