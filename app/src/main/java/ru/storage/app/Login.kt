@@ -49,7 +49,7 @@ private fun Appear(delayMs: Int, modifier: Modifier = Modifier, content: @Compos
     }) { content() }
 }
 
-private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, PIN }
+private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, SETUP, PIN }
 
 @Composable
 private fun Field(
@@ -82,7 +82,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
     var pin by remember { mutableStateOf("") }
     var login by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
-    var email by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf("") }      // регистрация и настройка администратора
     var code by rememberSaveable { mutableStateOf("") }
     var firstName by rememberSaveable { mutableStateOf("") }
     var lastName by rememberSaveable { mutableStateOf("") }
@@ -122,11 +122,12 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
     }
 
     fun finish(u: AppUser) {
-        focus.clearFocus()
+        focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
         if (!u.local) ConnCfg.markConnected(ctx)
         onSuccess(u)
     }
 
+    /** Вход сохранёнными логином и паролем (после PIN или отпечатка): проверка всё равно идёт в Firebase. */
     fun quickSignIn(login: String, pw: String) {
         busy = true
         scope.launch {
@@ -178,9 +179,14 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     busy = false
                     when (r) {
                         is AuthResult.Ok -> finish(r.user)
+                        is AuthResult.Setup -> {
+                            // верный одноразовый вход: просим задать настоящие email и пароль администратора
+                            email = Users.ADMIN_EMAIL
+                            go(Mode.SETUP)
+                            info = "Вход admin/admin сработал один раз. Задайте свой Email и пароль — после этого admin/admin будет удалён."
+                        }
                         is AuthResult.Local -> finish(r.user)
                         is AuthResult.Fail -> fail(r.text)
-                        is AuthResult.Setup -> fail("Режим первоначальной настройки заблокирован.")
                     }
                 }
             }
@@ -190,6 +196,19 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     is PinResult.Ok -> quickSignIn(r.login, r.password)
                     is PinResult.Wrong -> { pin = ""; fail("Неверный PIN-код. Осталось попыток: ${r.left}") }
                     is PinResult.Locked -> { go(Mode.LOGIN); fail("PIN-код сброшен из-за ошибок — войдите паролем") }
+                }
+            }
+            Mode.SETUP -> {
+                if (password != password2) { fail("Пароли не совпадают"); return }
+                busy = true
+                scope.launch {
+                    val r = Users.setupAdmin(email, password)
+                    busy = false
+                    when (r) {
+                        is AuthResult.Ok -> finish(r.user)
+                        is AuthResult.Fail -> fail(r.text)
+                        is AuthResult.Setup, is AuthResult.Local -> {}
+                    }
                 }
             }
             Mode.REG_EMAIL -> {
@@ -237,6 +256,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
         }
     }
 
+    // Пока открыт экран входа, окно уменьшается над клавиатурой (в остальных окнах — прежний режим «сдвиг»)
     DisposableEffect(Unit) {
         val act = ctx.findFragmentActivity()
         val w = act?.window
@@ -245,6 +265,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // Клавиатура открыта — окно стало ниже: уменьшаем логотип и прячем год внизу, чтобы поля были на виду
         val h = maxHeight
         var fullH by remember { mutableStateOf(h) }
         if (h > fullH) fullH = h
@@ -273,6 +294,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
             val title = when (mode) {
                 Mode.LOGIN -> ""
                 Mode.PIN -> "Вход по PIN-коду"
+                Mode.SETUP -> "Настройка администратора"
                 Mode.REG_EMAIL -> "Регистрация — шаг 1 из 3"
                 Mode.REG_CODE -> "Регистрация — шаг 2 из 3"
                 Mode.REG_DATA -> "Регистрация — шаг 3 из 3"
@@ -308,6 +330,13 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                             "PIN-код (4 цифры)", password = true, keyboard = KeyboardType.NumberPassword,
                             ime = ImeAction.Done, focus = focus, onDone = { submit() }
                         )
+                    }
+                    Mode.SETUP -> {
+                        Field(email, { email = it; error = null }, "Email администратора", keyboard = KeyboardType.Email, focus = focus)
+                        Spacer(Modifier.height(12.dp))
+                        Field(password, { password = it; error = null }, "Новый пароль", password = true, show = show, onToggle = { show = !show }, focus = focus)
+                        Spacer(Modifier.height(12.dp))
+                        Field(password2, { password2 = it; error = null }, "Повторите пароль", password = true, show = show, ime = ImeAction.Done, focus = focus, onDone = { submit() })
                     }
                     Mode.REG_EMAIL -> {
                         Field(email, { email = it; error = null }, "Email", keyboard = KeyboardType.Email, ime = ImeAction.Done, focus = focus, onDone = { submit() })
@@ -356,6 +385,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     else Text(
                         when (mode) {
                             Mode.LOGIN, Mode.PIN -> "Войти"
+                            Mode.SETUP -> "Сохранить и войти"
                             Mode.REG_EMAIL -> "Получить код"
                             Mode.REG_CODE -> "Подтвердить код"
                             Mode.REG_DATA -> "Завершить регистрацию"
@@ -403,13 +433,14 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                             TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) { Text("Уже есть аккаунт? Войти") }
                         }
                         else -> TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Уже есть аккаунт? Войти")
+                            Text(if (mode == Mode.SETUP) "Назад" else "Уже есть аккаунт? Войти")
                         }
                     }
                 }
             }
         }
 
+        // Год внизу окна: с какого года приложение работает; при открытой клавиатуре не показываем
         if (!keyboard) {
             Appear(1200, Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)) {
                 Text(
