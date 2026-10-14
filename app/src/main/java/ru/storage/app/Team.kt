@@ -63,16 +63,47 @@ object Users {
 
     /** Одноразовый вход. Работает только пока администратор не задал свои данные, потом удаляется. */
     private const val BOOT_LOGIN = "admin"
-    private const val BOOT_PASS = "admin"
 
     private val fs get() = FirebaseFirestore.getInstance()
 
     fun key(login: String): String = login.trim().lowercase().replace('/', '_')
 
-    fun hash(login: String, pw: String): String {
+    /** Старый формат (SHA-256 без соли и повторов) — только для проверки уже сохранённых паролей. */
+    private fun legacyHash(login: String, pw: String): String {
         val d = MessageDigest.getInstance("SHA-256").digest("lager:${key(login)}:$pw".toByteArray(Charsets.UTF_8))
         return d.joinToString("") { "%02x".format(it) }
     }
+
+    private const val PBKDF2_ITER = 120_000
+
+    private fun pbkdf2(pw: String, salt: ByteArray, iter: Int): ByteArray =
+        javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            .generateSecret(javax.crypto.spec.PBEKeySpec(pw.toCharArray(), salt, iter, 256)).encoded
+
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+    private fun unhex(s: String) = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16) }
+
+    /** Новый хэш пароля: PBKDF2-HMAC-SHA256, случайная соль, формат «p1$повторы$соль$хэш». */
+    fun hash(login: String, pw: String): String {
+        val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        return "p1$$PBKDF2_ITER$${hex(salt)}$${hex(pbkdf2(pw, salt, PBKDF2_ITER))}"
+    }
+
+    private fun verifyOne(login: String, pw: String, stored: String?): Boolean {
+        if (stored.isNullOrEmpty()) return false
+        if (stored.startsWith("p1$")) {
+            val p = stored.split('$')
+            if (p.size != 4) return false
+            return try {
+                MessageDigest.isEqual(pbkdf2(pw, unhex(p[2]), p[1].toInt()), unhex(p[3]))
+            } catch (e: Exception) { false }
+        }
+        return MessageDigest.isEqual(stored.toByteArray(), legacyHash(login, pw).toByteArray())
+    }
+
+    /** Проверка пароля (с пробелами и без) по новому или старому формату хэша. */
+    fun verify(login: String, pw: String, stored: String?): Boolean =
+        verifyOne(login, pw, stored) || verifyOne(login, pw.trim(), stored)
 
     fun validEmail(e: String): Boolean = Regex("^[^@\\s/]+@[^@\\s/]+\\.[^@\\s/]{2,}$").matches(e.trim())
 
@@ -109,23 +140,22 @@ object Users {
         if (k.isEmpty() || pw.isEmpty()) return AuthResult.Fail("Введите логин и пароль")
         return try {
             if (k == BOOT_LOGIN) {
-                if (pw != BOOT_PASS) return AuthResult.Fail("Неверный логин или пароль")
-                val admin = try { adminLogin() } catch (e: Exception) { return localOrFail() }
-                // базы нет или админ ещё не создан — прежняя первая настройка (Email и пароль)
-                if (admin == null) return AuthResult.Setup
-                // подключение не проверялось ни одним настоящим входом на этом телефоне — можно загрузить свои настройки
-                if (!ConnCfg.appCtx.let { it != null && ConnCfg.everConnected(it) }) return localUser()
-                return AuthResult.Fail("Вход admin/admin уже использован. Войдите по Email администратора")
+                // Вход admin/admin отключён полностью: администратор входит только по своему Email и паролю
+                return AuthResult.Fail("Вход admin/admin отключён. Войдите по Email администратора")
             }
             val snap = fs.collection("users").document(k).get().awaitIt()
             val stored = snap.getString("passHash")
             if (!snap.exists()) {
                 AuthResult.Fail("Аккаунт «$k» не найден. Проверьте Email или зарегистрируйтесь")
-            } else if (stored != hash(k, pw) && stored != hash(k, pw.trim())) {
+            } else if (!verify(k, pw, stored)) {
                 AuthResult.Fail("Неверный пароль")
             } else if (snap.getBoolean("blocked") == true) {
                 AuthResult.Fail("Доступ заблокирован администратором")
             } else {
+                // старый хэш (SHA-256) при успешном входе заменяется на PBKDF2
+                if (stored != null && !stored.startsWith("p1$")) {
+                    try { snap.reference.update("passHash", hash(k, pw.trim())) } catch (e: Exception) { }
+                }
                 AuthResult.Ok(snap.toUser()!!)
             }
         } catch (e: Exception) {
@@ -250,7 +280,7 @@ object Users {
             val ref = fs.collection("users").document(key(login))
             val snap = ref.get().awaitIt()
             val stored = snap.getString("passHash")
-            if (!snap.exists() || (stored != hash(login, old) && stored != hash(login, old.trim()))) return "Текущий пароль неверный"
+            if (!snap.exists() || !verify(login, old, stored)) return "Текущий пароль неверный"
             ref.update("passHash", hash(login, new.trim())).awaitIt()
             Journal.log("Система", "Пароль изменён")
             null

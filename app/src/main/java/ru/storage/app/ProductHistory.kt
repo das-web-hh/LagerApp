@@ -23,7 +23,7 @@ private fun entriesFor(db: ProductDb, p: Product): List<HistEntry> {
             it.productId == p.id || (it.productId.isEmpty() && it.name.trim().lowercase() == nameLc)
         }
         if (lines.isEmpty()) null else HistEntry(r, lines)
-    }
+    }.sortedByDescending { it.receipt.receivedAt }   // новые приёмы сверху
 }
 
 /**
@@ -57,7 +57,7 @@ fun ProductHistoryScreen(id: String, onClose: () -> Unit) {
 
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("История приёма товара", style = MaterialTheme.typography.headlineSmall)
+        Text("Последние приёмы товара", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
         val p = product
         if (p == null) {
@@ -95,7 +95,9 @@ private fun EntryCard(e: HistEntry, onView: (List<String>) -> Unit) {
     fun v(s: String) = s.ifBlank { "—" }
     Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Column(Modifier.padding(12.dp)) {
-            Text("Время приёма: ${fmtTime(r.receivedAt)}", fontWeight = FontWeight.Medium)
+            val day = java.text.SimpleDateFormat("EEEE", java.util.Locale.getDefault()).format(java.util.Date(r.receivedAt))
+                .replaceFirstChar { it.uppercase() }
+            Text("Принято: ${fmtTime(r.receivedAt)} · $day", fontWeight = FontWeight.Medium)
             Text("Отправитель: ${v(r.sender)}")
             Text("Номер заказа: ${v(r.orderNo)}")
             Text("Принял: ${v(r.receiver)}")
@@ -108,6 +110,7 @@ private fun EntryCard(e: HistEntry, onView: (List<String>) -> Unit) {
                     "Количество: ${v(l.qty)}" + if (extra.isNotEmpty()) " ($extra)" else "",
                     style = MaterialTheme.typography.bodyLarge
                 )
+                if (l.expiry.isNotBlank()) Text("Срок годности: ${l.expiry}")
             }
             if (r.photos.isNotEmpty() || r.invoices.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))

@@ -108,7 +108,8 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     val sync = remember { SyncState() }
     var query by rememberSaveable { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
-    var results by remember { mutableStateOf(emptyList<HistoryHit>()) }
+    var results by remember { mutableStateOf(emptyList<HistoryHit>()) }   // строки истории для товаров, которых нет в каталоге
+    var prodHits by remember { mutableStateOf(emptyList<ProdHit>()) }      // подсказки из каталога
     var openProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var openReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var section by rememberSaveable { mutableStateOf<String?>(null) }
@@ -133,10 +134,16 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             productCount = db.countProducts()
         }
     }
-    // поиск идёт по истории приёмов (не по каталогу); один и тот же товар, принятый в разное время, — отдельными строками, последний сверху
+    // подсказки — из каталога (один товар = одна строка, сверху тот, что принимали последним);
+    // товары, принятые без карточки в каталоге, показываются отдельным списком ниже
     LaunchedEffect(query, sync.version, all) {
-        results = if (query.trim().length < MIN_SEARCH_CHARS) emptyList()
-        else withContext(Dispatchers.IO) { searchHistory(db, all, query) }
+        if (query.trim().length < MIN_SEARCH_CHARS) {
+            prodHits = emptyList(); results = emptyList()
+        } else withContext(Dispatchers.IO) {
+            prodHits = searchProducts(db, all, query)
+            val ids = db.allProducts().map { it.id }.toSet()
+            results = searchHistory(db, all, query).filter { it.item.productId !in ids }
+        }
     }
 
     // код с Bluetooth-сканера попадает в строку поиска
@@ -229,7 +236,9 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             SearchResultsList(
                 enough = enough,
                 busy = sync.busy,
+                prodHits = prodHits,
                 results = results,
+                onOpenProduct = { openProductId = it },
                 onOpen = { openReceiptId = it }
             )
         } else {
@@ -266,38 +275,77 @@ private fun searchHistory(db: ProductDb, all: List<Receipt>, query: String): Lis
     return out.take(300)
 }
 
+/** Подсказка из каталога: товар, когда его принимали в последний раз и сколько раз. */
+private class ProdHit(val product: Product, val last: Receipt?, val count: Int)
+
+private fun searchProducts(db: ProductDb, all: List<Receipt>, query: String): List<ProdHit> {
+    val found = db.search(query, 100)
+    if (found.isEmpty()) return emptyList()
+    val out = found.map { p ->
+        val nameLc = p.name.trim().lowercase()
+        val rs = all.filter { r ->
+            r.items.any { it.productId == p.id || (it.productId.isEmpty() && it.name.trim().lowercase() == nameLc) }
+        }
+        ProdHit(p, rs.maxByOrNull { it.receivedAt }, rs.size)
+    }
+    // сначала те, что принимали недавно; не принимавшиеся — в конце, по алфавиту
+    return out.sortedWith(compareByDescending<ProdHit> { it.last?.receivedAt ?: Long.MIN_VALUE }.thenBy { it.product.name.lowercase() })
+}
+
 @Composable
 private fun SearchResultsList(
     enough: Boolean,
     busy: Boolean,
+    prodHits: List<ProdHit>,
     results: List<HistoryHit>,
+    onOpenProduct: (String) -> Unit,
     onOpen: (String) -> Unit
 ) {
     when {
         !enough -> Text(
-            "Введите минимум $MIN_SEARCH_CHARS символа: название, артикул, штрих-код или отправитель",
+            "Введите минимум $MIN_SEARCH_CHARS символа: название, артикул или штрих-код",
             style = MaterialTheme.typography.bodySmall
         )
-        results.isEmpty() -> Text(
-            if (busy) "Загрузка истории…" else "В истории ничего не найдено",
+        prodHits.isEmpty() && results.isEmpty() -> Text(
+            if (busy) "Загрузка…" else "Ничего не найдено",
             style = MaterialTheme.typography.bodySmall
         )
-        else -> Text("Найдено в истории: ${results.size} (последние сверху)", style = MaterialTheme.typography.bodySmall)
+        else -> Text("Найдено в каталоге: ${prodHits.size}", style = MaterialTheme.typography.bodySmall)
     }
     Spacer(Modifier.height(4.dp))
     LazyColumn(Modifier.fillMaxSize()) {
-        items(results, key = { it.key }) { h ->
-            val r = h.receipt
-            Column(Modifier.fillMaxWidth().clickable { onOpen(r.id) }.padding(vertical = 6.dp)) {
-                Text(h.item.name, fontWeight = FontWeight.Medium)
-                Text(fmtTime(r.receivedAt) + " · количество ${h.item.qty}", style = MaterialTheme.typography.bodySmall)
-                val sub = listOf(
-                    r.sender,
-                    if (r.orderNo.isNotBlank() && r.orderNo != "none") "заказ ${r.orderNo}" else ""
-                ).filter { it.isNotBlank() }.joinToString(" · ")
+        items(prodHits, key = { "p" + it.product.id }) { h ->
+            Column(Modifier.fillMaxWidth().clickable { onOpenProduct(h.product.id) }.padding(vertical = 6.dp)) {
+                Text(h.product.name, fontWeight = FontWeight.Medium)
+                val sub = listOf(h.product.article, h.product.barcode).filter { it.isNotBlank() }.joinToString(" · ")
                 if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
+                val l = h.last
+                Text(
+                    if (l == null) "Ещё не принимали"
+                    else "Последний приём: " + fmtTime(l.receivedAt) + (if (l.receiver.isNotBlank()) " · " + l.receiver else "") +
+                        (if (h.count > 1) " · приёмов: ${h.count}" else ""),
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
             HorizontalDivider()
+        }
+        if (results.isNotEmpty()) {
+            item(key = "hdr") {
+                Text("Принято без карточки в каталоге", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+            }
+            items(results, key = { it.key }) { h ->
+                val r = h.receipt
+                Column(Modifier.fillMaxWidth().clickable { onOpen(r.id) }.padding(vertical = 6.dp)) {
+                    Text(h.item.name, fontWeight = FontWeight.Medium)
+                    Text(fmtTime(r.receivedAt) + " · количество ${h.item.qty}", style = MaterialTheme.typography.bodySmall)
+                    val sub = listOf(
+                        r.sender,
+                        if (r.orderNo.isNotBlank() && r.orderNo != "none") "заказ ${r.orderNo}" else ""
+                    ).filter { it.isNotBlank() }.joinToString(" · ")
+                    if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
+                }
+                HorizontalDivider()
+            }
         }
     }
 }

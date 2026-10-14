@@ -25,6 +25,12 @@ import java.util.Locale
 object Printer {
     private var current: WebView? = null
 
+    /** Поля страницы в мм → «милы» (1/1000 дюйма). Принтер физически не печатает у самого края листа, поэтому поля 0 нельзя: обрезается верхняя строка и края. */
+    private fun margins(mm: Int): PrintAttributes.Margins {
+        val mils = (mm * 1000 / 25.4).toInt()
+        return PrintAttributes.Margins(mils, mils, mils, mils)
+    }
+
     /** record = true: копия напечатанного попадает в «Документы»; печать всегда пишется в «Журнал». */
     fun print(ctx: Context, jobName: String, html: String, record: Boolean = true, noMargins: Boolean = false) {
         var c: Context? = ctx
@@ -43,7 +49,7 @@ object Printer {
                     jobName,
                     view.createPrintDocumentAdapter(jobName),
                     PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                        .apply { if (noMargins) setMinMargins(PrintAttributes.Margins.NO_MARGINS) }
+                        .setMinMargins(margins(if (noMargins) 6 else 12))
                         .build()
                 )
             }

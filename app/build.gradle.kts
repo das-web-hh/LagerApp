@@ -22,10 +22,13 @@ android {
     // Один и тот же постоянный ключ для каждой сборки → Android обновляет приложение поверх старого.
     signingConfigs {
         create("lager") {
-            storeFile = file("lager.jks")
-            storePassword = "lager2026"
-            keyAlias = "lager"
-            keyPassword = "lager2026"
+            // Ключ и пароли — из переменных окружения (GitHub Secrets). Пока секреты не заданы,
+            // используется прежний app/lager.jks, чтобы сборка не ломалась.
+            val envStore = System.getenv("LAGER_KEYSTORE_FILE")
+            storeFile = if (!envStore.isNullOrBlank()) file(envStore) else file("lager.jks")
+            storePassword = System.getenv("LAGER_STORE_PASSWORD") ?: "lager2026"
+            keyAlias = System.getenv("LAGER_KEY_ALIAS") ?: "lager"
+            keyPassword = System.getenv("LAGER_KEY_PASSWORD") ?: "lager2026"
         }
     }
     buildTypes {

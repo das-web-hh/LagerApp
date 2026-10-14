@@ -72,7 +72,7 @@ fun OtherScreen(prefs: Prefs) {
         current == "Документы" -> DocsScreen { section = null }
         current == "Bluetooth" -> BluetoothScreen { section = null }
         current == "Отправить приложение" -> ShareAppScreen { section = null }
-        current == "Файлы" -> FilesScreen { section = null }
+        current == "Файлы" -> FilesScreen(onBack = { section = null })
         current == "Рабочее время" -> WorkTimeScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
