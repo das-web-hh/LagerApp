@@ -79,7 +79,7 @@ object Users {
             .generateSecret(javax.crypto.spec.PBEKeySpec(pw.toCharArray(), salt, iter, 256)).encoded
 
     private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
-    private fun unhex(s: String) = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16) }
+    private fun unhex(s: String) = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
     /** Новый хэш пароля: PBKDF2-HMAC-SHA256, случайная соль, формат «p1$повторы$соль$хэш». */
     fun hash(login: String, pw: String): String {
