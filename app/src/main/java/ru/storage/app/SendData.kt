@@ -78,12 +78,16 @@ data class UnloadOp(
     val truck: String = "",
     val trailer: String = "",
     val author: String = "",
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    /** Сломанные палеты (пришли повреждёнными, не евро и не Einweg). Входят в «всего принято». */
+    val broken: Int = 0,
+    /** Возврат: сколько евро-палет отдали обратно. В «всего принято» не входит. */
+    val returned: Int = 0
 ) {
-    val total: Int get() = eur + ewBig + ewNorm + ewSmall
+    val total: Int get() = eur + ewBig + ewNorm + ewSmall + broken
 }
 
-class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "send.db", null, 3) {
+class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "send.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -107,7 +111,8 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
         db.execSQL(
             "CREATE TABLE IF NOT EXISTS unloads (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, eur INTEGER NOT NULL, " +
                 "ew_big INTEGER NOT NULL, ew_norm INTEGER NOT NULL, ew_small INTEGER NOT NULL, truck TEXT NOT NULL, " +
-                "trailer TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+                "trailer TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL, " +
+                "broken INTEGER NOT NULL DEFAULT 0, returned INTEGER NOT NULL DEFAULT 0)"
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_unloads_created ON unloads(created_at)")
     }
@@ -118,7 +123,11 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
             db.execSQL("ALTER TABLE pakets ADD COLUMN reference TEXT NOT NULL DEFAULT ''")
             db.execSQL("ALTER TABLE pakets ADD COLUMN services TEXT NOT NULL DEFAULT ''")
         }
-        if (oldVersion < 3) createUnloads(db)
+        if (oldVersion < 3) createUnloads(db)   // свежая таблица уже с новыми колонками
+        if (oldVersion == 3) {
+            db.execSQL("ALTER TABLE unloads ADD COLUMN broken INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE unloads ADD COLUMN returned INTEGER NOT NULL DEFAULT 0")
+        }
     }
 
     private val pcols = "id, created_at, tracking, product, recipient, street, zip, city, country, sender, " +
@@ -243,7 +252,7 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
 
     // ---------- Выгрузка ----------
 
-    private val ucols = "id, created_at, eur, ew_big, ew_norm, ew_small, truck, trailer, author, updated_at"
+    private val ucols = "id, created_at, eur, ew_big, ew_norm, ew_small, truck, trailer, author, updated_at, broken, returned"
 
     private fun readUnloads(sql: String, args: Array<String>): List<UnloadOp> =
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -252,7 +261,7 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
                 out.add(
                     UnloadOp(
                         c.getString(0), c.getLong(1), c.getInt(2), c.getInt(3), c.getInt(4), c.getInt(5),
-                        c.getString(6), c.getString(7), c.getString(8), c.getLong(9)
+                        c.getString(6), c.getString(7), c.getString(8), c.getLong(9), c.getInt(10), c.getInt(11)
                     )
                 )
             }
@@ -271,6 +280,8 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
             put("trailer", u.trailer)
             put("author", u.author)
             put("updated_at", u.updatedAt)
+            put("broken", u.broken)
+            put("returned", u.returned)
         }
         writableDatabase.insertWithOnConflict("unloads", null, v, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -308,7 +319,7 @@ class SendDb private constructor(context: Context) : SQLiteOpenHelper(context, "
  *  shipments/{id}: createdAt, tracking, product, recipient, street, zip, city, country, sender, weight,
  *                  routing, note, photos[], rawText, status, author, updatedAt, billing, reference, services, deleted
  *  wagen_ops/{id}: createdAt, sent, received, note, author, updatedAt, deleted
- *  unload_ops/{id}: createdAt, eur, ewBig, ewNorm, ewSmall, truck, trailer, author, updatedAt, deleted
+ *  unload_ops/{id}: createdAt, eur, ewBig, ewNorm, ewSmall, broken, returned, truck, trailer, author, updatedAt, deleted
  * Снимки этикеток: Google Диск (имена DH-…), связь — список photos.
  */
 object SendCloud {
@@ -425,7 +436,7 @@ object SendCloud {
         Journal.log(
             "Приём",
             (if (old == null) "Выгрузка: добавлена" else "Выгрузка: изменена") +
-                " · палет ${nu.total}" + (if (nu.truck.isNotBlank()) " · машина ${nu.truck}" else "")
+                " · палет ${nu.total}" + (if (nu.broken > 0) " (сломанных ${nu.broken})" else "") + (if (nu.returned > 0) " · возврат евро ${nu.returned}" else "") + (if (nu.truck.isNotBlank()) " · машина ${nu.truck}" else "")
         )
         fs.collection("unload_ops").document(nu.id).set(
             hashMapOf<String, Any>(
@@ -434,6 +445,8 @@ object SendCloud {
                 "ewBig" to nu.ewBig,
                 "ewNorm" to nu.ewNorm,
                 "ewSmall" to nu.ewSmall,
+                "broken" to nu.broken,
+                "returned" to nu.returned,
                 "truck" to nu.truck,
                 "trailer" to nu.trailer,
                 "author" to nu.author,
@@ -529,6 +542,8 @@ object SendCloud {
                         ewBig = (d.getLong("ewBig") ?: 0L).toInt(),
                         ewNorm = (d.getLong("ewNorm") ?: 0L).toInt(),
                         ewSmall = (d.getLong("ewSmall") ?: 0L).toInt(),
+                        broken = (d.getLong("broken") ?: 0L).toInt(),
+                        returned = (d.getLong("returned") ?: 0L).toInt(),
                         truck = d.getString("truck") ?: "",
                         trailer = d.getString("trailer") ?: "",
                         author = d.getString("author") ?: "",
