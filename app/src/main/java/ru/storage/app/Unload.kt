@@ -43,21 +43,33 @@ private val PALLET_TYPES = listOf(
     "Евро-палеты",
     "Einweg · большие",
     "Einweg · обычные",
-    "Einweg · маленькие"
+    "Einweg · маленькие",
+    "Сломанные"
 )
+
+/** Появляется только при включённом «Возврат палет»: евро-палеты, которые отдаём обратно. */
+private const val RETURN_TYPE = "Возврат · евро"
+
+private fun shortName(n: String) = n
+    .replace("Einweg · большие", "Ew бол.").replace("Einweg · обычные", "Ew обыч.")
+    .replace("Einweg · маленькие", "Ew мал.").replace("Евро-палеты", "Евро")
+    .replace("Сломанные", "Сломан.").replace(RETURN_TYPE, "Возврат")
 
 private fun UnloadOp.countOf(i: Int): Int = when (i) {
     0 -> eur
     1 -> ewBig
     2 -> ewNorm
-    else -> ewSmall
+    3 -> ewSmall
+    else -> broken
 }
 
 private fun ulDay(ms: Long): String = SimpleDateFormat("d MMMM yyyy, EEEE", UL_RU).format(Date(ms))
 
 /** «Евро 12 · Einweg 3/2/0» — краткая строка по типам. */
 private fun UnloadOp.breakdown(): String =
-    "Евро $eur · Einweg бол. $ewBig / обыч. $ewNorm / мал. $ewSmall"
+    "Евро $eur · Einweg бол. $ewBig / обыч. $ewNorm / мал. $ewSmall" +
+        (if (broken > 0) " · сломано $broken" else "") +
+        (if (returned > 0) " · возврат евро $returned" else "")
 
 @Composable
 fun UnloadScreen(onBack: () -> Unit) {
@@ -109,7 +121,9 @@ fun UnloadScreen(onBack: () -> Unit) {
                     }
                     Text(
                         "Евро ${today.sumOf { it.eur }} · Einweg бол. ${today.sumOf { it.ewBig }} / " +
-                            "обыч. ${today.sumOf { it.ewNorm }} / мал. ${today.sumOf { it.ewSmall }}",
+                            "обыч. ${today.sumOf { it.ewNorm }} / мал. ${today.sumOf { it.ewSmall }}" +
+                            (today.sumOf { it.broken }.let { if (it > 0) " · сломано $it" else "" }) +
+                            (today.sumOf { it.returned }.let { if (it > 0) " · возврат евро $it" else "" }),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -159,17 +173,21 @@ fun UnloadAddScreen(onClose: () -> Unit) {
     var c1 by rememberSaveable { mutableIntStateOf(0) }
     var c2 by rememberSaveable { mutableIntStateOf(0) }
     var c3 by rememberSaveable { mutableIntStateOf(0) }
-    fun getC(i: Int): Int = when (i) { 0 -> c0; 1 -> c1; 2 -> c2; else -> c3 }
-    fun setC(i: Int, v: Int) { when (i) { 0 -> c0 = v; 1 -> c1 = v; 2 -> c2 = v; else -> c3 = v } }
+    var c4 by rememberSaveable { mutableIntStateOf(0) }   // сломанные
+    var c5 by rememberSaveable { mutableIntStateOf(0) }   // возврат евро-палет
+    var returnMode by rememberSaveable { mutableStateOf(false) }
+    fun getC(i: Int): Int = when (i) { 0 -> c0; 1 -> c1; 2 -> c2; 3 -> c3; 4 -> c4; else -> c5 }
+    fun setC(i: Int, v: Int) { when (i) { 0 -> c0 = v; 1 -> c1 = v; 2 -> c2 = v; 3 -> c3 = v; 4 -> c4 = v; else -> c5 = v } }
+    val types = if (returnMode) PALLET_TYPES + RETURN_TYPE else PALLET_TYPES
     var cur by rememberSaveable { mutableIntStateOf(0) }
     var truck by rememberSaveable { mutableStateOf("") }
     var trailer by rememberSaveable { mutableStateOf("") }
     var picker by remember { mutableStateOf(false) }
-    val keys = remember { List(4) { Any() } }
+    val keys = remember { List(6) { Any() } }
     // пока считаем, экран не выключается (20 минут; каждое нажатие начинает отсчёт заново)
-    KeepScreenOn(20, listOf(c0, c1, c2, c3, cur, truck, trailer, picker))
+    KeepScreenOn(20, listOf(c0, c1, c2, c3, c4, c5, returnMode, cur, truck, trailer, picker))
 
-    val total = c0 + c1 + c2 + c3
+    val total = c0 + c1 + c2 + c3 + c4
     var dragSum by remember { mutableFloatStateOf(0f) }
 
     Box(Modifier.fillMaxSize()) {
@@ -178,7 +196,7 @@ fun UnloadAddScreen(onClose: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             // выбор типа: кнопки или свайп справа налево по счётчику
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PALLET_TYPES.forEachIndexed { i, name ->
+                types.forEachIndexed { i, name ->
                     val sel = i == cur
                     Surface(
                         shape = RoundedCornerShape(14.dp),
@@ -188,8 +206,8 @@ fun UnloadAddScreen(onClose: () -> Unit) {
                     ) {
                         Column(Modifier.padding(vertical = 6.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                name.replace("Einweg · ", "Ew ").replace("Евро-палеты", "Евро"),
-                                fontSize = 12.sp, maxLines = 1
+                                shortName(name),
+                                fontSize = 11.sp, maxLines = 1
                             )
                             Text(getC(i).toString(), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         }
@@ -198,17 +216,34 @@ fun UnloadAddScreen(onClose: () -> Unit) {
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "Тип палет: ${PALLET_TYPES[cur]}. Смахните счётчик справа налево — следующий тип.",
+                "Тип палет: ${types[cur]}. Смахните счётчик справа налево — следующий тип.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    returnMode = !returnMode
+                    if (!returnMode) { c5 = 0; if (cur >= PALLET_TYPES.size) cur = 0 } else cur = PALLET_TYPES.size
+                },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Switch(
+                    checked = returnMode,
+                    onCheckedChange = {
+                        returnMode = it
+                        if (!it) { c5 = 0; if (cur >= PALLET_TYPES.size) cur = 0 } else cur = PALLET_TYPES.size
+                    }
+                )
+                Spacer(Modifier.width(10.dp))
+                Text("Возврат палет — отдаём евро-палеты обратно", style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(4.dp))
             Box(
                 Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onDragStart = { dragSum = 0f },
                         onDragEnd = {
-                            if (dragSum < -90f) cur = (cur + 1) % PALLET_TYPES.size
-                            else if (dragSum > 90f) cur = (cur + PALLET_TYPES.size - 1) % PALLET_TYPES.size
+                            if (dragSum < -90f) cur = (cur + 1) % types.size
+                            else if (dragSum > 90f) cur = (cur + types.size - 1) % types.size
                             dragSum = 0f
                         },
                         onDragCancel = { dragSum = 0f },
@@ -217,7 +252,7 @@ fun UnloadAddScreen(onClose: () -> Unit) {
                 }
             ) {
                 BigCounter(
-                    PALLET_TYPES[cur], getC(cur), keys[cur], Modifier.fillMaxSize(),
+                    types[cur], getC(cur), keys[cur], Modifier.fillMaxSize(),
                     { setC(cur, it) }
                 ) { picker = true }
             }
@@ -242,23 +277,29 @@ fun UnloadAddScreen(onClose: () -> Unit) {
                     val now = System.currentTimeMillis()
                     val op = UnloadOp(
                         id = newSendId(), createdAt = now,
-                        eur = c0, ewBig = c1, ewNorm = c2, ewSmall = c3,
+                        eur = c0, ewBig = c1, ewNorm = c2, ewSmall = c3, broken = c4, returned = c5,
                         truck = truck.trim(), trailer = trailer.trim(),
                         author = Session.displayName, updatedAt = now
                     )
                     scope.launch(Dispatchers.IO) { SendCloud.saveUnload(sdb, op) }
                     onClose()
                 },
-                enabled = total > 0,
+                enabled = total > 0 || c5 > 0,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
-            ) { Text("Сохранить · палет $total", style = MaterialTheme.typography.titleMedium) }
+            ) {
+                Text(
+                    (if (total > 0) "Сохранить · палет $total" else "Сохранить") +
+                        (if (c5 > 0) " · возврат $c5" else ""),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
         }
         CountOverlay()
     }
 
     if (picker) {
         CountPickerDialog(
-            title = PALLET_TYPES[cur],
+            title = types[cur],
             initial = getC(cur),
             onApply = { v ->
                 setC(cur, v)
@@ -294,7 +335,8 @@ fun UnloadDetailScreen(id: String, onClose: () -> Unit) {
                 InfoLine("Номер машины", cur.truck)
                 InfoLine("Номер прицепа", cur.trailer)
                 PALLET_TYPES.forEachIndexed { i, name -> InfoLine(name, cur.countOf(i).toString()) }
-                InfoLine("Всего палет", cur.total.toString())
+                InfoLine("Всего палет (с поломанными)", cur.total.toString())
+                if (cur.returned > 0) InfoLine("Возврат · отдали евро-палет", cur.returned.toString())
                 InfoLine("Кто сохранил", cur.author)
                 InfoLine("Код записи", cur.id)
             }
