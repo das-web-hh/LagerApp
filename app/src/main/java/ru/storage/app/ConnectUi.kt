@@ -222,7 +222,7 @@ fun ConnectionSettings(onBack: () -> Unit) {
                         msg = ""
                         ConnCfg.saveFirebase(ctx, if (fbAny) fb else null)
                         ConnCfg.saveMail(ctx, if (mailAny) MailCfg(mPublic, mService, mTemplate, mMessage, mPrivate) else null)
-                        if (Session.user?.local != true) Journal.log("Система", "Изменены подключения (Firebase / EmailJS)")
+                        Journal.log("Система", "Изменены подключения (Firebase / EmailJS)")
                         restart = true
                     }
                 }
@@ -250,54 +250,5 @@ fun ConnectionSettings(onBack: () -> Unit) {
             confirmButton = { Button(onClick = { restart = false; restartApp(ctx) }) { Text("Перезапустить") } },
             dismissButton = { TextButton(onClick = { restart = false }) { Text("Позже") } }
         )
-    }
-}
-
-/**
- * Окно локального входа admin/admin: пока подключение не настроено, доступна только настройка.
- * Здесь загружают файл настроек (после него логин и пароль станут прежними) или задают подключения вручную.
- */
-@Composable
-fun SetupProfileScreen(prefs: Prefs, onLogout: () -> Unit) {
-    var section by rememberSaveable { mutableStateOf<String?>(null) }
-    when (section) {
-        "Подключения" -> ConnectionSettings { section = null }
-        "Google Диск" -> DriveSettings(prefs) { section = null }
-        "Распознавание документов" -> AiSettings { section = null }
-        else -> {
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("Настройка подключения", style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    "Вы вошли как admin/admin: подключение к базе ещё не настроено. Загрузите файл настроек — " +
-                        "после этого логин и пароль станут прежними — или задайте подключения вручную.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(Modifier.height(4.dp))
-                SettingsFileBlock(allowSave = false)
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                listOf(
-                    "Подключения" to "Firebase и EmailJS вручную",
-                    "Google Диск" to "Адрес скрипта, папка, токен",
-                    "Распознавание документов" to "API-ключи ИИ"
-                ).forEach { (title, sub) ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { section = title }.padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(title, style = MaterialTheme.typography.titleMedium)
-                            Text(sub, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text("›", style = MaterialTheme.typography.headlineSmall)
-                    }
-                    HorizontalDivider()
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
-            }
-        }
     }
 }

@@ -14,12 +14,33 @@
  * only matching file metadata and Drive URLs.
  */
 
-// Необязательная защита: если задать строку, все запросы должны содержать token.
-// Оставьте '' — тогда сайт и приложение работают без токена.
-var TOKEN = '';
+// Защита секретным токеном. Токен НЕ хранится в коде: задайте его в
+// Project Settings (шестерёнка) → Script properties → Add script property:
+//   имя:  TOKEN
+//   знач: длинная случайная строка (32+ символа, например из генератора паролей)
+// Тот же токен вставьте в приложение (Профиль → Google Диск → Токен) и в настройки сайта.
+// Пока свойство TOKEN не задано, скрипт отклоняет ВСЕ запросы — так закрыто по умолчанию.
+
+function getToken_() {
+  return String(PropertiesService.getScriptProperties().getProperty('TOKEN') || '');
+}
+
+// Сравнение без раннего выхода: время ответа не выдаёт, сколько символов угадано.
+function safeEqual_(a, b) {
+  a = String(a || '');
+  b = String(b || '');
+  var diff = a.length ^ b.length;
+  var n = Math.max(a.length, b.length);
+  for (var i = 0; i < n; i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return diff === 0;
+}
 
 function checkToken_(value) {
-  if (TOKEN && String(value || '') !== TOKEN) throw new Error('Неверный токен.');
+  var token = getToken_();
+  if (!token) throw new Error('На сервере не задан TOKEN (Script properties).');
+  if (!safeEqual_(value, token)) throw new Error('Неверный токен.');
 }
 
 function doGet(e) {

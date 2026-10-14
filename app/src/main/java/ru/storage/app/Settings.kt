@@ -48,7 +48,6 @@ object CloudSettings {
 
     /** Вызывать после любого изменения настроек: ставит время и отправляет в Firebase (в очередь, работает и без сети). */
     fun save(ctx: Context, prefs: Prefs) {
-        if (Session.user?.local == true) return
         val now = System.currentTimeMillis()
         Journal.log("Система", "Изменены настройки")
         sp(ctx).edit().putLong("updated", now).apply()
@@ -75,7 +74,6 @@ object CloudSettings {
 
     /** Сверка с Firebase (1 чтение). Возвращает true, если настройки на телефоне обновились. */
     suspend fun pull(ctx: Context, prefs: Prefs): Boolean {
-        if (Session.user?.local == true) return false
         // Диск у сотрудников такой же, как у администратора: берём его настройки (сами сотрудники их не меняют)
         if (!Session.isAdmin) {
             try {

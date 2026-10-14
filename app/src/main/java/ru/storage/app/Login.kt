@@ -49,7 +49,7 @@ private fun Appear(delayMs: Int, modifier: Modifier = Modifier, content: @Compos
     }) { content() }
 }
 
-private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, SETUP, PIN }
+private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, PIN }
 
 @Composable
 private fun Field(
@@ -123,7 +123,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
 
     fun finish(u: AppUser) {
         focus.clearFocus() // клавиатура закрывается, дальше — анимация входа
-        if (!u.local) ConnCfg.markConnected(ctx)
+        ConnCfg.markConnected(ctx)
         onSuccess(u)
     }
 
@@ -146,7 +146,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                         fail(r.text)
                     }
                 }
-                is AuthResult.Setup, is AuthResult.Local -> {}
+                is AuthResult.Notice -> { pin = ""; go(Mode.LOGIN); info = r.text }
             }
         }
     }
@@ -179,13 +179,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     busy = false
                     when (r) {
                         is AuthResult.Ok -> finish(r.user)
-                        is AuthResult.Setup -> {
-                            // верный одноразовый вход: просим задать настоящие email и пароль администратора
-                            email = Users.ADMIN_EMAIL
-                            go(Mode.SETUP)
-                            info = "Вход admin/admin сработал один раз. Задайте свой Email и пароль — после этого admin/admin будет удалён."
-                        }
-                        is AuthResult.Local -> finish(r.user)
+                        is AuthResult.Notice -> info = r.text
                         is AuthResult.Fail -> fail(r.text)
                     }
                 }
@@ -196,19 +190,6 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     is PinResult.Ok -> quickSignIn(r.login, r.password)
                     is PinResult.Wrong -> { pin = ""; fail("Неверный PIN-код. Осталось попыток: ${r.left}") }
                     is PinResult.Locked -> { go(Mode.LOGIN); fail("PIN-код сброшен из-за ошибок — войдите паролем") }
-                }
-            }
-            Mode.SETUP -> {
-                if (password != password2) { fail("Пароли не совпадают"); return }
-                busy = true
-                scope.launch {
-                    val r = Users.setupAdmin(email, password)
-                    busy = false
-                    when (r) {
-                        is AuthResult.Ok -> finish(r.user)
-                        is AuthResult.Fail -> fail(r.text)
-                        is AuthResult.Setup, is AuthResult.Local -> {}
-                    }
                 }
             }
             Mode.REG_EMAIL -> {
@@ -239,7 +220,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     when (r) {
                         is AuthResult.Ok -> finish(r.user)
                         is AuthResult.Fail -> fail(r.text)
-                        is AuthResult.Setup, is AuthResult.Local -> {}
+                        is AuthResult.Notice -> { go(Mode.LOGIN); info = r.text }
                     }
                 }
             }
@@ -294,7 +275,6 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
             val title = when (mode) {
                 Mode.LOGIN -> ""
                 Mode.PIN -> "Вход по PIN-коду"
-                Mode.SETUP -> "Настройка администратора"
                 Mode.REG_EMAIL -> "Регистрация — шаг 1 из 3"
                 Mode.REG_CODE -> "Регистрация — шаг 2 из 3"
                 Mode.REG_DATA -> "Регистрация — шаг 3 из 3"
@@ -330,13 +310,6 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                             "PIN-код (4 цифры)", password = true, keyboard = KeyboardType.NumberPassword,
                             ime = ImeAction.Done, focus = focus, onDone = { submit() }
                         )
-                    }
-                    Mode.SETUP -> {
-                        Field(email, { email = it; error = null }, "Email администратора", keyboard = KeyboardType.Email, focus = focus)
-                        Spacer(Modifier.height(12.dp))
-                        Field(password, { password = it; error = null }, "Новый пароль", password = true, show = show, onToggle = { show = !show }, focus = focus)
-                        Spacer(Modifier.height(12.dp))
-                        Field(password2, { password2 = it; error = null }, "Повторите пароль", password = true, show = show, ime = ImeAction.Done, focus = focus, onDone = { submit() })
                     }
                     Mode.REG_EMAIL -> {
                         Field(email, { email = it; error = null }, "Email", keyboard = KeyboardType.Email, ime = ImeAction.Done, focus = focus, onDone = { submit() })
@@ -385,7 +358,6 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     else Text(
                         when (mode) {
                             Mode.LOGIN, Mode.PIN -> "Войти"
-                            Mode.SETUP -> "Сохранить и войти"
                             Mode.REG_EMAIL -> "Получить код"
                             Mode.REG_CODE -> "Подтвердить код"
                             Mode.REG_DATA -> "Завершить регистрацию"
@@ -433,7 +405,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                             TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) { Text("Уже есть аккаунт? Войти") }
                         }
                         else -> TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (mode == Mode.SETUP) "Назад" else "Уже есть аккаунт? Войти")
+                            Text("Уже есть аккаунт? Войти")
                         }
                     }
                 }

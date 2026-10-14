@@ -71,6 +71,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation(platform("com.google.firebase:firebase-bom:33.4.0"))
     implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-auth")
     implementation("org.osmdroid:osmdroid-android:6.1.18")
     implementation("com.google.guava:guava:33.3.1-android")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

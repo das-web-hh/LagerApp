@@ -1,4 +1,4 @@
-name: Build APK
+name: Build signed release APK
 
 on:
   push:
@@ -16,18 +16,43 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
+          gradle-version: '8.9'
+
+      # Ключ подписи хранится только в GitHub Secrets (Settings → Secrets and variables → Actions):
+      #   LAGER_KEYSTORE_BASE64  — keystore, закодированный в base64
+      #   LAGER_STORE_PASSWORD   — пароль хранилища
+      #   LAGER_KEY_ALIAS        — алиас ключа
+      #   LAGER_KEY_PASSWORD     — пароль ключа
+      - name: Decode keystore from secret
+        env:
+          LAGER_KEYSTORE_BASE64: ${{ secrets.LAGER_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$LAGER_KEYSTORE_BASE64" ]; then
+            echo "::error::Секрет LAGER_KEYSTORE_BASE64 не задан"
+            exit 1
+          fi
+          echo "$LAGER_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lager.jks"
+          echo "LAGER_KEYSTORE_FILE=$RUNNER_TEMP/lager.jks" >> "$GITHUB_ENV"
 
       - name: Build signed release APK
+        env:
+          LAGER_STORE_PASSWORD: ${{ secrets.LAGER_STORE_PASSWORD }}
+          LAGER_KEY_ALIAS: ${{ secrets.LAGER_KEY_ALIAS }}
+          LAGER_KEY_PASSWORD: ${{ secrets.LAGER_KEY_PASSWORD }}
         run: gradle assembleRelease --stacktrace
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/lager.jks"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LagerApp
+          name: LagerApp-release
           path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

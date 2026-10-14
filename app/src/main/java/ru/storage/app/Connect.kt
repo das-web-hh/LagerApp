@@ -142,9 +142,9 @@ object ConnCfg {
         e.apply()
     }
 
-    // ---------- вход admin/admin без связи ----------
+    // ---------- признак настоящего входа на этом телефоне ----------
 
-    /** Хотя бы один раз на этом телефоне входили по-настоящему: после этого admin/admin без связи не пускает. */
+    /** Хотя бы один раз на этом телефоне входили по-настоящему. */
     fun markConnected(ctx: Context) = sp(ctx).edit().putBoolean("ok", true).apply()
 
     fun everConnected(ctx: Context): Boolean = sp(ctx).getBoolean("ok", false)
@@ -157,7 +157,7 @@ object ConnCfg {
     /** Все настройки подключения одним JSON-файлом. Внутри секреты (ключи, токен): хранить в надёжном месте. */
     fun exportJson(ctx: Context): String {
         val o = JSONObject().put("type", FILE_TYPE).put("version", 1).put("savedAt", System.currentTimeMillis())
-        val adminLogin = Session.user?.takeIf { it.isAdmin && !it.local }?.login ?: savedAdminLogin(ctx)
+        val adminLogin = Session.user?.takeIf { it.isAdmin }?.login ?: savedAdminLogin(ctx)
         if (adminLogin.isNotBlank()) o.put("adminLogin", adminLogin)
         (firebaseOverride(ctx) ?: firebaseActive())?.let {
             o.put(

@@ -2,62 +2,97 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Вход в приложении сделан через коллекцию users (логин + хэш пароля), а не через Firebase Auth,
-    // поэтому правила остаются открытыми. Закрыть их можно только после перехода на Firebase Auth.
+    // ───────────── Вспомогательные функции ─────────────
+    // Работник — это Firebase-аккаунт с ПОДТВЕРЖДЁННЫМ Email и документом users/{email}.
+    // Подтверждение Email обязательно: без него любой мог бы зарегистрироваться под чужим адресом.
 
-    // Настройки приложения: config/admin = администратор настроен, одноразовый вход admin/admin удалён
-    match /config/{id} {
-      allow read, write: if true;
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function me() {
+      return request.auth.token.email.lower();
+    }
+    function meRef() {
+      return /databases/$(database)/documents/users/$(me());
+    }
+    // «активный»: профиль есть, подтверждён администратором, не заблокирован
+    function isActive() {
+      return signedIn()
+        && exists(meRef())
+        && get(meRef()).data.status == 'active'
+        && get(meRef()).data.get('blocked', false) != true;
+    }
+    function isAdmin() {
+      return isActive() && get(meRef()).data.role == 'admin';
     }
 
-    // Работники: логин, имя, должность, роль, статус (pending/active), хэш пароля
+    // ───────────── Работники ─────────────
     match /users/{id} {
-      allow read, write: if true;
+      // ПЕРЕХОДНЫЙ ПЕРИОД: пока кто-то из работников ещё не входил новой версией приложения, старый хэш пароля
+      // читается один раз для переноса аккаунта в Firebase Auth. Когда все вошли хотя бы раз
+      // (в документах users не осталось поля passHash) — УДАЛИТЕ следующую строку и опубликуйте правила заново.
+      allow get: if true;
+
+      allow get: if signedIn() && (id == me() || isActive());
+      allow list: if isActive();
+
+      // регистрация: только свой документ, всегда worker / pending, без должности
+      allow create: if signedIn() && id == me()
+        && request.resource.data.role == 'worker'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.get('position', '') == ''
+        && request.resource.data.get('blocked', false) == false;
+
+      // администратор меняет что угодно; работник — только своё и не роль/статус/должность/блокировку
+      allow update: if isAdmin()
+        || (signedIn() && id == me()
+            && !request.resource.data.diff(resource.data).affectedKeys()
+                 .hasAny(['role', 'status', 'blocked', 'position', 'login', 'email']));
+      allow delete: if isAdmin();
     }
 
-    // Задачи работникам (в приложении / текстом) и задачи подтверждения новых работников
-    match /tasks/{id} {
-      allow read, write: if true;
+    // ───────────── Настройки ─────────────
+    match /config/{id} {
+      // email администратора нужен новому работнику, чтобы создать задачу «подтвердить»
+      allow get: if id == 'admin' && signedIn();
+      allow read: if isActive();
+      allow write: if isAdmin() || (id == 'worktime' && isActive());
     }
 
-    // Чат между работниками
-    match /chat/{id} {
-      allow read, write: if true;
-    }
-
-    // Каталог товаров
-    match /products/{id} {
-      allow read, write: if true;
-    }
-
-    // Приёмки (история)
-    match /receipts/{id} {
-      allow read, write: if true;
-    }
-
-    // Шаблоны накладных поставщиков
-    match /invoice_profiles/{id} {
-      allow read, write: if true;
-    }
-
-    // Посылки Post paket (данные с этикеток DHL)
-    match /shipments/{id} {
-      allow read, write: if true;
-    }
-
-    // Операции DHL Postwagen
-    match /wagen_ops/{id} {
-      allow read, write: if true;
-    }
-
-    // Выгрузка: палеты по типам, номер машины и прицепа
-    match /unload_ops/{id} {
-      allow read, write: if true;
-    }
-
-    // Настройки аккаунтов (документ = логин)
+    // Настройки аккаунта (документ = логин; у администратора — «admin»). Читать можно у администратора: у всех те же настройки Диска.
     match /settings/{id} {
-      allow read, write: if true;
+      allow read: if isActive() && (id == me() || id == 'admin');
+      allow write: if isActive() && (id == me() || (id == 'admin' && isAdmin()));
+    }
+
+    // ───────────── Задачи и чат ─────────────
+    match /tasks/{id} {
+      allow read: if isActive();
+      allow create: if isAdmin()
+        || (signedIn() && id == ('approve_' + me()) && request.resource.data.type == 'approve');
+      allow update: if isActive();
+      allow delete: if isAdmin();
+    }
+    match /chat/{id} {
+      allow read, write: if isActive();
+    }
+
+    // ───────────── Данные склада ─────────────
+    match /products/{id}         { allow read, write: if isActive(); }
+    match /receipts/{id}         { allow read, write: if isActive(); }
+    match /shipments/{id}        { allow read, write: if isActive(); }
+    match /wagen_ops/{id}        { allow read, write: if isActive(); }
+    match /unload_ops/{id}       { allow read, write: if isActive(); }
+
+    // Шаблоны накладных: создавать может любой активный (автораспознавание), править и удалять — администратор
+    match /invoice_profiles/{id} {
+      allow read, create: if isActive();
+      allow update, delete: if isAdmin();
+    }
+
+    // всё остальное закрыто
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

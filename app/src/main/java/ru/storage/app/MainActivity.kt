@@ -104,15 +104,15 @@ fun AppRoot() {
     val sessionSp = remember { context.getSharedPreferences("session", Context.MODE_PRIVATE) }
     fun loadUser(): AppUser? {
         val l = sessionSp.getString("login", "") ?: ""
-        // старая сессия без статуса (временный вход admin/admin) больше не действует
         if (l.isEmpty() || !sessionSp.contains("status")) return null
+        // сессия без аккаунта Firebase Auth (вход старой версией) больше не действует — нужен новый вход
+        if (com.google.firebase.auth.FirebaseAuth.getInstance().currentUser == null) return null
         // сессия администратора со старой схемой входа (зашитый логин) больше не действует — нужен вход по Email
         if (sessionSp.getString("role", "") == "admin" && sessionSp.getInt("v", 0) < 2) return null
         return AppUser(
             l, sessionSp.getString("name", "") ?: "", sessionSp.getString("position", "") ?: "",
             sessionSp.getString("role", "worker") ?: "worker", sessionSp.getString("status", "pending") ?: "pending",
-            sess = sessionSp.getLong("sess", 0L),
-            local = sessionSp.getBoolean("local", false)
+            sess = sessionSp.getLong("sess", 0L)
         )
     }
     var user by remember { mutableStateOf(loadUser()) }
@@ -129,9 +129,10 @@ fun AppRoot() {
         val e = sessionSp.edit()
         if (u == null) {
             e.clear()
+            try { com.google.firebase.auth.FirebaseAuth.getInstance().signOut() } catch (ex: Exception) { }
         } else {
             e.putString("login", u.login).putString("name", u.name).putString("position", u.position)
-                .putString("role", u.role).putString("status", u.status).putInt("v", 2).putLong("sess", u.sess).putBoolean("local", u.local)
+                .putString("role", u.role).putString("status", u.status).putInt("v", 2).putLong("sess", u.sess)
         }
         e.apply()
         applyUser(u)
@@ -164,7 +165,7 @@ fun AppRoot() {
 
     // чат, задачи, уведомления: подписки работают, пока пользователь вошёл
     DisposableEffect(current?.login, loggedIn) {
-        if (loggedIn && current != null && !current.local) Live.start(context, current)
+        if (loggedIn && current != null) Live.start(context, current)
         onDispose { if (loggedIn) Live.stop() }
     }
     // изменения в профиле (должность) и удаление аккаунта подхватываем из Firebase
@@ -204,16 +205,11 @@ fun AppRoot() {
     if (loggedIn) {
         val receiver = "${profile.firstName} ${profile.lastName}".trim()
         AutoReceiveHolder.receiver = receiver
-        if (current?.local == true) {
-            // вход admin/admin без настроенного подключения: только загрузка настроек и ручная настройка
-            SetupProfileScreen(prefs = prefs, onLogout = { saveUser(null) })
-        } else {
-            MainScreen(prefs = prefs, profile = profile, onLogout = {
-                Journal.log("Система", "Выход из аккаунта")
-                saveUser(null)
-            })
-            Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
-        }
+        MainScreen(prefs = prefs, profile = profile, onLogout = {
+            Journal.log("Система", "Выход из аккаунта")
+            saveUser(null)
+        })
+        Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
     } else if (current != null) {
         // зарегистрировался, но админ ещё не назначил должность и не подтвердил
         PendingScreen(
@@ -236,7 +232,7 @@ fun AppRoot() {
             onCovered = {
                 pendingUser?.let {
                     saveUser(it)
-                    if (!it.local) Journal.log("Система", "Вход в аккаунт")
+                    Journal.log("Система", "Вход в аккаунт")
                 }
             },
             onFinished = { splash = false }
