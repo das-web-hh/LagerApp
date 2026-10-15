@@ -323,6 +323,8 @@ fun CountWheelList(
     val memo = remember { arrayOfNulls<ItemRow>(1) } // строка, стоявшая посередине (чтобы не терять место)
     val focusManager = LocalFocusManager.current
     val appCtx = LocalContext.current
+    // пока считаем товар, экран не выключается (время — в Настройки → Экран; каждое нажатие/ввод начинает отсчёт заново)
+    KeepScreenOn(listOf(rows.map { it.fact + "|" + it.defect }, query, picking, editing))
     val density = LocalDensity.current
     val bigRows = nameMode && !plain
     val rowH = if (bigRows) ROW_H_BIG else ROW_H

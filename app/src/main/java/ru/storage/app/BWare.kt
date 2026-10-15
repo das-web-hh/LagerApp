@@ -122,7 +122,7 @@ internal fun bwDetailsHtml(row: ItemRow, groups: List<Pair<String, List<String>>
 }
 
 internal const val BW_CSS =
-    "body{font-family:sans-serif;font-size:12px;color:#111}" +
+    "@page{margin:12mm}body{font-family:sans-serif;font-size:12px;color:#111;margin:0;padding:8mm 10mm}" +
         "h1{font-size:20px;margin:0 0 8px}h2{font-size:15px;margin:16px 0 6px}" +
         "table{border-collapse:collapse;width:100%}" +
         "th,td{border:1px solid #888;padding:4px 5px;text-align:left;vertical-align:top}" +
@@ -131,6 +131,9 @@ internal const val BW_CSS =
         ".sign{margin-top:36px}.sign td{border:none;padding:18px 10px 0 0;width:50%}" +
         ".line{border-top:1px solid #111;padding-top:2px;font-size:11px;color:#444}" +
         Signature.CSS
+
+/** Надпись в документе: водитель подписал накладную (всегда по-немецки, рукописным шрифтом). */
+internal const val DRIVER_SIGNED_DE = "Der Fahrer hat den Lieferschein unterschrieben"
 
 /** HTML документа приёма для предпросмотра и печати. Язык(и) и автоподпись — по настройкам печати. */
 private fun bwareHtml(receiver: String, now: Long): String {
@@ -156,7 +159,8 @@ private fun bwareHtml(receiver: String, now: Long): String {
     }
     sb.append("<tr><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
     sb.append("<table class='sign'><tr><td>${Signature.cell("sig_received", receiver, now)}</td>")
-    sb.append("<td>${Signature.cell("sig_driver", "", now, auto = false)}</td></tr></table>")
+    // вместо места для подписи водителя — рукописная надпись по-немецки: водитель расписался на Lieferschein
+    sb.append("<td><div style='min-height:90px;display:flex;align-items:flex-end'>${Signature.handwritten(DRIVER_SIGNED_DE)}</div><div class='line'></div></td></tr></table>")
     sb.append("</body></html>")
     return sb.toString()
 }

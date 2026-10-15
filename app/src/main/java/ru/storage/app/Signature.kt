@@ -73,8 +73,43 @@ object Signature {
             "<g transform='skewX(-8)'>" + sb + "</g></g></svg>"
     }
 
+
+    /**
+     * Рукописная надпись (любой текст) тем же почерком, что и подпись. Длинный текст переносится по словам;
+     * ширина масштабируется под колонку (width:100%). Пустой текст — пустая строка.
+     */
+    fun handwritten(text: String, maxLineUnits: Double = 560.0): String {
+        val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (words.isEmpty()) return ""
+        val lines = ArrayList<String>()
+        var cur = ""
+        for (w in words) {
+            val cand = if (cur.isEmpty()) w else "$cur $w"
+            val cw = cand.sumOf { c -> if (c == ' ') 16.0 else (glyph(c)?.w ?: 0.0) + 7.0 }
+            if (cur.isNotEmpty() && cw > maxLineUnits) {
+                lines.add(cur)
+                cur = w
+            } else cur = cand
+        }
+        if (cur.isNotEmpty()) lines.add(cur)
+        val lineH = 82.0
+        val sb = StringBuilder()
+        var maxX = 0.0
+        lines.forEachIndexed { li, line ->
+            val g = StringBuilder()
+            val x = strokes(line, 12.0, hash(text) + li * 13, g)
+            if (x > maxX) maxX = x
+            sb.append("<g transform='translate(0 ").append(f1(li * lineH)).append(")'>").append(g).append("</g>")
+        }
+        val w = (maxX + 12.0).toInt()
+        val h = (lines.size * lineH + 30.0).toInt()
+        return "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 14 $w $h' width='${w * 54 / 100}' class='sigsvg sigtext'>" +
+            "<g fill='none' stroke='#1A1A1A' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'>" +
+            "<g transform='skewX(-8)'>" + sb + "</g></g></svg>"
+    }
+
     const val CSS =
-        ".sigsvg{display:block;max-width:100%}" +
+        ".sigsvg{display:block;max-width:100%;height:auto}.sigtext{width:100%;max-width:340px}" +
             ".sigbox{margin-top:26px;display:inline-block;max-width:100%}" +
             ".sigcap{font-size:11px;color:#444;padding-top:2px}" +
             ".sigspace{height:90px;display:flex;align-items:flex-end}" +

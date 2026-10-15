@@ -184,8 +184,10 @@ fun UnloadAddScreen(onClose: () -> Unit) {
     var trailer by rememberSaveable { mutableStateOf("") }
     var picker by remember { mutableStateOf(false) }
     val keys = remember { List(6) { Any() } }
-    // пока считаем, экран не выключается (20 минут; каждое нажатие начинает отсчёт заново)
-    KeepScreenOn(20, listOf(c0, c1, c2, c3, c4, c5, returnMode, cur, truck, trailer, picker))
+    // окно «Приём B-Ware» поверх счёта палет: испорченный товар регистрируется сразу, счёт не теряется
+    var bwOpen by rememberSaveable { mutableStateOf(false) }
+    // пока считаем, экран не выключается (время — в Настройки → Экран; каждое нажатие начинает отсчёт заново)
+    KeepScreenOn(listOf(c0, c1, c2, c3, c4, c5, returnMode, cur, truck, trailer, picker, bwOpen))
 
     val total = c0 + c1 + c2 + c3 + c4
     var dragSum by remember { mutableFloatStateOf(0f) }
@@ -257,6 +259,20 @@ fun UnloadAddScreen(onClose: () -> Unit) {
                 ) { picker = true }
             }
             Spacer(Modifier.height(10.dp))
+            val bwCount = BWareHolder.rows.size
+            OutlinedButton(
+                onClick = {
+                    // номера машины и прицепа переносим в приём B-Ware, если там они ещё не заполнены
+                    if (BWareHolder.truck.isBlank()) BWareHolder.truck = truck.trim()
+                    if (BWareHolder.trailer.isBlank()) BWareHolder.trailer = trailer.trim()
+                    BWareHolder.step = 0
+                    bwOpen = true
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                Text(if (bwCount > 0) "⚠ Испорченный товар (B-Ware) · $bwCount поз." else "⚠ Испорченный товар (B-Ware)")
+            }
+            Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = truck, onValueChange = { truck = it.take(20) }, singleLine = true,
@@ -295,6 +311,11 @@ fun UnloadAddScreen(onClose: () -> Unit) {
             }
         }
         CountOverlay()
+        if (bwOpen) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                BWareReceiveScreen(AutoReceiveHolder.receiver.ifBlank { Session.displayName }) { bwOpen = false }
+            }
+        }
     }
 
     if (picker) {

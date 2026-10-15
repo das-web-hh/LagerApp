@@ -755,8 +755,8 @@ fun WagenAddScreen(onClose: () -> Unit) {
     var picker by remember { mutableStateOf<String?>(null) }
     val keySent = remember { Any() }
     val keyRecv = remember { Any() }
-    // пока считаем, экран не выключается (20 минут; каждое нажатие начинает отсчёт заново)
-    KeepScreenOn(20, listOf(sent, received, note, picker))
+    // пока считаем, экран не выключается (время — в Настройки → Экран; каждое нажатие начинает отсчёт заново)
+    KeepScreenOn(listOf(sent, received, note, picker))
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {

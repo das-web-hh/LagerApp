@@ -61,6 +61,8 @@ object CloudSettings {
             "theme" to Ui.mode,
             "printLangs" to PrintCfg.codes(),
             "printSign" to PrintCfg.sign,
+            "screenOn" to ScreenCfg.enabled,
+            "screenMinutes" to ScreenCfg.minutes,
             "updatedAt" to ts
         )
         // Google Диск настраивает только администратор; у остальных этих полей в аккаунте нет
@@ -106,6 +108,7 @@ object CloudSettings {
                 ?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
             snap.getString("theme")?.let { Ui.set(ctx, it) }
             PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"))
+            ScreenCfg.applyCloud(ctx, snap.getBoolean("screenOn"), snap.getLong("screenMinutes"))
             sp(ctx).edit().putLong("updated", remote).apply()
             return true
         }
@@ -120,6 +123,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
     when (section) {
         "Оформление" -> ThemeSettings(prefs) { section = null }
         "Печать" -> PrintSettings(prefs) { section = null }
+        "Экран" -> ScreenSettings(prefs) { section = null }
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
         "Подключения" -> ConnectionSettings { section = null }
@@ -139,6 +143,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
     val sections = listOf(
         "Оформление" to "Светлая, тёмная или как в системе",
         "Печать" to "Языки документа (немецкий, русский, английский), автоподпись",
+        "Экран" to "Не выключать экран при подсчёте: вкл/выкл и сколько минут",
         "Сканер" to "Камера, типы штрих-кодов",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
@@ -481,6 +486,82 @@ private fun ThemeSettings(prefs: Prefs, onBack: () -> Unit) {
                 Text(label, style = MaterialTheme.typography.bodyLarge)
             }
         }
+    }
+}
+
+@Composable
+private fun ScreenSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    BackHandler(onBack = onBack)
+
+    LaunchedEffect(Unit) {
+        try {
+            CloudSettings.pull(ctx, prefs)
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Экран", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "В окнах подсчёта (DHL Postwagen, палеты, количество товара) экран не выключается, пока вы считаете. " +
+                "Каждое нажатие начинает отсчёт заново. Настройки сохраняются в аккаунте.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Не выключать экран при подсчёте", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (ScreenCfg.enabled) "Включено" else "Выключено — экран гаснет как обычно, по времени телефона",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = ScreenCfg.enabled,
+                onCheckedChange = {
+                    ScreenCfg.setEnabled(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        val enabled = ScreenCfg.enabled
+        Text(
+            "Через сколько минут выключить экран",
+            style = MaterialTheme.typography.titleMedium,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                enabled = enabled && ScreenCfg.minutes > 1,
+                onClick = { ScreenCfg.setMinutes(ctx, ScreenCfg.minutes - 1); CloudSettings.save(ctx, prefs) }
+            ) { Text("−", style = MaterialTheme.typography.titleLarge) }
+            Text(
+                "${ScreenCfg.minutes} мин",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            OutlinedButton(
+                enabled = enabled && ScreenCfg.minutes < ScreenCfg.MAX_MINUTES,
+                onClick = { ScreenCfg.setMinutes(ctx, ScreenCfg.minutes + 1); CloudSettings.save(ctx, prefs) }
+            ) { Text("+", style = MaterialTheme.typography.titleLarge) }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(5, 10, 15, 20, 30).forEach { m ->
+                val sel = ScreenCfg.minutes == m
+                val pick = { ScreenCfg.setMinutes(ctx, m); CloudSettings.save(ctx, prefs) }
+                if (sel) Button(onClick = pick, enabled = enabled, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("$m") }
+                else OutlinedButton(onClick = pick, enabled = enabled, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("$m") }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "По умолчанию 10 минут. После этого времени без нажатий экран выключится.",
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
 
