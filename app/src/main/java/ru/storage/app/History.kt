@@ -93,7 +93,7 @@ fun HistoryScreen(onBack: () -> Unit) {
                             ).filter { it.isNotEmpty() }.joinToString(" · ")
                             if (who.isNotEmpty()) Text(who, style = MaterialTheme.typography.bodyMedium)
                             Text(
-                                r.items.joinToString(", ") { "${it.name} × ${it.qty}" },
+                                r.items.joinToString(", ") { "${it.name} × ${it.qty}" + if (it.barcode.isNotBlank()) " (ШК ${it.barcode})" else "" },
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 2, overflow = TextOverflow.Ellipsis
                             )
@@ -156,7 +156,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
             original = r
             sender = r.sender; order = r.orderNo; receiver = r.receiver
             time = fmtTime(r.receivedAt)
-            items.clear(); items.addAll(r.items.map { EditItem(it.productId, it.name, it.qty, it.plan, it.defect).also { e -> e.expiry = it.expiry } })
+            items.clear(); items.addAll(r.items.map { EditItem(it.productId, it.name, it.qty, it.plan, it.defect, it.barcode).also { e -> e.expiry = it.expiry } })
             photos.clear(); photos.addAll(r.photos)
             invoices.clear(); invoices.addAll(r.invoices)
         }
@@ -260,7 +260,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
                     val r = old.copy(
                         sender = sender.trim(), orderNo = order.trim(), receiver = receiver.trim(),
                         receivedAt = t,
-                        items = items.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.'), it.plan, it.defect, it.expiry) },
+                        items = items.map { ReceiptItem(it.productId, it.name, it.qty.trim().replace(',', '.'), it.plan, it.defect, it.expiry, it.barcode) },
                         photos = ph, invoices = inv
                     )
                     scope.launch(Dispatchers.IO) {

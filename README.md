@@ -244,13 +244,13 @@ pkg install -y openjdk-17 gh
 cd ~
 keytool -genkeypair -keystore lager.jks -alias lager -keyalg RSA -keysize 2048 -validity 10000 \
   -storetype PKCS12 -storepass 'ВАШ_ПАРОЛЬ' -keypass 'ВАШ_ПАРОЛЬ' -dname "CN=Lager, O=Lager, C=DE"
-base64 -w 0 lager.jks > lager.b64
+base64 -w 0 lager.jks > lager.b64   # файлы lager.jks и lager.b64 держать ВНЕ репозитория (~/, не ~/LagerApp)
 
 gh auth login        # GitHub.com → HTTPS → Login with a web browser
-gh secret set KEYSTORE_BASE64   -R das-web-hh/LagerApp < lager.b64
-gh secret set KEYSTORE_PASSWORD -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
-gh secret set KEY_ALIAS         -R das-web-hh/LagerApp -b'lager'
-gh secret set KEY_PASSWORD      -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
+gh secret set LAGER_KEYSTORE_BASE64   -R das-web-hh/LagerApp < lager.b64
+gh secret set LAGER_STORE_PASSWORD -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
+gh secret set LAGER_KEY_ALIAS         -R das-web-hh/LagerApp -b'lager'
+gh secret set LAGER_KEY_PASSWORD      -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
 ```
 
 **Файл `lager.jks` и пароль обязательно сохраните** (например, на Google Диск в личную папку): если их
@@ -270,8 +270,8 @@ gh secret set KEY_PASSWORD      -R das-web-hh/LagerApp -b'ВАШ_ПАРОЛЬ'
 
 ## Подпись APK (важно)
 
-Файл `app/lager.jks` — постоянный ключ подписи. Благодаря ему каждая новая сборка обновляет приложение поверх старой без удаления.
-Сохраните копию этого файла в надёжном месте: если ключ потерять или заменить, приложение придётся один раз удалить и поставить заново.
+Ключ подписи **не хранится в репозитории** — только в GitHub Secrets (`LAGER_KEYSTORE_BASE64`, `LAGER_STORE_PASSWORD`, `LAGER_KEY_ALIAS`, `LAGER_KEY_PASSWORD`) и в вашей личной копии вне репозитория. Благодаря постоянному ключу каждая новая сборка обновляет приложение поверх старой без удаления.
+Если ключ потерять или заменить, приложение придётся один раз удалить и поставить заново. `*.jks` и `key_base64.txt` закрыты в `.gitignore`.
 
 ## Пересчёт «колесом» (приём по имени)
 

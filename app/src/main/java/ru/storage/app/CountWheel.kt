@@ -9,6 +9,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.Dp
+import android.content.Context
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
@@ -67,6 +73,8 @@ import kotlin.math.roundToInt
  */
 
 private val ROW_H = 76.dp
+/** Приём по имени: строка в 1,5 раза выше обычной. */
+private val ROW_H_BIG = 114.dp
 private val DIGIT_H = 46.dp
 private const val CYCLE_BASE = 1_000_000
 
@@ -189,6 +197,7 @@ private fun ListSearchField(
     query: String,
     onChange: (String) -> Unit,
     onAdd: (() -> Unit)?,
+    onScan: (() -> Unit)?,
     onSubmit: () -> Unit
 ) {
     Row(
@@ -224,6 +233,9 @@ private fun ListSearchField(
         if (query.isNotEmpty()) {
             TextButton(onClick = { onChange("") }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
         }
+        if (onScan != null) {
+            IconButton(onClick = onScan) { BarcodeScannerIcon(color = MaterialTheme.colorScheme.primary) }
+        }
         if (onAdd != null) {
             IconButton(onClick = onAdd) {
                 Icon(Icons.Default.Add, contentDescription = "Добавить товар", tint = MaterialTheme.colorScheme.primary)
@@ -234,8 +246,8 @@ private fun ListSearchField(
 
 /** Мини-окно с подходящими товарами под полем поиска. */
 @Composable
-private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier) {
-    Card(modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier, maxH: Dp = 280.dp) {
+    Card(modifier.fillMaxWidth().heightIn(max = maxH)) {
         if (hits.isEmpty()) {
             Text("Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
         } else {
@@ -284,7 +296,22 @@ fun CountWheelList(
     /** true — обычный список (без колеса); используется в B-Ware и в «Приём вручную» */
     plain: Boolean = false,
     /** подпись под названием у строки, добавленной вручную (нет в плане); пусто — без подписи */
-    extraLabel: String = "нет в плане"
+    extraLabel: String = "нет в плане",
+    /**
+     * «Приём по имени»: строки в 1,5 раза выше; количество, срок, брак и удаление меняются только у строки посередине
+     * (до другой строки доходят прокруткой или поиском); при наборе в поиске выбранная строка стоит посередине между полем и клавиатурой.
+     */
+    nameMode: Boolean = false,
+    /** кнопка сканера рядом с «+»: найти товар по штрих-коду */
+    onScan: (() -> Unit)? = null,
+    /** круглая плавающая кнопка сканера: привязать штрих-код к выбранной (средней) строке */
+    onScanBind: ((ItemRow) -> Unit)? = null,
+    /** поставить эту строку на середину при росте jumpTick */
+    jumpTo: ItemRow? = null,
+    jumpTick: Int = 0,
+    /** вставить текст в строку поиска при росте searchTick */
+    searchText: String = "",
+    searchTick: Int = 0
 ) {
     var query by remember { mutableStateOf("") }
     var picking by remember { mutableStateOf<Pair<ItemRow, Boolean>?>(null) } // true — факт, false — брак
@@ -297,12 +324,27 @@ fun CountWheelList(
     val focusManager = LocalFocusManager.current
     val appCtx = LocalContext.current
     val density = LocalDensity.current
-    val rowPx = with(density) { ROW_H.roundToPx() }
+    val bigRows = nameMode && !plain
+    val rowH = if (bigRows) ROW_H_BIG else ROW_H
+    val rowPx = with(density) { rowH.roundToPx() }
 
     LaunchedEffect(addTick) {
         if (addTick > 0) {
             query = ""
             focusRow = focusTarget ?: rows.lastOrNull()
+        }
+    }
+
+    LaunchedEffect(jumpTick) {
+        if (jumpTick > 0 && jumpTo != null) focusRow = jumpTo
+    }
+    LaunchedEffect(searchTick) {
+        if (searchTick > 0) query = searchText
+    }
+    // пока набираем текст, первая найденная строка сама встаёт на середину
+    if (bigRows) {
+        LaunchedEffect(query) {
+            if (query.isNotBlank()) findRows(rows, query).firstOrNull()?.let { focusRow = it }
         }
     }
 
@@ -318,7 +360,7 @@ fun CountWheelList(
 
     Column(modifier) {
         if (showSearch) {
-            ListSearchField(query, { query = it }, onAdd) { hits.firstOrNull()?.let { pick(it) } }
+            ListSearchField(query, { query = it }, onAdd, onScan) { hits.firstOrNull()?.let { pick(it) } }
             Spacer(Modifier.height(8.dp))
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -351,6 +393,7 @@ fun CountWheelList(
                             plain = true,
                             bware = bware,
                             extraLabel = extraLabel,
+                            rowH = rowH, centerOnly = false, bigText = false, onSelect = { focusRow = row },
                             onPickExpiry = { expiryRow = row },
                             onDetails = onDetails?.let { cb -> { cb(row) } },
                             onPickFact = { picking = row to true },
@@ -385,8 +428,23 @@ fun CountWheelList(
                             focusRow = null
                         }
                     }
+                    val lastH = remember { intArrayOf(0) }
+                    // клавиатура открылась или закрылась — высота списка изменилась: выбранная строка остаётся посередине
+                    LaunchedEffect(Unit) {
+                        snapshotFlow { listState.layoutInfo.viewportSize.height }.collect { h ->
+                            if (h > 0) {
+                                if (lastH[0] != 0 && lastH[0] != h) {
+                                    val k = memo[0]?.let { rows.indexOf(it) } ?: -1
+                                    if (k >= 0) scrollToRow(listState, k, cycle, rowPx, false)
+                                }
+                                lastH[0] = h
+                            }
+                        }
+                    }
                     LaunchedEffect(Unit) {
                         snapshotFlow { centerRow(listState, rows, cycle) }.collect {
+                            val hNow = listState.layoutInfo.viewportSize.height
+                            if (lastH[0] != 0 && hNow != lastH[0]) return@collect // высота меняется — середину вернёт эффект выше
                             if (it != null) {
                                 // импульс, когда на середину пришла другая строка (первое значение — просто запоминаем)
                                 if (memo[0] != null && memo[0] !== it) Haptics.pulse(appCtx, Haptics.LIST)
@@ -402,7 +460,7 @@ fun CountWheelList(
                         items(count = Int.MAX_VALUE) { index ->
                             val row = rows.getOrNull(index % cycle)
                             if (row == null) {
-                                Spacer(Modifier.fillMaxWidth().height(ROW_H))
+                                Spacer(Modifier.fillMaxWidth().height(rowH))
                             } else {
                                 WheelRow(
                                     row = row,
@@ -413,6 +471,7 @@ fun CountWheelList(
                                     plain = false,
                                     bware = bware,
                                     extraLabel = extraLabel,
+                                    rowH = rowH, centerOnly = bigRows, bigText = bigRows, onSelect = { focusRow = row },
                                     onPickExpiry = { expiryRow = row },
                                     onDetails = onDetails?.let { cb -> { cb(row) } },
                                     onPickFact = { picking = row to true },
@@ -425,8 +484,14 @@ fun CountWheelList(
                     }
                 }
             }
-            if (query.isNotBlank()) {
-                SuggestionsCard(hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter))
+            if (query.isNotBlank() && !(bigRows && hits.size == 1)) {
+                SuggestionsCard(
+                    hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter),
+                    maxH = if (bigRows) 96.dp else 280.dp
+                )
+            }
+            if (onScanBind != null && editable && n > 0 && !plain) {
+                ScanFab { memo[0]?.let(onScanBind) }
             }
             CountOverlay()
         }
@@ -465,6 +530,10 @@ private fun WheelRow(
     plain: Boolean,
     bware: Boolean,
     extraLabel: String,
+    rowH: Dp,
+    centerOnly: Boolean,
+    bigText: Boolean,
+    onSelect: () -> Unit,
     onPickExpiry: () -> Unit,
     onDetails: (() -> Unit)?,
     onPickFact: () -> Unit,
@@ -493,10 +562,15 @@ private fun WheelRow(
     val planD = if (row.extra) 0.0 else parseQ(row.qty)
     val defD = parseQ(row.defect)
     val hasDetails = bware && onDetails != null
+    // в «Приёме по имени» менять можно только строку посередине; остальные — только выбрать (тап или прокрутка)
+    val active by remember(listState, index, centerOnly, plain) {
+        derivedStateOf { !centerOnly || plain || centerness(listState, index) > 0.5f }
+    }
+    val canEdit = editable && active
 
     Box(
         Modifier.fillMaxWidth()
-            .height(if (plain) 68.dp else ROW_H)
+            .height(if (plain) 68.dp else rowH)
             .padding(horizontal = if (plain) 0.dp else 12.dp, vertical = 3.dp)
             .then(if (plain) Modifier else Modifier.graphicsLayer { applyBigCenter(listState, index, WHEEL_TILT) })
     ) {
@@ -508,7 +582,7 @@ private fun WheelRow(
                 .graphicsLayer { alpha = if (anim.value > 1f) 1f else 0f }
                 .clip(RoundedCornerShape(14.dp))
                 .background(scheme.tertiaryContainer)
-                .clickable(enabled = editable) {
+                .clickable(enabled = canEdit) {
                     scope.launch { anim.animateTo(0f) }
                     onPickExpiry()
                 },
@@ -533,7 +607,7 @@ private fun WheelRow(
             Box(
                 Modifier.weight(1f).fillMaxHeight()
                     .background(scheme.secondaryContainer)
-                    .clickable(enabled = editable) {
+                    .clickable(enabled = canEdit) {
                         scope.launch { anim.animateTo(0f) }
                         if (hasDetails) onDetails?.invoke() else onPickDefect()
                     },
@@ -551,7 +625,7 @@ private fun WheelRow(
             Box(
                 Modifier.weight(1f).fillMaxHeight()
                     .background(scheme.errorContainer)
-                    .clickable(enabled = editable) { onDelete() },
+                    .clickable(enabled = canEdit) { onDelete() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -580,7 +654,7 @@ private fun WheelRow(
                 .background(scheme.primary.copy(alpha = 0.55f * blink.value))
                 .draggable(
                     orientation = Orientation.Horizontal,
-                    enabled = editable,
+                    enabled = canEdit,
                     state = rememberDraggableState { delta ->
                         scope.launch { anim.snapTo((anim.value + delta).coerceIn(-maxPx, rightPx)) }
                     },
@@ -599,14 +673,15 @@ private fun WheelRow(
                 .combinedClickable(
                     enabled = editable,
                     onClick = {
-                        if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
+                        if (!active) onSelect()
+                        else if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
                         else {
                             row.fact = fmtQ(parseQ(row.fact) + 1)
                             Haptics.pulse(ctx, Haptics.TAP)
                             CountAnnouncer.tap(ctx, row)
                         }
                     },
-                    onLongClick = { if (hasDetails) onDetails?.invoke() else onEdit() }
+                    onLongClick = { if (!active) onSelect() else if (hasDetails) onDetails?.invoke() else onEdit() }
                 )
                 .padding(start = 12.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -616,8 +691,8 @@ private fun WheelRow(
                     row.name.ifBlank { "—" },
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    fontSize = 15.sp,
-                    lineHeight = 18.sp,
+                    fontSize = if (bigText) 17.sp else 15.sp,
+                    lineHeight = if (bigText) 21.sp else 18.sp,
                     fontWeight = FontWeight.Medium
                 )
                 if (bware) {
@@ -642,13 +717,13 @@ private fun WheelRow(
                 Modifier.defaultMinSize(minWidth = 56.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(scheme.surface)
-                    .clickable(enabled = editable) { onPickFact() }
+                    .clickable(enabled = canEdit) { onPickFact() }
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     fmtQ(factD),
-                    fontSize = 22.sp,
+                    fontSize = if (bigText) 28.sp else 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = when {
                         row.fact.isBlank() -> scheme.onSurfaceVariant
@@ -785,4 +860,49 @@ private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
     )
+}
+
+
+/**
+ * Круглая плавающая кнопка сканера штрих-кода. Её можно перетащить в любое место экрана — там она и остаётся
+ * (положение хранится на телефоне). Тап — сканировать и привязать код к выбранной (средней) строке.
+ */
+@Composable
+private fun BoxScope.ScanFab(onClick: () -> Unit) {
+    val ctx = LocalContext.current
+    val sp = remember { ctx.getSharedPreferences("scan_fab", Context.MODE_PRIVATE) }
+    BoxWithConstraints(Modifier.matchParentSize()) {
+        val d = LocalDensity.current
+        val sizePx = with(d) { 56.dp.toPx() }
+        val gap = with(d) { 12.dp.toPx() }
+        val w = with(d) { maxWidth.toPx() }
+        val h = with(d) { maxHeight.toPx() }
+        val maxX = (w - sizePx).coerceAtLeast(0f)
+        val maxY = (h - sizePx).coerceAtLeast(0f)
+        // -1 — положение ещё не задано: правый нижний угол
+        var px by remember { mutableFloatStateOf(sp.getFloat("x", -1f)) }
+        var py by remember { mutableFloatStateOf(sp.getFloat("y", -1f)) }
+        val x = (if (px < 0f) maxX - gap else px).coerceIn(0f, maxX)
+        val y = (if (py < 0f) maxY - gap else py).coerceIn(0f, maxY)
+        Box(
+            Modifier.offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                .size(56.dp)
+                .shadow(6.dp, CircleShape)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary)
+                .pointerInput(maxX, maxY) {
+                    detectDragGestures(
+                        onDragEnd = { sp.edit().putFloat("x", px).putFloat("y", py).apply() }
+                    ) { change, drag ->
+                        change.consume()
+                        px = ((if (px < 0f) maxX - gap else px) + drag.x).coerceIn(0f, maxX)
+                        py = ((if (py < 0f) maxY - gap else py) + drag.y).coerceIn(0f, maxY)
+                    }
+                }
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            BarcodeScannerIcon(28.dp, MaterialTheme.colorScheme.onPrimary)
+        }
+    }
 }

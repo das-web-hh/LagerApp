@@ -49,8 +49,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class MainActivity : FragmentActivity() {
+    override fun onStop() {
+        // приложение уходит в фон (звонок, другое приложение, клавиатура другого окна): черновики сразу на диск
+        kotlin.concurrent.thread { AutoReceiveHolder.flushDrafts() }
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // списки «Приём по имени» / «Автоприём», которые не успели сохранить, возвращаются с телефона
+        try { AutoReceiveHolder.restore(applicationContext) } catch (e: Exception) { }
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
         Nav.target = intent?.getStringExtra("open")
         Journal.init(applicationContext)

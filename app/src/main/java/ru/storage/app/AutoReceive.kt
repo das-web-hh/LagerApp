@@ -28,6 +28,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collectLatest
+import org.json.JSONArray
+import org.json.JSONObject
+import android.widget.Toast
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.util.UUID
 import java.io.File
 import java.util.Locale
@@ -120,7 +126,7 @@ class ItemRow(
     name: String,
     qty: String,
     val extra: Boolean = false,
-    val productId: String = "",
+    productId: String = "",
     /** только автоприём: "ok" (✓), "missing" (✕ не пришло), "changed" (другое кол-во), "nomark" (без отметки) */
     val status: String = "",
     /** печатное количество по документу (автоприём) */
@@ -128,6 +134,10 @@ class ItemRow(
 ) {
     var name by mutableStateOf(name)
     var qty by mutableStateOf(qty)
+    var productId by mutableStateOf(productId)
+
+    /** Штрих-код товара ("" — не привязан). Привязывается сканером; при сохранении попадает в каталог и в историю приёма. */
+    var barcode by mutableStateOf("")
     var fact by mutableStateOf("")
     var defect by mutableStateOf("")
 
@@ -147,6 +157,7 @@ class ItemRow(
  * Живёт отдельно от экрана, чтобы поворот экрана не прерывал распознавание.
  */
 class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: Boolean) {
+    val appContext: Context get() = app
     val pages = mutableStateListOf<PageState>()
     var running by mutableStateOf(false)
     var message by mutableStateOf("")
@@ -451,7 +462,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 val db = ProductDb.get(app)
                 val list = res.items.map {
                     val p = db.findByName(it.name) ?: if (it.barcode.isNotBlank()) db.findByBarcode(it.barcode) else null
-                    ItemRow(it.name, it.qty, productId = p?.id ?: "")
+                    ItemRow(it.name, it.qty, productId = p?.id ?: "").also { r ->
+                        r.barcode = it.barcode.ifBlank { p?.barcode ?: "" }
+                    }
                 }
                 if (res.sender.isNotBlank()) sender = res.sender
                 if (res.order.isNotBlank()) order = res.order
@@ -649,11 +662,128 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         }
         sender = s
         order = o
+        if (restoredMode) {
+            // после перезапуска приложения результатов старых листов в памяти нет: уже посчитанные строки не трогаем, добавляем только новые
+            fun key(r: ItemRow) = InvoiceCheck.norm(r.name) + "|" + r.printed.ifEmpty { r.qty }
+            val have = items.map { key(it) }.toHashSet()
+            list.filter { have.add(key(it)) }.forEach { r ->
+                partsCache[r.name.trim()]?.let { r.parts = it }
+                items.add(r)
+            }
+            return
+        }
         val extras = items.filter { it.extra }
         list.forEach { r -> partsCache[r.name.trim()]?.let { r.parts = it } }
         items.clear()
         items.addAll(list)
         items.addAll(extras)
+    }
+
+    // ---------- черновик на телефоне ----------
+    // Каждое действие сначала записывается на телефон (файл в памяти приложения), и только при «Сохранить» уходит в Firebase.
+    // Если систему выгрузит приложение из памяти, список и введённые количества вернутся при следующем запуске.
+
+    /** Имя файла черновика; при восстановлении берётся из самого черновика. */
+    var draftId: String = UUID.nameUUIDFromBytes(file.path.toByteArray()).toString()
+
+    /** Партию убрали (сохранена и закрыта или удалена вручную) — черновик больше не пишется. */
+    @Volatile var removed = false
+    private var restoredMode = false
+
+    /** Черновик нужен, пока приём не сохранён и есть что терять. */
+    private fun draftNeeded(): Boolean = !saved && blocked.isBlank() && attachedNote.isBlank() && items.isNotEmpty()
+
+    /** Подсчёт ушёл в историю и Firebase, партия закрыта или не принята — черновик удаляется. */
+    private fun draftObsolete(): Boolean = saved || blocked.isNotBlank() || attachedNote.isNotBlank()
+
+    /** Снимок партии. Читает состояния Compose, поэтому годится для snapshotFlow. */
+    fun draftJson(): String {
+        val arr = JSONArray()
+        for (r in items.toList()) {
+            arr.put(
+                JSONObject().put("n", r.name).put("q", r.qty).put("x", r.extra).put("p", r.productId)
+                    .put("s", r.status).put("pr", r.printed).put("f", r.fact).put("d", r.defect)
+                    .put("e", r.expiry).put("b", r.barcode).put("nt", r.note)
+                    .put("rs", JSONArray(r.reasons.toList()))
+            )
+        }
+        val pg = JSONArray()
+        pages.toList().forEach { pg.put(it.ok) }
+        return JSONObject().put("v", 1).put("id", draftId).put("name", file.name).put("path", file.path)
+            .put("nameMode", nameMode).put("step", step).put("sender", sender).put("order", order)
+            .put("stamp", stamp).put("pagesOk", pg).put("items", arr).toString()
+    }
+
+    /** Записать черновик сразу (при сворачивании приложения). */
+    fun flushDraft() {
+        if (removed) return
+        try {
+            if (draftNeeded()) AutoDraft.write(app, draftId, file, draftJson())
+        } catch (e: Exception) {
+        }
+    }
+
+    /** Вернуть партию из черновика: список, количества, брак, штрих-коды и шаг. Распознавание заново не запускается. */
+    fun applyDraft(o: JSONObject) {
+        draftId = o.optString("id", draftId)
+        sender = o.optString("sender", "none")
+        order = o.optString("order", "none")
+        stamp = o.optString("stamp", stamp)
+        step = o.optInt("step", 0)
+        val arr = o.optJSONArray("items") ?: JSONArray()
+        val list = ArrayList<ItemRow>()
+        for (i in 0 until arr.length()) {
+            val j = arr.getJSONObject(i)
+            val r = ItemRow(
+                j.optString("n"), j.optString("q"), j.optBoolean("x"), j.optString("p"),
+                j.optString("s"), j.optString("pr")
+            )
+            r.fact = j.optString("f")
+            r.defect = j.optString("d")
+            r.expiry = j.optString("e")
+            r.barcode = j.optString("b")
+            r.note = j.optString("nt")
+            j.optJSONArray("rs")?.let { a -> for (k in 0 until a.length()) r.reasons.add(a.getString(k)) }
+            list.add(r)
+        }
+        items.clear()
+        items.addAll(list)
+        pages.clear()
+        val pg = o.optJSONArray("pagesOk")
+        if (pg != null) {
+            for (i in 0 until pg.length()) pages.add(PageState().also { it.ok = pg.optBoolean(i); it.status = if (it.ok) "готово" else "ожидает" })
+        }
+        started = true
+        restoredMode = true
+    }
+
+    /** Подсказка из каталога: у строк без штрих-кода берём код найденного по названию (или id) товара. Не в главном потоке. */
+    fun fillBarcodesFromCatalog() {
+        val db = ProductDb.get(app)
+        for (r in items.toList()) {
+            if (r.barcode.isNotBlank() || r.name.isBlank()) continue
+            val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null) ?: db.findByName(r.name.trim())
+            if (p != null && p.barcode.isNotBlank()) r.barcode = p.barcode
+        }
+    }
+
+    init {
+        // пишем черновик через 0,25 с после любого изменения списка, количеств, отправителя, заказа и шага
+        scope.launch {
+            snapshotFlow { if (draftNeeded()) draftJson() else if (draftObsolete()) "-" else "" }
+                .collectLatest { js ->
+                    delay(250)
+                    if (removed) return@collectLatest
+                    try {
+                        when (js) {
+                            "" -> {}
+                            "-" -> AutoDraft.delete(app, draftId)
+                            else -> AutoDraft.write(app, draftId, file, js)
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
+        }
     }
 }
 
@@ -672,7 +802,32 @@ object AutoReceiveHolder {
         return AutoJob(ctx.applicationContext, f, nameMode).also { jobs.add(it) }
     }
 
+    /** Вернуть партии из черновиков на телефоне (после того как систему выгрузила приложение из памяти). Вызывать один раз при запуске. */
+    @Synchronized
+    fun restore(ctx: Context) {
+        val app = ctx.applicationContext
+        for (o in AutoDraft.readAll(app)) {
+            try {
+                val path = o.optString("path")
+                if (path.isEmpty() || find(path) != null) continue
+                // исходный файл лежит в кэше, систему могла его очистить — тогда берём копию из черновика
+                val use = if (File(path).exists()) path else AutoDraft.copyPath(app, o.optString("id"), o.optString("name")) ?: continue
+                val job = AutoJob(app, IncomingFile(o.optString("name"), use), o.optBoolean("nameMode"))
+                job.applyDraft(o)
+                jobs.add(job)
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    /** Записать все черновики сейчас (приложение уходит в фон). */
+    fun flushDrafts() {
+        jobs.toList().forEach { it.flushDraft() }
+    }
+
     fun remove(job: AutoJob) {
+        job.removed = true
+        AutoDraft.delete(job.appContext, job.draftId)
         jobs.remove(job)
         if (Incoming.openPath == job.file.path) Incoming.openPath = null
     }
@@ -726,18 +881,33 @@ suspend fun saveJob(
     if (job.saved || job.saving) return null
     val rows = ArrayList<ReceiptItem>()
     val newProducts = LinkedHashMap<String, Product>()
+    val bind = ArrayList<Pair<String, String>>() // товар → штрих-код, привязанный сканером
     for (r in job.items) {
         val name = r.name.trim()
         if (name.isEmpty()) continue
         // товар, который за этот день уже принимали с тем же количеством и по которому выбрали «Отказать»
         if (job.dupDecision[InvoiceCheck.norm(name)] == false) continue
         var pid = withContext(Dispatchers.IO) { r.productId.ifEmpty { db.findByName(name)?.id ?: "" } }
+        val bcRaw = r.barcode.trim()
+        if (pid.isEmpty() && bcRaw.isNotEmpty() && (nameMode || r.extra)) {
+            // товара нет в каталоге, но у строки есть штрих-код: заводим карточку (имя и код), строка остаётся в списке
+            pid = newProducts.getOrPut(name.lowercase()) {
+                Product(
+                    id = UUID.randomUUID().toString(), name = name, article = "", barcode = bcRaw,
+                    weight = "", unit = "", pack = "", manufacturer = "", photos = emptyList(), updatedAt = 0L
+                )
+            }.id
+        } else if (pid.isNotEmpty() && bcRaw.isNotEmpty()) {
+            bind.add(pid to bcRaw)
+        }
+        var bc = bcRaw
+        if (bc.isEmpty() && pid.isNotEmpty()) bc = withContext(Dispatchers.IO) { db.getProduct(pid)?.barcode ?: "" }
         val pt = r.parts
         if (pid.isEmpty() && !nameMode && !r.extra && pt != null) {
             // нового товара в каталоге нет — заводим карточку по разобранным полям (имя оставляем как в накладной, чтобы в следующий раз найти его по имени)
             pid = newProducts.getOrPut(name.lowercase()) {
                 Product(
-                    id = UUID.randomUUID().toString(), name = name, article = "", barcode = "",
+                    id = UUID.randomUUID().toString(), name = name, article = "", barcode = bcRaw,
                     weight = pt.size, unit = pt.unit, pack = pt.pack, manufacturer = pt.manufacturer,
                     photos = emptyList(), updatedAt = 0L
                 )
@@ -748,17 +918,17 @@ suspend fun saveJob(
             val defect = normalizeQty(r.defect).ifEmpty { "0" }
             if (defect.toDouble() > fact.toDouble()) return "Брак больше фактического количества: $name"
             val plan = if (r.extra) "0" else normalizeQty(r.qty).ifEmpty { "0" }
-            rows.add(ReceiptItem(pid, name, fact, plan, defect, r.expiry.trim()))
+            rows.add(ReceiptItem(pid, name, fact, plan, defect, r.expiry.trim(), bc))
         } else {
             val qty = normalizeQty(r.qty)
             val printed = normalizeQty(r.printed)
             // «не пришло» (✕): товар попадает в приём с количеством 0 и планом по документу
             if (r.status == "missing" && (qty.isEmpty() || qty.toDoubleOrNull() == 0.0)) {
-                rows.add(ReceiptItem(pid, name, "0", printed.ifEmpty { "0" }))
+                rows.add(ReceiptItem(pid, name, "0", printed.ifEmpty { "0" }, barcode = bc))
             } else {
                 if (qty.isEmpty() || !qtyValid(qty)) return "Укажите количество (число больше нуля) у товара: $name"
                 val plan = if (r.status == "changed" || r.status == "missing") printed else ""
-                rows.add(ReceiptItem(pid, name, qty, plan))
+                rows.add(ReceiptItem(pid, name, qty, plan, barcode = bc))
             }
         }
     }
@@ -795,6 +965,14 @@ suspend fun saveJob(
         val stamp = job.stamp.trim().let { if (it.length == 16) it else "" }
         withContext(Dispatchers.IO) {
             newProducts.values.forEach { Cloud.saveProduct(db, it) }
+            // штрих-коды, привязанные сканером к товарам каталога; если код числился за другим товаром — снимаем его с того
+            bind.distinctBy { it.first }.forEach { (pid, code) ->
+                if (newProducts.values.any { it.id == pid }) return@forEach
+                val p = db.getProduct(pid) ?: return@forEach
+                if (p.barcode == code) return@forEach
+                db.findByBarcode(code)?.takeIf { it.id != pid }?.let { Cloud.saveProduct(db, it.copy(barcode = "")) }
+                Cloud.saveProduct(db, p.copy(barcode = code))
+            }
             val inv = Media.importFile(ctx, File(f.path), db, "IN")
             val r = Receipt(
                 id = UUID.randomUUID().toString(),
@@ -924,8 +1102,71 @@ private fun ColumnScope.NameModeMain(
     addTick: Int,
     onNext: () -> Unit,
     onRetry: () -> Unit,
-    onAdd: () -> Unit
+    onAdd: () -> Unit,
+    onAddPrefilled: (name: String, productId: String, barcode: String) -> Unit
 ) {
+    val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    val scope = rememberCoroutineScope()
+    var scanFor by remember { mutableStateOf<String?>(null) } // "search" — найти товар по коду, "bind" — привязать код к выбранной строке
+    var bindRow by remember { mutableStateOf<ItemRow?>(null) }
+    var jumpTo by remember { mutableStateOf<ItemRow?>(null) }
+    var jumpTick by remember { mutableIntStateOf(0) }
+    var searchText by remember { mutableStateOf("") }
+    var searchTick by remember { mutableIntStateOf(0) }
+    var conflict by remember { mutableStateOf<Triple<ItemRow, String, String>?>(null) } // строка, код, кому принадлежит сейчас
+
+    // штрих-коды подтягиваются из каталога по названию: после распознавания, из файла, после возврата из фона
+    LaunchedEffect(job.items.size, job.running) {
+        if (!job.running) withContext(Dispatchers.IO) { job.fillBarcodesFromCatalog() }
+    }
+
+    fun setSearch(t: String) { searchText = t; searchTick++ }
+    fun jump(r: ItemRow) { jumpTo = r; jumpTick++ }
+
+    // Сканер у «+»: код → строка списка с этим кодом; нет — товар каталога, его название идёт в поиск и находится в списке;
+    // нет в списке — окно «Добавить товар»; нет и в каталоге — окно «Новый товар» с этим кодом.
+    fun findByCode(code: String) {
+        scope.launch {
+            val inList = job.items.firstOrNull { it.barcode == code }
+            if (inList != null) {
+                setSearch("")
+                jump(inList)
+                return@launch
+            }
+            val p = withContext(Dispatchers.IO) { db.findByBarcode(code) }
+            if (p == null) {
+                onAddPrefilled("", "", code)
+                return@launch
+            }
+            setSearch(p.name)
+            val row = job.items.firstOrNull { it.productId.isNotEmpty() && it.productId == p.id }
+                ?: job.items.firstOrNull { it.name.trim().equals(p.name.trim(), true) }
+            if (row != null) {
+                if (row.barcode.isBlank()) row.barcode = code
+                jump(row)
+            } else {
+                onAddPrefilled(p.name, p.id, code)
+            }
+        }
+    }
+
+    // Круглая кнопка: код привязывается к выбранной строке
+    fun bindCode(row: ItemRow, code: String) {
+        scope.launch {
+            val owner = withContext(Dispatchers.IO) { db.findByBarcode(code) }
+            val ownerIsRow = owner != null && (owner.id == row.productId || owner.name.trim().equals(row.name.trim(), true))
+            val otherRow = job.items.firstOrNull { it !== row && it.barcode == code }
+            if ((owner != null && !ownerIsRow) || otherRow != null) {
+                conflict = Triple(row, code, otherRow?.name ?: owner?.name ?: "")
+            } else {
+                row.barcode = code
+                Haptics.pulse(ctx, Haptics.TAP)
+                Toast.makeText(ctx, "Штрих-код привязан: ${row.name}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val editable = !job.running && !job.saved && !job.saving
     var editDoc by remember { mutableStateOf(false) }
     var retryDlg by remember { mutableStateOf(false) }
@@ -969,8 +1210,49 @@ private fun ColumnScope.NameModeMain(
     Spacer(Modifier.height(8.dp))
     CountWheelList(
         job.items, editable, Modifier.weight(1f), addTick, onAdd,
-        if (job.running) "" else "Список пуст"
+        if (job.running) "" else "Список пуст",
+        nameMode = true,
+        onScan = { scanFor = "search" },
+        onScanBind = { r -> bindRow = r; scanFor = "bind" },
+        jumpTo = jumpTo, jumpTick = jumpTick,
+        searchText = searchText, searchTick = searchTick
     )
+
+    scanFor?.let { mode ->
+        Dialog(
+            onDismissRequest = { scanFor = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
+        ) {
+            Surface(Modifier.fillMaxSize()) {
+                ScannerScreen(
+                    prefs = remember { Prefs(ctx) },
+                    onResult = { raw ->
+                        val code = raw.trim()
+                        scanFor = null
+                        if (code.isNotEmpty()) {
+                            if (mode == "bind") bindRow?.let { bindCode(it, code) } else findByCode(code)
+                        }
+                    },
+                    onClose = { scanFor = null }
+                )
+            }
+        }
+    }
+    conflict?.let { (row, code, who) ->
+        AlertDialog(
+            onDismissRequest = { conflict = null },
+            title = { Text("Штрих-код уже привязан") },
+            text = { Text("Код $code уже числится за «$who». Привязать его к «${row.name}»? У «$who» он будет снят при сохранении приёма.") },
+            confirmButton = {
+                Button(onClick = {
+                    job.items.filter { it !== row && it.barcode == code }.forEach { it.barcode = "" }
+                    row.barcode = code
+                    conflict = null
+                }) { Text("Привязать") }
+            },
+            dismissButton = { TextButton(onClick = { conflict = null }) { Text("Отмена") } }
+        )
+    }
 
     if (editDoc) EditDocDialog(job, onDismiss = { editDoc = false })
     if (retryDlg) {
@@ -1005,11 +1287,17 @@ private fun EditDocDialog(job: AutoJob, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun AddItemDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
+private fun AddItemDialog(
+    initialName: String = "",
+    initialPid: String = "",
+    barcode: String = "",
+    onDismiss: () -> Unit,
+    onAdd: (String, String) -> Unit
+) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
-    var name by remember { mutableStateOf("") }
-    var pid by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(initialName) }
+    var pid by remember { mutableStateOf(initialPid) }
     var sugg by remember { mutableStateOf(emptyList<Product>()) }
 
     LaunchedEffect(name) {
@@ -1019,9 +1307,17 @@ private fun AddItemDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Добавить товар") },
+        title = { Text(if (barcode.isNotBlank() && initialPid.isEmpty()) "Новый товар" else "Добавить товар") },
         text = {
             Column {
+                if (barcode.isNotBlank()) {
+                    Text(
+                        if (initialPid.isEmpty()) "Штрих-код $barcode не найден в каталоге. Назовите товар — он добавится в каталог и в список."
+                        else "Штрих-код $barcode · товар есть в каталоге, но не в этом списке.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
                 OutlinedTextField(
                     name, { name = it; pid = "" }, label = { Text("Название товара") },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
@@ -1064,6 +1360,15 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     val nameMode = mode == "name"
     val job = remember(f.path) { AutoReceiveHolder.create(ctx, f, nameMode) }
 
+    // «Приём по имени»: при наборе в поиске окно уменьшается над клавиатурой, а не уезжает под неё
+    if (nameMode) {
+        DisposableEffect(Unit) {
+            val w = ctx.findFragmentActivity()?.window
+            w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            onDispose { w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN) }
+        }
+    }
+
     // onClose — «свернуть»: партия остаётся в работе. Убрать партию совсем можно после сохранения или кнопкой ✕ в списке.
     val finish = { if (job.saved) AutoReceiveHolder.remove(job) else onClose() }
     if (nameMode && job.step == 1) {
@@ -1078,6 +1383,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     var forced by remember(f.path) { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var showAdd by remember { mutableStateOf(false) }
+    var addPrefill by remember { mutableStateOf<Triple<String, String, String>?>(null) }
     var retryDlg by remember { mutableStateOf(false) }
     var addTick by remember { mutableIntStateOf(0) }
 
@@ -1168,7 +1474,8 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
                     }
                 },
                 onRetry = { job.start(true) },
-                onAdd = { showAdd = true }
+                onAdd = { addPrefill = null; showAdd = true },
+                onAddPrefilled = { n, pid, code -> addPrefill = Triple(n, pid, code); showAdd = true }
             )
             return@Column
         }
@@ -1283,12 +1590,17 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     }
 
     if (showAdd) {
+        val pf = addPrefill
         AddItemDialog(
-            onDismiss = { showAdd = false },
+            initialName = pf?.first ?: "",
+            initialPid = pf?.second ?: "",
+            barcode = pf?.third ?: "",
+            onDismiss = { showAdd = false; addPrefill = null },
             onAdd = { name, pid ->
-                job.items.add(ItemRow(name, "0", extra = true, productId = pid))
+                job.items.add(ItemRow(name, "0", extra = true, productId = pid).also { it.barcode = pf?.third ?: "" })
                 addTick++
                 showAdd = false
+                addPrefill = null
             }
         )
     }

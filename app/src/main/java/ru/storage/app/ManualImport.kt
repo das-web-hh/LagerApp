@@ -131,7 +131,7 @@ object AiImport {
             val rows = r.items.map {
                 val p = db.findByName(it.name) ?: if (it.barcode.isNotBlank()) db.findByBarcode(it.barcode) else null
                 if (p == null) notFound.add(it.name)
-                ReceiptItem(p?.id ?: "", it.name, it.qty)
+                ReceiptItem(p?.id ?: "", it.name, it.qty, barcode = it.barcode.ifBlank { p?.barcode ?: "" })
             }
             val receipt = Receipt(
                 id = UUID.randomUUID().toString(),

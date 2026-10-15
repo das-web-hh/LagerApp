@@ -40,7 +40,8 @@ class EditItem(
     val name: String,
     initial: String,
     val plan: String = "",
-    val defect: String = ""
+    val defect: String = "",
+    val barcode: String = ""
 ) {
     var qty by mutableStateOf(initial)
     /** срок годности дд.мм.гггг, "" — не указан */
@@ -76,7 +77,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         if (existing != null) {
             focusTarget = existing
         } else {
-            rows.add(ItemRow(p.name, "", extra = true, productId = p.id))
+            rows.add(ItemRow(p.name, "", extra = true, productId = p.id).also { r -> r.barcode = p.barcode })
             focusTarget = null
         }
         addTick++
@@ -102,7 +103,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                     val sum = (normalizeQty(same.qty).toDoubleOrNull() ?: 0.0) + (it.qty.toDoubleOrNull() ?: 0.0)
                     same.qty = cleanQty(sum.toString())
                 } else {
-                    rows.add(ItemRow(it.name, it.qty, productId = p?.id ?: ""))
+                    rows.add(ItemRow(it.name, it.qty, productId = p?.id ?: "").also { r -> r.barcode = it.barcode.ifBlank { p?.barcode ?: "" } })
                     added++
                 }
             }
@@ -252,7 +253,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                             it.productId, it.name.trim(), q(it.fact),
                             if (it.extra) "" else q(it.qty),
                             normalizeQty(it.defect).let { dft -> if ((dft.toDoubleOrNull() ?: 0.0) > 0.0) dft else "" },
-                            it.expiry.trim()
+                            it.expiry.trim(), it.barcode.trim()
                         )
                     }
                 val r = Receipt(
