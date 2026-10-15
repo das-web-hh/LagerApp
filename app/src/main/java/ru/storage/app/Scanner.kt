@@ -43,6 +43,15 @@ val allFormats = listOf(
     "Aztec" to Barcode.FORMAT_AZTEC
 )
 
+private fun ownerOf(ctx: android.content.Context): LifecycleOwner? {
+    var c: android.content.Context? = ctx
+    while (c is android.content.ContextWrapper) {
+        if (c is LifecycleOwner) return c
+        c = c.baseContext
+    }
+    return null
+}
+
 @Composable
 fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
@@ -76,13 +85,18 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit)
 
     val executor = remember { Executors.newSingleThreadExecutor() }
     val done = remember { AtomicBoolean(false) }
+    val alive = remember { AtomicBoolean(true) }
+    val scannerRef = remember { arrayOfNulls<com.google.mlkit.vision.barcode.BarcodeScanner>(1) }
+    // Порядок важен: сначала отвязать камеру, потом гасить поток, иначе кадр уходит в закрытый executor и приложение падает.
     DisposableEffect(Unit) {
         onDispose {
-            executor.shutdown()
+            alive.set(false)
             try {
                 ProcessCameraProvider.getInstance(context).get().unbindAll()
             } catch (e: Exception) {
             }
+            executor.shutdown()
+            try { scannerRef[0]?.close() } catch (e: Exception) {}
         }
     }
 
@@ -93,6 +107,8 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit)
                 val previewView = PreviewView(ctx)
                 val providerFuture = ProcessCameraProvider.getInstance(ctx)
                 providerFuture.addListener({
+                  try {
+                    if (!alive.get()) return@addListener
                     val provider = providerFuture.get()
                     val preview = Preview.Builder().build()
                     preview.setSurfaceProvider(previewView.surfaceProvider)
@@ -103,31 +119,42 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit)
                         else setBarcodeFormats(codes.first(), *codes.drop(1).toIntArray())
                     }.build()
                     val scanner = BarcodeScanning.getClient(options)
+                    scannerRef[0] = scanner
 
                     val analysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                     analysis.setAnalyzer(executor) { proxy ->
                         val media = proxy.image
-                        if (media != null && !done.get()) {
-                            val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-                            scanner.process(image)
-                                .addOnSuccessListener { result ->
-                                    val value = result.firstOrNull()?.rawValue
-                                    if (value != null && done.compareAndSet(false, true)) {
-                                        onResult(value)
+                        if (media != null && !done.get() && alive.get()) {
+                            try {
+                                val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
+                                scanner.process(image)
+                                    .addOnSuccessListener { result ->
+                                        val value = result.firstOrNull()?.rawValue
+                                        if (value != null && alive.get() && done.compareAndSet(false, true)) {
+                                            onResult(value)
+                                        }
                                     }
-                                }
-                                .addOnCompleteListener { proxy.close() }
+                                    .addOnCompleteListener { proxy.close() }
+                            } catch (e: Exception) {
+                                proxy.close()
+                            }
                         } else {
                             proxy.close()
                         }
                     }
 
-                    val selector = if (prefs.useFront) CameraSelector.DEFAULT_FRONT_CAMERA
-                    else CameraSelector.DEFAULT_BACK_CAMERA
+                    val owner = ownerOf(ctx)
+                    if (owner == null) { onClose(); return@addListener }
+                    val selector = if (prefs.useFront && provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA))
+                        CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                     provider.unbindAll()
-                    provider.bindToLifecycle(ctx as LifecycleOwner, selector, preview, analysis)
+                    provider.bindToLifecycle(owner, selector, preview, analysis)
+                  } catch (e: Exception) {
+                    // камера занята или недоступна – закрываем сканер, а не роняем приложение
+                    onClose()
+                  }
                 }, ContextCompat.getMainExecutor(ctx))
                 previewView
             }

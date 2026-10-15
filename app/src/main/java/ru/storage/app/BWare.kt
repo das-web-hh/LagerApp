@@ -456,13 +456,12 @@ fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
         Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CompactField(h.sender, { h.sender = it }, "Отправитель", Modifier.weight(1f))
-            CompactField(h.truck, { h.truck = it }, "Номер машины", Modifier.weight(1f), caps = true)
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CompactField(h.order, { h.order = it }, "Номер заказа", Modifier.weight(1f), caps = true)
-            CompactField(h.trailer, { h.trailer = it }, "Номер прицепа", Modifier.weight(1f), caps = true)
         }
+        Spacer(Modifier.height(4.dp))
+        PlateField(h.truck, { h.truck = it }, "Номер машины", Modifier.fillMaxWidth())
+        Spacer(Modifier.height(4.dp))
+        PlateField(h.trailer, { h.trailer = it }, "Номер прицепа", Modifier.fillMaxWidth())
         Spacer(Modifier.height(6.dp))
         CatalogWheel(
             rows = h.rows,
