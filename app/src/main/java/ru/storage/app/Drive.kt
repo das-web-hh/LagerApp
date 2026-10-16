@@ -37,7 +37,7 @@ class DrivePage(val names: List<String>, val next: String?)
 
 /** Запросы к Google Apps Script (Web App), который работает с папкой на Google Диске. */
 object DriveApi {
-    private val OURS = Regex("^(PR|RC|IN|BW)-.+")
+    private val OURS = Regex("^(PR|RC|IN)-.+")
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 

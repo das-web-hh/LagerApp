@@ -273,9 +273,20 @@ fun UnloadAddScreen(onClose: () -> Unit) {
                 Text(if (bwCount > 0) "⚠ Испорченный товар (B-Ware) · $bwCount поз." else "⚠ Испорченный товар (B-Ware)")
             }
             Spacer(Modifier.height(10.dp))
-            PlateField(truck, { truck = it.take(20) }, "Номер машины", Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            PlateField(trailer, { trailer = it.take(20) }, "Номер прицепа", Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = truck, onValueChange = { truck = it.take(20) }, singleLine = true,
+                    label = { Text("Номер машины") },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = trailer, onValueChange = { trailer = it.take(20) }, singleLine = true,
+                    label = { Text("Номер прицепа") },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(Modifier.height(10.dp))
             Button(
                 onClick = {

@@ -68,29 +68,29 @@ private fun bullets(list: List<String>) =
     if (list.isEmpty()) "—" else list.joinToString("<br>") { "• " + bwEsc(trOpt(it)) }
 
 private fun invHtml(receiver: String, now: Long): String {
-    val info = DocLayout.info(
-        listOf(
-            tr("compiled_by") to bwDash(receiver),
-            tr("date_time") to fmtTime(now)
-        )
-    )
-    val top = DocLayout.top(info, DocLayout.title("inv_t1", "inv_t2"))
     val sb = StringBuilder()
-    sb.append("<table class='dt'><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th class='n'>${trb("th_qty")}</th><th>${trb("th_expiry")}</th><th>${trb("th_reasons")}</th><th>${trb("th_integrity")}</th></tr>")
+    sb.append("<html><head><meta charset='utf-8'><style>$BW_CSS.sub{color:#444;font-size:11px;margin-top:3px}</style></head><body>")
+    sb.append("<h1>${trHead("inv_title")}</h1>")
+    sb.append("<table class='info'>")
+    sb.append("<tr><td>${tr("compiled_by")}:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
+    sb.append("<tr><td>${tr("date_time")}:</td><td>${fmtTime(now)}</td></tr>")
+    sb.append("</table><br>")
+    sb.append("<table><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th>${trb("th_qty")}</th><th>${trb("th_expiry")}</th><th>${trb("th_reasons")}</th><th>${trb("th_integrity")}</th></tr>")
     var total = 0.0
     BWareInvHolder.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
         total += q
-        sb.append("<tr><td>${i + 1}.</td><td>${bwEsc(r.name.trim())}")
+        sb.append("<tr><td>${i + 1}</td><td>${bwEsc(r.name.trim())}")
         if (r.note.isNotBlank()) sb.append("<div class='sub'>${bwEsc(r.note.trim()).replace("\n", "<br>")}</div>")
         sb.append("</td><td class='n'>${bwFmt(q)}</td><td>${bwEsc(bwDash(r.expiry))}</td>")
         sb.append("<td>${bullets(InvOptions.reasons.filter { it in r.reasons })}</td>")
         sb.append("<td>${bullets(InvOptions.damage.filter { it in r.reasons })}</td></tr>")
     }
-    sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th><th></th></tr></table>")
-    val bottom = "<div class='sg'>${Signature.cell("sig_compiled", receiver, now)}</div>" +
-        "<div class='sg'>${Signature.cell("sig_checked", "", now, auto = false)}</div>"
-    return DocLayout.page(top, sb.toString(), bottom)
+    sb.append("<tr><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th><th></th></tr></table>")
+    sb.append("<table class='sign'><tr><td>${Signature.cell("sig_compiled", receiver, now)}</td>")
+    sb.append("<td>${Signature.cell("sig_checked", "", now, auto = false)}</td></tr></table>")
+    sb.append("</body></html>")
+    return sb.toString()
 }
 
 @Composable
