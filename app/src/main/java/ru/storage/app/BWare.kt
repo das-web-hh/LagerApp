@@ -52,6 +52,8 @@ object BWareHolder {
     var order by mutableStateOf("")
     var truck by mutableStateOf("")
     var trailer by mutableStateOf("")
+    /** Водитель расписался на накладной: на документе (1-й лист) появляется рукописная надпись. */
+    var driverSigned by mutableStateOf(false)
     val rows = mutableStateListOf<ItemRow>()
     /** 0 — ввод и подсчёт, 1 — предпросмотр и печать */
     var step by mutableIntStateOf(0)
@@ -72,6 +74,7 @@ object BWareHolder {
         order = ""
         truck = ""
         trailer = ""
+        driverSigned = false
         rows.clear()
         photos.clear()
         code = ""
@@ -149,9 +152,6 @@ internal const val BW_CSS =
         ".line{border-top:1px solid #111;padding-top:2px;font-size:11px;color:#444}" +
         Signature.CSS
 
-/** Надпись в документе: водитель подписал накладную (всегда по-немецки, рукописным шрифтом). */
-internal const val DRIVER_SIGNED_DE = "Der Fahrer hat den Lieferschein unterschrieben"
-
 /** HTML документа приёма для предпросмотра и печати. Язык(и) и автоподпись — по настройкам печати. */
 private fun bwareHtml(receiver: String, now: Long, photosHtml: String = ""): String {
     val h = BWareHolder
@@ -168,6 +168,12 @@ private fun bwareHtml(receiver: String, now: Long, photosHtml: String = ""): Str
     )
     val top = DocLayout.top(info, DocLayout.title("bw_t1", "bw_t2"))
     val sb = StringBuilder()
+    // рукописная надпись «водитель расписался на накладной» — вверху 1-го листа, на языке(ах) документа
+    if (h.driverSigned) {
+        sb.append("<style>.drv .sigtext{max-width:520px}.drv{margin:0 0 18px}</style><div class='drv'>")
+        trList("driver_signed").forEach { sb.append(Signature.handwritten(it, 900.0)) }
+        sb.append("</div>")
+    }
     sb.append("<table class='dt'><tr><th></th><th>${trb("th_item")}</th><th class='n'>${trb("th_qty")}</th>")
     sb.append("<th>${trb("th_expiry")}</th><th>${trb("th_details")}</th></tr>")
     var total = 0.0
@@ -192,14 +198,14 @@ private fun bwToast(ctx: Context, text: String) {
 }
 
 /**
- * Кнопка «Печать»: на принтер уходит документ с фото на втором листе (маленькие, 3×4 см); в фоне тот же документ сохраняется PDF-файлом на Google Диск — обычной закрытой загрузкой, без публичной ссылки и без QR-кода.
+ * Кнопка «Печать»: на принтер уходит документ с фото на втором листе (6×8 см); в фоне тот же документ сохраняется PDF-файлом на Google Диск — обычной закрытой загрузкой, без публичной ссылки и без QR-кода.
  */
 private suspend fun bwPrintAndSave(ctx: Context, jobName: String, receiver: String, stamp: Long) {
     val h = BWareHolder
     val app = ctx.applicationContext
     val code = h.ensureCode()
     val driveOn = DriveCfg.ready(app)
-    // документ с фото на втором листе (3×4 см): один и тот же и для печати, и для PDF на Диске
+    // документ с фото на втором листе (6×8 см): один и тот же и для печати, и для PDF на Диске
     val html = bwareHtml(receiver, stamp, bwPhotosHtml(app, h.photos.toList()))
 
     Printer.print(ctx, jobName, html)
@@ -521,7 +527,14 @@ fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
         PlateField(h.trailer, { h.trailer = it }, "Номер прицепа", Modifier.fillMaxWidth())
         Spacer(Modifier.height(4.dp))
         BWarePhotoButton()
-        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth().height(44.dp).clickable { h.driverSigned = !h.driverSigned },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Checkbox(checked = h.driverSigned, onCheckedChange = { h.driverSigned = it })
+            Text("Водитель расписался на накладной", maxLines = 1)
+        }
+        Spacer(Modifier.height(2.dp))
         CatalogWheel(
             rows = h.rows,
             groups = BWareDetails.groups,

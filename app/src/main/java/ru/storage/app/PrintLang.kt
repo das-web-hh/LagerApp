@@ -146,7 +146,9 @@ private val T: Map<String, Array<String>> = mapOf(
     "footer_note" to arrayOf("Dies ist ein internes Dokument und kein offizieller Beleg.", "Это внутренний документ, а не официальный документ.", "This is an internal document and not an official receipt."),
     "page_word" to arrayOf("Seite", "Страница", "Page"),
     "of_word" to arrayOf("von", "из", "of"),
-    "qr_label" to arrayOf("QR Code für System-Erfassung", "QR-код для ввода в систему", "QR code for system entry")
+    "qr_label" to arrayOf("QR Code für System-Erfassung", "QR-код для ввода в систему", "QR code for system entry"),
+    "photos" to arrayOf("Fotos", "Фото", "Photos"),
+    "driver_signed" to arrayOf("Der Fahrer hat den Lieferschein unterschrieben", "Водитель расписался на накладной", "The driver signed the delivery note")
 )
 
 /** Переводы вариантов повреждений (в позициях хранится русский текст). */

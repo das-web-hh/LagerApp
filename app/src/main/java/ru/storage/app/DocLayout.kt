@@ -52,6 +52,7 @@ object DocLayout {
             "h2{font-size:15px;margin:18px 0 6px}" +
             ".ffix .frule{border-top:1px solid #222;margin-bottom:5px}" +
             ".ffix .frow{display:flex;justify-content:space-between;font-size:10px;color:#222}" +
+            ".phrow{break-before:page;page-break-before:always}" +
             "@media screen{.ffix{margin-top:14px}.fspace{display:none}}" +
             "@media print{.ffix{position:fixed;left:0;right:0;bottom:0;background:#fff}.fspace{height:15mm}}" +
             Signature.CSS
@@ -152,9 +153,10 @@ object DocLayout {
         sb.append("<tbody><tr><td><div class='fin'><div>")
         sb.append(top).append("<div class='main'>").append(body).append("</div></div>")
         sb.append("<div class='bot'>").append(bottom).append("</div>")
-        sb.append("</div></td></tr></tbody></table>")
-        // after — дополнительные листы после документа (например, фото в PDF для Диска; при печати не используется)
-        sb.append(after)
+        sb.append("</div></td></tr>")
+        // after — дополнительные листы (фото) внутри той же таблицы: шапка и поле под подвал повторяются и на них
+        if (after.isNotBlank()) sb.append("<tr class='phrow'><td>").append(after).append("</td></tr>")
+        sb.append("</tbody></table>")
         sb.append(footer())
         sb.append("</body></html>")
         return sb.toString()

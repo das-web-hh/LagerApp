@@ -84,13 +84,13 @@ suspend fun bwPhotosFor(ctx: Context, code: String): List<String> = withContext(
 suspend fun bwPhotosHtml(ctx: Context, names: List<String>): String = withContext(Dispatchers.IO) {
     if (names.isEmpty()) return@withContext ""
     val sb = StringBuilder()
-    // второй лист: маленькие фото 3×4 см (вертикальный кадр, края обрезаются по рамке)
-    sb.append("<style>.phs{page-break-before:always}.ph{display:inline-block;width:30mm;height:40mm;vertical-align:top;margin:0 3mm 3mm 0;page-break-inside:avoid;overflow:hidden}.ph img{width:100%;height:100%;object-fit:cover;display:block}</style>")
-    sb.append("<div class='phs'><h2>Fotos / Фото (${names.size})</h2>")
+    // второй лист: фото 6×8 см (вертикальный кадр, края обрезаются по рамке); лист начинается с новой страницы за счёт .phrow
+    sb.append("<style>.ph{display:inline-block;width:60mm;height:80mm;vertical-align:top;margin:0 4mm 4mm 0;page-break-inside:avoid;overflow:hidden}.ph img{width:100%;height:100%;object-fit:cover;display:block}</style>")
+    sb.append("<div class='phs'><h2>${DocLayout.esc(trList("photos").joinToString(" / "))}</h2>")
     for (n in names) {
         try {
             val f = Media.load(ctx, n) ?: continue
-            val bmp = Media.thumb(f, 300) ?: continue
+            val bmp = Media.thumb(f, 600) ?: continue
             val bos = java.io.ByteArrayOutputStream()
             bmp.compress(Bitmap.CompressFormat.JPEG, 80, bos)
             val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
@@ -133,7 +133,7 @@ private fun BWarePhotoDialog(onClose: () -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     "Сфотографируйте испорченный товар, до $BW_MAX_PHOTOS фото. " +
-                        "Фото печатаются на втором листе документа (маленькие, 3×4 см) и сохраняются в PDF на Google Диске.",
+                        "Фото печатаются на втором листе документа (6×8 см) и сохраняются в PDF на Google Диске.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(10.dp))
