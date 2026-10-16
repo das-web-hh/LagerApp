@@ -16,7 +16,8 @@ import java.io.File
 import java.util.UUID
 import kotlin.concurrent.thread
 
-data class IncomingFile(val name: String, val path: String)
+/** driveName — имя файла в медиа-папке, если накладную уже поставили в очередь на Google Диск при сканировании (повторно не грузим). */
+data class IncomingFile(val name: String, val path: String, val driveName: String = "")
 
 /** Файлы, пришедшие через «Поделиться» / «Открыть через приложение» / выбор из «Приёма». */
 object Incoming {
@@ -68,7 +69,7 @@ object Incoming {
      * У каждого файла своя папка — два файла с одинаковым именем не затирают друг друга, партии не путаются.
      * startMode == null — спросить способ приёма; "auto"/"name" — сразу создать партию (open — открыть её на экране).
      */
-    fun accept(ctx: Context, uri: Uri, startMode: String? = null, open: Boolean = true) {
+    fun accept(ctx: Context, uri: Uri, startMode: String? = null, open: Boolean = true, driveName: String = "") {
         try {
             val app = ctx.applicationContext
             val name = displayName(app, uri) ?: "file.pdf"
@@ -76,7 +77,7 @@ object Incoming {
             val target = File(dir, name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
             val ins = app.contentResolver.openInputStream(uri) ?: return
             ins.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
-            val f = IncomingFile(name, target.path)
+            val f = IncomingFile(name, target.path, driveName)
             if (startMode == null) pending.add(f) else start(app, f, startMode, open)
         } catch (e: Exception) {
         }

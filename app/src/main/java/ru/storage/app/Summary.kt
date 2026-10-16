@@ -132,7 +132,7 @@ private fun statusOf(l: Line): Status = when {
 private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
 /** full = общий акт (все позиции); иначе только расхождения. null — расхождений нет. Язык(и) — по настройкам печати. */
-private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: Boolean): String? {
+private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: String, full: Boolean): String? {
     val ls = lines(job)
     val short = ls.filter { statusOf(it).kind == 1 }
     val excess = ls.filter { statusOf(it).kind == 2 }
@@ -210,7 +210,31 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("</table>")
         }
     }
-    return DocLayout.page(top, sb.toString(), "<div></div>" + DocLayout.signBlock(receiver, now))
+    return DocLayout.page(top, sb.toString(), "<div></div>" + DocLayout.signBlock(receiver, now), after = itemPhotosHtml(ctx, job))
+}
+
+/** Фото товаров, добавленных вручную: последний лист документа, под каждым фото — название товара (6×8 см). */
+private fun itemPhotosHtml(ctx: Context, job: AutoJob): String {
+    val list = job.items.filter { it.photo.isNotBlank() && it.name.isNotBlank() }
+    if (list.isEmpty()) return ""
+    val sb = StringBuilder()
+    sb.append("<style>.ip{display:inline-block;width:60mm;vertical-align:top;margin:0 4mm 4mm 0;page-break-inside:avoid}.ip .im{width:60mm;height:80mm;overflow:hidden}.ip img{width:100%;height:100%;object-fit:cover;display:block}.ip .cp{font-size:10px;margin-top:2px}</style>")
+    sb.append("<div><h2>").append(esc(trList("photos").joinToString(" / "))).append("</h2>")
+    for (r in list) {
+        try {
+            val f = Media.file(ctx, r.photo)
+            if (!f.exists() || f.length() == 0L) continue
+            val bmp = Media.thumb(f, 600) ?: continue
+            val bos = java.io.ByteArrayOutputStream()
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos)
+            val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            sb.append("<div class='ip'><div class='im'><img src='data:image/jpeg;base64,").append(b64).append("'></div>")
+            sb.append("<div class='cp'>").append(esc(r.name.trim())).append("</div></div>")
+        } catch (e: Exception) {
+        }
+    }
+    sb.append("</div>")
+    return sb.toString()
 }
 
 /** Сверка товаров одной партии: печать (мини-окно), сохранение и список «совпало / не совпало». */
@@ -320,7 +344,7 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
                     OutlinedButton(
                         onClick = {
                             printOpen = false
-                            val html = buildReport(job, f, receiver, false)
+                            val html = buildReport(ctx, job, f, receiver, false)
                             if (html == null) {
                                 Toast.makeText(ctx, "Расхождений нет", Toast.LENGTH_SHORT).show()
                             } else {
@@ -333,7 +357,7 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
                     OutlinedButton(
                         onClick = {
                             printOpen = false
-                            buildReport(job, f, receiver, true)?.let { Printer.print(ctx, jobName, it) }
+                            buildReport(ctx, job, f, receiver, true)?.let { Printer.print(ctx, jobName, it) }
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Всё") }

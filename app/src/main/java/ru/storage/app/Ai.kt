@@ -160,7 +160,9 @@ data class AiItem(
     val qty: String,
     val mark: String = "none",
     val handQty: String = "",
-    val qtyCrossed: Boolean = false
+    val qtyCrossed: Boolean = false,
+    /** Штрих-код (EAN/GTIN) строки, если он напечатан в документе; "" — не найден. */
+    val barcode: String = ""
 )
 /**
  * Электронная почта в названии отправителя не нужна: оставляем только слово между «@» и последней точкой.
@@ -287,7 +289,7 @@ object Ai {
         A warehouse worker has checked the printed lines with a pen (ticks, crosses, strike-throughs, handwritten numbers). Read these pen marks carefully: pen marks are often in blue (or other colored) ink, the printed text is black.
         A mark belongs to the table row it is vertically aligned with (usually drawn in the left margin, left of the position number). Marks of neighbouring rows can touch or overlap: decide for each row separately by where the center of the mark lies, and never give one mark to two rows.
         Extract data from THIS page only and answer with JSON only (no markdown, no comments):
-        {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "...", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
+        {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "...", "barcode": "", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
         Rules:
         - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. NEVER output an e-mail address: if the sender is known only from an e-mail (for example info@papier.com), output just the word between "@" and the last dot, i.e. delete everything up to and including "@" and delete the last "." together with everything after it (info@papier.com -> papier). If it is not on this page, use "none".
         - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"); then use it as order_number and do NOT list that line as an item. If it is not on this page, use "none".
@@ -296,6 +298,7 @@ object Ai {
           Skip lines that are not goods: freight (Frachtkosten, Fracht), pallets and pallet deposits (Euro-Palette, EW Pallets, Leihgebühr, Gutschrift), packaging, totals, weight summaries, table headers, addresses, footers.
         - name: the product name exactly as written (keep the original language). If the name continues on the next line (for example "Nachfüller") or a size line follows (for example "20 kg", "500 ml", "2,5 Lt"), append it to the name. Do not include article number, expiry date (Verfallsdatum) or batch (Charge) in the name.
         - qty: the PRINTED number of delivered units of this line (columns like Stück, Anz., Anzahl, Menge (if a small extra column with 1 or a unit code follows Menge, the quantity is the Menge number) with unit ST / PCE / Sack / Eimer / Dose / Kan / Fla, aktuelle Liefermenge / Liefermenge, Množství, Počet, ks, Aantal, Stuks). Number only. Do not use the weight per unit, total weight (Gesamt in kg), price, article number, batch number, "bestellt" (ordered) or "offen" (open) columns when a delivered piece count exists.
+        - barcode: the EAN / GTIN / barcode number of this line (8 to 14 digits, usually next to labels EAN, GTIN, Barcode, Strichcode) if it is printed on the document; digits only. If the document has no barcode for this line, use an empty string. Do not invent it and do not use the article number, price or batch number.
         - mark: the pen mark that belongs to this line (usually at the left of the line): "check" = a tick (✓, √ or a slash-like tick); "cross" = a hand-drawn X, or the whole line struck through with a pen (goods did not arrive); "none" = no pen mark.
         - qty_crossed: true only if the printed quantity itself is crossed out or marked with an X / correction while the rest of the line is not struck through; otherwise false.
         - hand_qty: if a quantity is handwritten with a pen next to this line or its quantity (for example "9 stk", "15"), give that number only; otherwise "".
@@ -352,7 +355,8 @@ object Ai {
                     "cross", "x" -> "cross"
                     else -> "none"
                 }
-                items.add(AiItem(name, q, mark, hand, it.optBoolean("qty_crossed", false)))
+                val bc = (it.opt("barcode")?.toString() ?: "").filter { ch -> ch.isDigit() }.let { d -> if (d.length in 8..14) d else "" }
+                items.add(AiItem(name, q, mark, hand, it.optBoolean("qty_crossed", false), bc))
             }
         }
         val sender = cleanSenderName(o.optString("sender", "none").trim()).ifBlank { "none" }

@@ -143,6 +143,9 @@ class ItemRow(
     var fact by mutableStateOf("")
     var defect by mutableStateOf("")
 
+    /** Фото товара (имя файла в медиа-папке), снятое при добавлении товара вручную; печатается на последнем листе документа. */
+    var photo by mutableStateOf("")
+
     /** Срок годности (дд.мм.гггг), только «Приём B-Ware»; "" — не указан. */
     var expiry by mutableStateOf("")
 
@@ -511,17 +514,15 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 val attempts = AiCfg.attempts(app).coerceIn(1, 8)
                 // шаблоны накладных поставщиков (из Firebase, не чаще раза в 5 минут)
                 try { InvoiceProfiles.refresh(app) } catch (e: Exception) { }
-                // Этап 1: узнаём только отправителя и номер заказа. Заказ уже принят — остальное не запрашиваем.
-                if (!idDone && !onlyFailed) {
-                    try {
-                        identify(doc, n, attempts)
-                        idDone = true
-                        if (checkOrderEarly()) {
-                            message = if (blocked.isNotBlank()) "Не принято: $blocked" else attachedNote
-                            return@launch
-                        }
-                    } catch (e: Exception) {
-                        // этап 1 — только экономия запросов: если не вышло, читаем документ целиком, как раньше
+                // Единственная защита от повторов — тот же самый файл (по содержимому): его второй раз в ИИ не отправляем.
+                // Другой файл с тем же номером заказа (продолжение, повторный снимок) распознаётся и принимается как обычно.
+                if (!onlyFailed && !saved) {
+                    val h = withContext(Dispatchers.IO) { docHash() }
+                    val dup = try { Cloud.findDuplicate(ProductDb.get(app), "", "", "", h) } catch (e: Exception) { null }
+                    if (dup != null) {
+                        blocked = "этот файл уже принят ${fmtTime(dup.receipt.receivedAt)} — повторно не отправляю на распознавание"
+                        message = "Не принято: $blocked"
+                        return@launch
                     }
                 }
                 var rules = ""
@@ -596,10 +597,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 message = if (failed == 0) "Готово: распознано листов — $n"
                 else "Не распознано листов: $failed из $n"
                 // Проверка накладной: не относится ли документ к уже принятому приёму (заказ / отправитель + товары / дата + товары)
-                var attached = false
-                if (failed == 0) {
-                    attached = try { resolveExisting() } catch (e: Exception) { false }
-                }
+                // Привязка к «такому же» заказу или по составу товаров отключена: продолжение заказа принимается как новый файл
+                val attached = false
                 if (!attached) {
                     try {
                         parseNewProducts()
@@ -638,7 +637,10 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         }
     }
 
-    private fun rowFor(it: AiItem): ItemRow {
+    /** Строка списка из ответа ИИ; штрих-код с документа (если он там напечатан) сразу привязывается к строке. */
+    private fun rowFor(it: AiItem): ItemRow = rowFor0(it).also { r -> if (it.barcode.isNotBlank()) r.barcode = it.barcode }
+
+    private fun rowFor0(it: AiItem): ItemRow {
         val printed = cleanQty(it.qty)
         if (nameMode) return ItemRow(it.name, printed)
         val hand = cleanQty(it.handQty)
@@ -705,13 +707,13 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             arr.put(
                 JSONObject().put("n", r.name).put("q", r.qty).put("x", r.extra).put("p", r.productId)
                     .put("s", r.status).put("pr", r.printed).put("f", r.fact).put("d", r.defect)
-                    .put("e", r.expiry).put("b", r.barcode).put("nt", r.note)
+                    .put("e", r.expiry).put("b", r.barcode).put("nt", r.note).put("ph", r.photo)
                     .put("rs", JSONArray(r.reasons.toList()))
             )
         }
         val pg = JSONArray()
         pages.toList().forEach { pg.put(it.ok) }
-        return JSONObject().put("v", 1).put("id", draftId).put("name", file.name).put("path", file.path)
+        return JSONObject().put("v", 1).put("id", draftId).put("name", file.name).put("path", file.path).put("dn", file.driveName)
             .put("nameMode", nameMode).put("step", step).put("sender", sender).put("order", order)
             .put("stamp", stamp).put("pagesOk", pg).put("items", arr).toString()
     }
@@ -745,6 +747,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             r.expiry = j.optString("e")
             r.barcode = j.optString("b")
             r.note = j.optString("nt")
+            r.photo = j.optString("ph")
             j.optJSONArray("rs")?.let { a -> for (k in 0 until a.length()) r.reasons.add(a.getString(k)) }
             list.add(r)
         }
@@ -814,7 +817,7 @@ object AutoReceiveHolder {
                 if (path.isEmpty() || find(path) != null) continue
                 // исходный файл лежит в кэше, систему могла его очистить — тогда берём копию из черновика
                 val use = if (File(path).exists()) path else AutoDraft.copyPath(app, o.optString("id"), o.optString("name")) ?: continue
-                val job = AutoJob(app, IncomingFile(o.optString("name"), use), o.optBoolean("nameMode"))
+                val job = AutoJob(app, IncomingFile(o.optString("name"), use, o.optString("dn")), o.optBoolean("nameMode"))
                 job.applyDraft(o)
                 jobs.add(job)
             } catch (e: Exception) {
@@ -944,7 +947,7 @@ suspend fun saveJob(
         val hash = withContext(Dispatchers.IO) { job.docHash() }
         // Точные признаки — номер заказа, содержимое и имя файла: тот же заказ или документ второй раз не принимаем
         val d2 = try {
-            Cloud.findDuplicate(db, if (order != "none") order else "", f.name, "", hash)
+            Cloud.findDuplicate(db, "", "", "", hash)
         } catch (e: Exception) {
             null
         }
@@ -975,7 +978,7 @@ suspend fun saveJob(
                 db.findByBarcode(code)?.takeIf { it.id != pid }?.let { Cloud.saveProduct(db, it.copy(barcode = "")) }
                 Cloud.saveProduct(db, p.copy(barcode = code))
             }
-            val inv = Media.importFile(ctx, File(f.path), db, "IN")
+            val inv = f.driveName.ifBlank { null } ?: Media.importFile(ctx, File(f.path), db, "IN")
             val r = Receipt(
                 id = UUID.randomUUID().toString(),
                 sender = sender,
@@ -983,7 +986,7 @@ suspend fun saveJob(
                 receivedAt = at,
                 receiver = receiver,
                 items = rows,
-                photos = emptyList(),
+                photos = job.items.map { it.photo }.filter { it.isNotBlank() }.distinct(),
                 invoices = listOfNotNull(inv),
                 updatedAt = now,
                 fileName = f.name,
@@ -1300,10 +1303,14 @@ private fun AddItemDialog(
     initialPid: String = "",
     barcode: String = "",
     onDismiss: () -> Unit,
-    onAdd: (String, String) -> Unit
+    onAdd: (String, String, String) -> Unit
 ) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
+    var photo by remember { mutableStateOf("") }
+    var added by remember { mutableStateOf(false) }
+    // закрыли окно без добавления — снятое фото не нужно
+    DisposableEffect(Unit) { onDispose { if (!added && photo.isNotEmpty()) Media.discard(ctx, db, listOf(photo)) } }
     var name by remember { mutableStateOf(initialName) }
     var pid by remember { mutableStateOf(initialPid) }
     var sugg by remember { mutableStateOf(emptyList<Product>()) }
@@ -1346,10 +1353,23 @@ private fun AddItemDialog(
                     )
                     HorizontalDivider()
                 }
+                Spacer(Modifier.height(10.dp))
+                Text("Фото товара (печатается на последнем листе документа)", style = MaterialTheme.typography.bodySmall)
+                if (photo.isEmpty()) {
+                    MediaButtons(kind = "RC", allowFile = false) { n ->
+                        photo = n
+                        Media.uploadPending(ctx, db)
+                    }
+                } else {
+                    PhotoGrid(listOf(photo)) { n ->
+                        Media.discard(ctx, db, listOf(n))
+                        photo = ""
+                    }
+                }
             }
         },
         confirmButton = {
-            Button(enabled = name.isNotBlank(), onClick = { onAdd(name.trim(), pid) }) { Text("Добавить") }
+            Button(enabled = name.isNotBlank(), onClick = { added = true; onAdd(name.trim(), pid, photo) }) { Text("Добавить") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
     )
@@ -1622,8 +1642,8 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             initialPid = pf?.second ?: "",
             barcode = pf?.third ?: "",
             onDismiss = { showAdd = false; addPrefill = null },
-            onAdd = { name, pid ->
-                job.items.add(ItemRow(name, "0", extra = true, productId = pid).also { it.barcode = pf?.third ?: "" })
+            onAdd = { name, pid, photo ->
+                job.items.add(ItemRow(name, "0", extra = true, productId = pid).also { it.barcode = pf?.third ?: ""; it.photo = photo })
                 addTick++
                 showAdd = false
                 addPrefill = null

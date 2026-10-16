@@ -372,7 +372,13 @@ fun NameReceiveHub(onBack: () -> Unit) {
     val scanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
             val pdf = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
-            if (pdf != null) thread { Incoming.accept(ctx, pdf, "name", open = true) }
+            if (pdf != null) thread {
+                // скан сразу ставится в очередь на Google Диск (нет сети — уйдёт, как только она появится)
+                val db = ProductDb.get(ctx)
+                val inv = Media.importUri(ctx, pdf, db, "IN")
+                Media.uploadPending(ctx, db)
+                Incoming.accept(ctx, pdf, "name", open = true, driveName = inv ?: "")
+            }
         }
     }
 
@@ -399,7 +405,7 @@ fun NameReceiveHub(onBack: () -> Unit) {
                     if (act == null) return@FilledTonalButton
                     val opts = GmsDocumentScannerOptions.Builder()
                         .setGalleryImportAllowed(false)
-                        .setPageLimit(10)
+                        .setPageLimit(30)
                         .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
                         .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
                         .build()
