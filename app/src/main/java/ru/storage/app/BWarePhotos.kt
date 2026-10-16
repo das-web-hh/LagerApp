@@ -133,7 +133,7 @@ private fun BWarePhotoDialog(onClose: () -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     "Сфотографируйте испорченный товар, до $BW_MAX_PHOTOS фото. " +
-                        "Фото попадут на второй лист PDF, который сохраняется на Google Диск (маленькие, 3×4 см). На бумаге фото не печатаются.",
+                        "Фото печатаются на втором листе документа (маленькие, 3×4 см) и сохраняются в PDF на Google Диске.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(10.dp))

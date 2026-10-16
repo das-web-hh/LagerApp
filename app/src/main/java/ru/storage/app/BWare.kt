@@ -192,19 +192,17 @@ private fun bwToast(ctx: Context, text: String) {
 }
 
 /**
- * Кнопка «Печать»: на принтер уходит документ БЕЗ фото; в фоне тот же документ с фото на втором листе
- * (маленькие, 3×4 см) сохраняется PDF-файлом на Google Диск — обычной закрытой загрузкой, без публичной ссылки и без QR-кода.
+ * Кнопка «Печать»: на принтер уходит документ с фото на втором листе (маленькие, 3×4 см); в фоне тот же документ сохраняется PDF-файлом на Google Диск — обычной закрытой загрузкой, без публичной ссылки и без QR-кода.
  */
 private suspend fun bwPrintAndSave(ctx: Context, jobName: String, receiver: String, stamp: Long) {
     val h = BWareHolder
     val app = ctx.applicationContext
     val code = h.ensureCode()
     val driveOn = DriveCfg.ready(app)
-    // оба документа собираются сейчас, пока приём не очищен
-    val printHtml = bwareHtml(receiver, stamp)
-    val driveHtml = if (driveOn) bwareHtml(receiver, stamp, bwPhotosHtml(app, h.photos.toList())) else ""
+    // документ с фото на втором листе (3×4 см): один и тот же и для печати, и для PDF на Диске
+    val html = bwareHtml(receiver, stamp, bwPhotosHtml(app, h.photos.toList()))
 
-    Printer.print(ctx, jobName, printHtml)
+    Printer.print(ctx, jobName, html)
 
     if (!driveOn) {
         bwToast(app, "На Диск не сохранено: Google Диск не настроен (Профиль → Настройки)")
@@ -212,7 +210,7 @@ private suspend fun bwPrintAndSave(ctx: Context, jobName: String, receiver: Stri
     }
     bwBg.launch {
         try {
-            val pdf = HtmlPdf.render(app, driveHtml) ?: throw RuntimeException("не удалось создать PDF")
+            val pdf = HtmlPdf.render(app, html) ?: throw RuntimeException("не удалось создать PDF")
             val name = "BWDOC-$code.pdf"
             // повторная печать того же приёма заменяет прежний файл
             try { DriveApi.delete(app, name) } catch (e: Exception) { }
