@@ -17,9 +17,9 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 object DocLayout {
 
     const val CSS =
-        "@page{margin:12mm}" +
+        "@page{margin:15mm}" +
             "*{box-sizing:border-box}" +
-            "body{font-family:sans-serif;font-size:12px;color:#111;margin:0;padding:0}" +
+            "body{font-family:sans-serif;font-size:12px;color:#111;margin:0;padding:0 4mm}" +
             "table.frame{width:100%;border-collapse:collapse}" +
             "table.frame>thead>tr>td,table.frame>tbody>tr>td,table.frame>tfoot>tr>td{padding:0;border:none}" +
             ".dh{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}" +
@@ -35,7 +35,7 @@ object DocLayout {
             ".t1s{font-size:13px;font-weight:bold;color:#444;text-transform:uppercase;margin-top:6px}" +
             ".t2{font-size:16px;font-weight:bold}.t2s{font-size:12px;font-weight:bold;color:#444}" +
             ".t3{font-size:14px;font-weight:bold;margin-top:8px}" +
-            ".fin{display:flex;flex-direction:column;justify-content:space-between;min-height:232mm}" +
+            ".fin{display:flex;flex-direction:column;justify-content:space-between;min-height:218mm}" +
             ".main{padding-top:26px}" +
             ".bot{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-top:30px}" +
             ".qrb{display:flex;align-items:center;gap:10px;font-size:11px;color:#222}" +
@@ -98,7 +98,7 @@ object DocLayout {
         "<div class='top'>$infoHtml<div class='tt'>$titleHtml</div></div>"
 
     /** QR-код как векторная картинка (SVG): печатается чётко и не требует картинок на диске. */
-    fun qrSvg(text: String, size: Int = 74): String = try {
+    fun qrSvg(text: String, size: Int = 110): String = try {
         val hints = mapOf<EncodeHintType, Any>(
             EncodeHintType.MARGIN to 0,
             EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M
@@ -142,7 +142,7 @@ object DocLayout {
      * Готовая страница. top — верхний блок (значения слева, название справа), body — таблицы,
      * bottom — QR и подпись (прижимается к низу листа).
      */
-    fun page(top: String, body: String, bottom: String, extraCss: String = ""): String {
+    fun page(top: String, body: String, bottom: String, extraCss: String = "", after: String = ""): String {
         val sb = StringBuilder()
         sb.append("<html><head><meta charset='utf-8'><style>")
             .append(CSS).append(pageNumberCss()).append(extraCss).append("</style></head><body>")
@@ -153,6 +153,8 @@ object DocLayout {
         sb.append(top).append("<div class='main'>").append(body).append("</div></div>")
         sb.append("<div class='bot'>").append(bottom).append("</div>")
         sb.append("</div></td></tr></tbody></table>")
+        // after — дополнительные листы после документа (например, фото в PDF для Диска; при печати не используется)
+        sb.append(after)
         sb.append(footer())
         sb.append("</body></html>")
         return sb.toString()

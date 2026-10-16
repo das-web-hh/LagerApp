@@ -1,5 +1,6 @@
 package ru.storage.app
 
+import android.content.Context
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -30,7 +31,10 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -57,6 +61,10 @@ object BWareHolder {
     /** Имена файлов фото испорченного товара этого приёма (до BW_MAX_PHOTOS). */
     val photos = mutableStateListOf<String>()
 
+    /** PDF этого приёма на Google Диске: id файла и ссылка из QR-кода (создаются при первой печати). */
+    var pdfId by mutableStateOf("")
+    var pdfUrl by mutableStateOf("")
+
     fun ensureCode(): String {
         if (code.isBlank()) code = newBwCode()
         return code
@@ -70,6 +78,8 @@ object BWareHolder {
         trailer = ""
         rows.clear()
         photos.clear()
+        pdfId = ""
+        pdfUrl = ""
         code = ""
         step = 0
     }
@@ -149,7 +159,7 @@ internal const val BW_CSS =
 internal const val DRIVER_SIGNED_DE = "Der Fahrer hat den Lieferschein unterschrieben"
 
 /** HTML документа приёма для предпросмотра и печати. Язык(и) и автоподпись — по настройкам печати. */
-private fun bwareHtml(receiver: String, now: Long): String {
+private fun bwareHtml(receiver: String, now: Long, qrPayload: String, photosHtml: String = ""): String {
     val h = BWareHolder
     // слева — только значения, как в образце; пустое значение — «–»
     val info = DocLayout.info(
@@ -174,9 +184,61 @@ private fun bwareHtml(receiver: String, now: Long): String {
         sb.append("<td>${bwEsc(bwDash(r.expiry))}</td><td>${bwDetailsHtml(r, BWareDetails.groups)}</td></tr>")
     }
     sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
-    val qr = if (h.code.isBlank()) "" else DocLayout.qrBlock(BW_QR_PREFIX + h.code)
+    val qr = if (qrPayload.isBlank()) "" else DocLayout.qrBlock(qrPayload)
     val bottom = (if (qr.isEmpty()) "<div></div>" else qr) + DocLayout.signBlock(receiver, now)
-    return DocLayout.page(top, sb.toString(), bottom)
+    return DocLayout.page(top, sb.toString(), bottom, after = photosHtml)
+}
+
+private val bwBg = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+private fun bwToast(ctx: Context, text: String) {
+    android.os.Handler(android.os.Looper.getMainLooper()).post {
+        Toast.makeText(ctx.applicationContext, text, Toast.LENGTH_LONG).show()
+    }
+}
+
+/**
+ * Кнопка «Печать»: 1) на Диске резервируется PDF со ссылкой «по ссылке», она идёт в QR-код;
+ * 2) на печать уходит документ БЕЗ фото; 3) в фоне тот же документ + фото одним PDF заменяет заготовку на Диске.
+ * Если Диск не настроен или недоступен — документ всё равно печатается (QR по старой схеме, внутри приложения).
+ */
+private suspend fun bwPrintAndSave(ctx: Context, jobName: String, receiver: String, stamp: Long) {
+    val h = BWareHolder
+    val app = ctx.applicationContext
+    val code = h.ensureCode()
+    var driveError = ""
+    if (!DriveCfg.ready(app)) {
+        driveError = "Google Диск не настроен (Профиль → Настройки)"
+    } else if (h.pdfId.isBlank()) {
+        try {
+            val slot = withContext(Dispatchers.IO) { DriveApi.reservePdf(app, "BWDOC-$code.pdf") }
+            h.pdfId = slot.id
+            h.pdfUrl = slot.downloadUrl
+        } catch (e: Exception) {
+            driveError = e.message ?: e.javaClass.simpleName
+        }
+    }
+    val driveId = h.pdfId
+    val qr = h.pdfUrl.ifBlank { BW_QR_PREFIX + code }
+    // оба документа собираются сейчас, пока приём не очищен: печать — без фото, PDF для Диска — с фото
+    val printHtml = bwareHtml(receiver, stamp, qr)
+    val driveHtml = if (driveId.isNotBlank()) bwareHtml(receiver, stamp, qr, bwPhotosHtml(app, h.photos.toList())) else ""
+
+    Printer.print(ctx, jobName, printHtml)
+
+    if (driveId.isBlank()) {
+        bwToast(app, "На Диск не сохранено: $driveError")
+        return
+    }
+    bwBg.launch {
+        try {
+            val pdf = HtmlPdf.render(app, driveHtml) ?: throw RuntimeException("не удалось создать PDF")
+            withContext(Dispatchers.IO) { DriveApi.finalizePdf(app, driveId, pdf) }
+            bwToast(app, "PDF с фото сохранён на Google Диск")
+        } catch (e: Exception) {
+            bwToast(app, "На Диск не сохранено: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
 }
 
 /** Невысокое поле ввода без рамки: подсказка внутри, заглавные буквы для номеров. */
@@ -505,8 +567,11 @@ private fun BWarePreview(receiver: String) {
     val h = BWareHolder
     val ctx = LocalContext.current
     val stamp = remember { System.currentTimeMillis() }
-    val html = bwareHtml(receiver, stamp)
+    // в предпросмотре QR того же размера; настоящая ссылка на PDF создаётся при нажатии «Печать»
+    val html = bwareHtml(receiver, stamp, h.pdfUrl.ifBlank { BW_QR_PREFIX + h.ensureCode() })
     var clearOpen by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(Modifier.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -516,13 +581,21 @@ private fun BWarePreview(receiver: String) {
         HtmlPreview(html, Modifier.weight(1f).fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         Button(
+            enabled = !busy,
             onClick = {
                 val name = "BWare_" + (h.order.ifBlank { h.sender }.ifBlank { "приём" })
                     .replace(Regex("[^\\p{L}\\p{N}_-]+"), "_")
-                Printer.print(ctx, name, html)
+                busy = true
+                scope.launch {
+                    try {
+                        bwPrintAndSave(ctx, name, receiver, stamp)
+                    } finally {
+                        busy = false
+                    }
+                }
             },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("🖨 Печать") }
+        ) { Text(if (busy) "Подготовка…" else "🖨 Печать и сохранить на Диск") }
         TextButton(onClick = { clearOpen = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Закончить и очистить")
         }
