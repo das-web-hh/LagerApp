@@ -75,7 +75,7 @@ import kotlin.math.roundToInt
 
 private val ROW_H = 76.dp
 /** Приём по имени: компактная строка в одну линию (было 114 dp). Единственное число — меняется здесь. */
-private val ROW_H_BIG = 40.dp
+private val ROW_H_BIG = 80.dp
 private val DIGIT_H = 46.dp
 private const val CYCLE_BASE = 1_000_000
 
@@ -551,7 +551,7 @@ private fun WheelRow(
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
-    val btnW = if (bigText) 64.dp else 76.dp
+    val btnW = 76.dp
     val btnCount = if (onEan != null) 3 else 2
     val maxPx = with(density) { (btnW * btnCount).toPx() }
     val rightPx = with(density) { 96.dp.toPx() }
@@ -717,10 +717,10 @@ private fun WheelRow(
             Column(Modifier.weight(1f)) {
                 Text(
                     row.name.ifBlank { "—" },
-                    maxLines = if (bigText) 1 else 2,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    fontSize = if (bigText) 14.sp else 15.sp,
-                    lineHeight = if (bigText) 16.sp else 18.sp,
+                    fontSize = if (bigText) 16.sp else 15.sp,
+                    lineHeight = if (bigText) 19.sp else 18.sp,
                     fontWeight = FontWeight.Medium
                 )
                 if (bware) {
@@ -738,15 +738,15 @@ private fun WheelRow(
                         if (defD > 0) add("брак ${fmtQ(defD)}")
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")
-                    if (sub.isNotEmpty()) Text(sub, fontSize = if (bigText) 10.sp else 12.sp, lineHeight = if (bigText) 12.sp else 14.sp, maxLines = 1, color = scheme.onSurfaceVariant)
+                    if (sub.isNotEmpty()) Text(sub, fontSize = if (bigText) 11.sp else 12.sp, lineHeight = if (bigText) 13.sp else 14.sp, maxLines = 1, color = scheme.onSurfaceVariant)
                 }
             }
             // план — рядом с фактическим количеством
             if (bigText && !bware && !row.extra) {
                 Text(
                     "план ${fmtQ(planD)}",
-                    fontSize = 11.sp, maxLines = 1, color = scheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 6.dp)
+                    fontSize = 13.sp, maxLines = 1, color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 8.dp)
                 )
             }
             // количество — справа; тап по числу открывает барабан цифр
@@ -755,12 +755,12 @@ private fun WheelRow(
                     .clip(RoundedCornerShape(if (bigText) 8.dp else 12.dp))
                     .background(scheme.surface)
                     .clickable(enabled = canEdit) { onPickFact() }
-                    .padding(horizontal = if (bigText) 8.dp else 10.dp, vertical = if (bigText) 1.dp else 8.dp),
+                    .padding(horizontal = if (bigText) 8.dp else 10.dp, vertical = if (bigText) 6.dp else 8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     fmtQ(factD),
-                    fontSize = if (bigText) 20.sp else 22.sp,
+                    fontSize = if (bigText) 26.sp else 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = when {
                         row.fact.isBlank() -> scheme.onSurfaceVariant

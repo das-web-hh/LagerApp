@@ -167,8 +167,8 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        name,
-                                        fontSize = if (sel) 17.sp else 14.sp,
+                                        "%02d %s".format(i + 1, name),
+                                        fontSize = if (sel) 16.sp else 13.sp,
                                         fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
                                         color = if (sel) MaterialTheme.colorScheme.onPrimaryContainer
                                         else MaterialTheme.colorScheme.onSurfaceVariant,
