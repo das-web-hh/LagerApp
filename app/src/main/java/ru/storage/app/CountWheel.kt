@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,8 +74,8 @@ import kotlin.math.roundToInt
  */
 
 private val ROW_H = 76.dp
-/** Приём по имени: строка в 1,5 раза выше обычной. */
-private val ROW_H_BIG = 114.dp
+/** Приём по имени: компактная строка в одну линию (было 114 dp). Единственное число — меняется здесь. */
+private val ROW_H_BIG = 40.dp
 private val DIGIT_H = 46.dp
 private const val CYCLE_BASE = 1_000_000
 
@@ -304,8 +305,10 @@ fun CountWheelList(
     nameMode: Boolean = false,
     /** кнопка сканера рядом с «+»: найти товар по штрих-коду */
     onScan: (() -> Unit)? = null,
-    /** круглая плавающая кнопка сканера: привязать штрих-код к выбранной (средней) строке */
+    /** кнопка «EAN» в свайпе строки влево: отсканировать штрих-код и привязать его к этой строке */
     onScanBind: ((ItemRow) -> Unit)? = null,
+    /** true — круглая плавающая кнопка сканера; работает так же, как сканер в поле поиска (onScan) */
+    scanFab: Boolean = false,
     /** поставить эту строку на середину при росте jumpTick */
     jumpTo: ItemRow? = null,
     jumpTick: Int = 0,
@@ -313,7 +316,7 @@ fun CountWheelList(
     searchText: String = "",
     searchTick: Int = 0
 ) {
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     var picking by remember { mutableStateOf<Pair<ItemRow, Boolean>?>(null) } // true — факт, false — брак
     var editing by remember { mutableStateOf<ItemRow?>(null) }
     var expiryRow by remember { mutableStateOf<ItemRow?>(null) }
@@ -401,7 +404,8 @@ fun CountWheelList(
                             onPickFact = { picking = row to true },
                             onPickDefect = { picking = row to false },
                             onEdit = { editing = row },
-                            onDelete = { rows.remove(row) }
+                            onDelete = { rows.remove(row) },
+                            onEan = onScanBind?.let { cb -> { cb(row) } }
                         )
                     }
                 }
@@ -479,7 +483,8 @@ fun CountWheelList(
                                     onPickFact = { picking = row to true },
                                     onPickDefect = { picking = row to false },
                                     onEdit = { editing = row },
-                                    onDelete = { rows.remove(row) }
+                                    onDelete = { rows.remove(row) },
+                                    onEan = onScanBind?.let { cb -> { cb(row) } }
                                 )
                             }
                         }
@@ -492,8 +497,8 @@ fun CountWheelList(
                     maxH = if (bigRows) 96.dp else 280.dp
                 )
             }
-            if (onScanBind != null && editable && n > 0 && !plain) {
-                ScanFab { memo[0]?.let(onScanBind) }
+            if (scanFab && onScan != null && editable && n > 0 && !plain) {
+                ScanFab { onScan() }
             }
             CountOverlay()
         }
@@ -541,12 +546,14 @@ private fun WheelRow(
     onPickFact: () -> Unit,
     onPickDefect: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onEan: (() -> Unit)? = null
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
-    val btnW = 76.dp
-    val maxPx = with(density) { (btnW * 2).toPx() }
+    val btnW = if (bigText) 64.dp else 76.dp
+    val btnCount = if (onEan != null) 3 else 2
+    val maxPx = with(density) { (btnW * btnCount).toPx() }
     val rightPx = with(density) { 96.dp.toPx() }
     val anim = remember(row) { Animatable(0f) }
     val blink = remember(row) { Animatable(0f) }
@@ -603,7 +610,7 @@ private fun WheelRow(
         Row(
             Modifier.align(Alignment.CenterEnd)
                 .fillMaxHeight()
-                .width(btnW * 2)
+                .width(btnW * btnCount)
                 .clip(RoundedCornerShape(14.dp))
         ) {
             Box(
@@ -623,6 +630,25 @@ private fun WheelRow(
                     fontWeight = FontWeight.Bold,
                     color = scheme.onSecondaryContainer
                 )
+            }
+            if (onEan != null) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight()
+                        .background(scheme.tertiaryContainer)
+                        .clickable(enabled = canEdit) {
+                            scope.launch { anim.animateTo(0f) }
+                            onEan()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        if (row.barcode.isBlank()) "EAN" else "EAN\n✓",
+                        textAlign = TextAlign.Center,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onTertiaryContainer
+                    )
+                }
             }
             Box(
                 Modifier.weight(1f).fillMaxHeight()
@@ -691,10 +717,10 @@ private fun WheelRow(
             Column(Modifier.weight(1f)) {
                 Text(
                     row.name.ifBlank { "—" },
-                    maxLines = 2,
+                    maxLines = if (bigText) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
-                    fontSize = if (bigText) 17.sp else 15.sp,
-                    lineHeight = if (bigText) 21.sp else 18.sp,
+                    fontSize = if (bigText) 14.sp else 15.sp,
+                    lineHeight = if (bigText) 16.sp else 18.sp,
                     fontWeight = FontWeight.Medium
                 )
                 if (bware) {
@@ -707,25 +733,34 @@ private fun WheelRow(
                     )
                 } else {
                     val sub = buildList {
-                        if (row.extra) { if (extraLabel.isNotEmpty()) add(extraLabel) } else add("план ${fmtQ(planD)}")
+                        // в компактной строке план стоит рядом с фактом, а не под названием
+                        if (row.extra) { if (extraLabel.isNotEmpty()) add(extraLabel) } else if (!bigText) add("план ${fmtQ(planD)}")
                         if (defD > 0) add("брак ${fmtQ(defD)}")
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")
-                    Text(sub, fontSize = 12.sp, maxLines = 1, color = scheme.onSurfaceVariant)
+                    if (sub.isNotEmpty()) Text(sub, fontSize = if (bigText) 10.sp else 12.sp, lineHeight = if (bigText) 12.sp else 14.sp, maxLines = 1, color = scheme.onSurfaceVariant)
                 }
+            }
+            // план — рядом с фактическим количеством
+            if (bigText && !bware && !row.extra) {
+                Text(
+                    "план ${fmtQ(planD)}",
+                    fontSize = 11.sp, maxLines = 1, color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 6.dp)
+                )
             }
             // количество — справа; тап по числу открывает барабан цифр
             Box(
-                Modifier.defaultMinSize(minWidth = 56.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                Modifier.defaultMinSize(minWidth = if (bigText) 44.dp else 56.dp)
+                    .clip(RoundedCornerShape(if (bigText) 8.dp else 12.dp))
                     .background(scheme.surface)
                     .clickable(enabled = canEdit) { onPickFact() }
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = if (bigText) 8.dp else 10.dp, vertical = if (bigText) 1.dp else 8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     fmtQ(factD),
-                    fontSize = if (bigText) 28.sp else 22.sp,
+                    fontSize = if (bigText) 20.sp else 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = when {
                         row.fact.isBlank() -> scheme.onSurfaceVariant

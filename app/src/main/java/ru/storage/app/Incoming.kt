@@ -26,6 +26,20 @@ object Incoming {
     /** Партия, открытая на экране сейчас. null — обычный интерфейс; все партии при этом продолжают жить в AutoReceiveHolder. */
     var openPath by mutableStateOf<String?>(null)
 
+    /** Запомнить открытую партию на телефоне: после сворачивания и выгрузки из памяти приложение откроется на ней же. */
+    fun persistOpen(ctx: Context) {
+        ctx.applicationContext.getSharedPreferences("open_batch", Context.MODE_PRIVATE)
+            .edit().putString("path", openPath ?: "").apply()
+    }
+
+    /** Вернуть открытую партию после запуска (партии уже восстановлены из черновиков). */
+    fun restoreOpen(ctx: Context) {
+        if (openPath != null) return
+        val p = ctx.applicationContext.getSharedPreferences("open_batch", Context.MODE_PRIVATE)
+            .getString("path", "") ?: ""
+        if (p.isNotEmpty() && AutoReceiveHolder.find(p) != null) openPath = p
+    }
+
     /** Создать партию (или вернуться к уже существующей) и, если open, открыть её. */
     fun start(ctx: Context, f: IncomingFile, mode: String, open: Boolean = true) {
         pending.remove(f)

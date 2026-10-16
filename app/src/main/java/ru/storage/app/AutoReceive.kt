@@ -15,6 +15,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -1108,8 +1110,9 @@ private fun ColumnScope.NameModeMain(
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     val scope = rememberCoroutineScope()
-    var scanFor by remember { mutableStateOf<String?>(null) } // "search" — найти товар по коду, "bind" — привязать код к выбранной строке
-    var bindRow by remember { mutableStateOf<ItemRow?>(null) }
+    // сканер переживает сворачивание и пересоздание экрана: состояние хранится в rememberSaveable
+    var scanFor by rememberSaveable { mutableStateOf<String?>(null) } // "search" — найти товар по коду, "bind" — привязать код к строке
+    var bindIdx by rememberSaveable { mutableIntStateOf(-1) }
     var jumpTo by remember { mutableStateOf<ItemRow?>(null) }
     var jumpTick by remember { mutableIntStateOf(0) }
     var searchText by remember { mutableStateOf("") }
@@ -1173,17 +1176,21 @@ private fun ColumnScope.NameModeMain(
     val senderText = job.sender.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
     val orderText = job.order.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
 
-    // отправитель и заказ — только значения, без подписей; тап открывает правку
-    Text(
-        senderText, style = MaterialTheme.typography.titleMedium,
-        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        modifier = Modifier.fillMaxWidth().clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp)
-    )
+    // 1-я строка: отправитель слева, номер заказа справа (над «Далее»); 2-я строка: «Далее» справа. Тап по тексту открывает правку
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            orderText, style = MaterialTheme.typography.titleMedium, maxLines = 1,
+            senderText, style = MaterialTheme.typography.titleMedium,
+            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp)
         )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            orderText, style = MaterialTheme.typography.titleMedium, maxLines = 1,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp)
+        )
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
         if (job.failedState) {
             Button(onClick = { retryDlg = true }) { Text("Повторить") }
         } else {
@@ -1213,7 +1220,8 @@ private fun ColumnScope.NameModeMain(
         if (job.running) "" else "Список пуст",
         nameMode = true,
         onScan = { scanFor = "search" },
-        onScanBind = { r -> bindRow = r; scanFor = "bind" },
+        scanFab = true,
+        onScanBind = { r -> bindIdx = job.items.indexOf(r); scanFor = "bind" },
         jumpTo = jumpTo, jumpTick = jumpTick,
         searchText = searchText, searchTick = searchTick
     )
@@ -1230,7 +1238,7 @@ private fun ColumnScope.NameModeMain(
                         val code = raw.trim()
                         scanFor = null
                         if (code.isNotEmpty()) {
-                            if (mode == "bind") bindRow?.let { bindCode(it, code) } else findByCode(code)
+                            if (mode == "bind") job.items.getOrNull(bindIdx)?.let { bindCode(it, code) } else findByCode(code)
                         }
                     },
                     onClose = { scanFor = null }
@@ -1347,6 +1355,11 @@ private fun AddItemDialog(
     )
 }
 
+/** Открыта ли экранная клавиатура (в «Приёме по имени»): по ней нижнее меню прячется под клавиатуру и не поднимается над ней. */
+object KeyboardState {
+    var open by mutableStateOf(false)
+}
+
 /**
  * mode = "auto" — автоприём (сохранение сразу после распознавания);
  * mode = "name" — приём по имени: распознанное количество = план, факт и брак вводятся вручную,
@@ -1362,10 +1375,23 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
 
     // «Приём по имени»: при наборе в поиске окно уменьшается над клавиатурой, а не уезжает под неё
     if (nameMode) {
+        val rootView = LocalView.current
         DisposableEffect(Unit) {
             val w = ctx.findFragmentActivity()?.window
             w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-            onDispose { w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN) }
+            // клавиатура открыта, если видимая часть окна заметно ниже полной высоты
+            val rect = android.graphics.Rect()
+            val l = android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                rootView.getWindowVisibleDisplayFrame(rect)
+                val full = rootView.rootView.height
+                KeyboardState.open = full > 0 && (full - rect.bottom) > full * 0.15f
+            }
+            rootView.viewTreeObserver.addOnGlobalLayoutListener(l)
+            onDispose {
+                rootView.viewTreeObserver.removeOnGlobalLayoutListener(l)
+                KeyboardState.open = false
+                w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
+            }
         }
     }
 
@@ -1408,7 +1434,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     val showMain = ready && checked && (dup == null || forced)
     Column(
         Modifier.fillMaxSize()
-            .then(if (nameMode) Modifier.imePadding() else Modifier.verticalScroll(rememberScrollState()))
+            .then(if (nameMode) Modifier else Modifier.verticalScroll(rememberScrollState()))
             .padding(if (nameMode && showMain) 10.dp else 16.dp)
     ) {
         if (!nameMode || !showMain) {

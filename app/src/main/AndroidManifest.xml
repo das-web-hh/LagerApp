@@ -45,6 +45,7 @@
             android:name=".MainActivity"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustPan"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|locale|layoutDirection|fontScale|density"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

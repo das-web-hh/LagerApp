@@ -51,6 +51,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : FragmentActivity() {
     override fun onStop() {
         // приложение уходит в фон (звонок, другое приложение, клавиатура другого окна): черновики сразу на диск
+        Incoming.persistOpen(applicationContext)
         kotlin.concurrent.thread { AutoReceiveHolder.flushDrafts() }
         super.onStop()
     }
@@ -59,6 +60,8 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         // списки «Приём по имени» / «Автоприём», которые не успели сохранить, возвращаются с телефона
         try { AutoReceiveHolder.restore(applicationContext) } catch (e: Exception) { }
+        // открытая партия возвращается на экран, даже если систему выгрузила приложение из памяти
+        try { Incoming.restoreOpen(applicationContext) } catch (e: Exception) { }
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
         Nav.target = intent?.getStringExtra("open")
         Journal.init(applicationContext)
@@ -345,9 +348,11 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
         }
     }
 
+    // «Приём по имени»: при наборе меню остаётся на месте — его закрывает клавиатура, а не поднимает над ней
+    val hideBar = KeyboardState.open && Incoming.openPath != null
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            if (!hideBar) NavigationBar {
                 tabs.forEachIndexed { i, tab ->
                     NavigationBarItem(
                         selected = selected == i,

@@ -16,7 +16,7 @@ android {
         // versionCode = минуты с 1970 года: каждая следующая сборка всегда новее предыдущей
         // (даже если репозиторий создан заново и счётчик запусков GitHub начался с 1)
         versionCode = (System.currentTimeMillis() / 60000L).toInt()
-        versionName = "2.27.0"
+        versionName = "2.28.0"
     }
 
     // Ключ и пароли — ТОЛЬКО из переменных окружения (GitHub Secrets). В коде и в репозитории их нет.
@@ -61,6 +61,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("androidx.camera:camera-view:1.3.4")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.zxing:core:3.5.3")
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
     implementation("androidx.core:core-ktx:1.13.1")

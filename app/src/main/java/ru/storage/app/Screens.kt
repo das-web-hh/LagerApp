@@ -196,6 +196,10 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         BWareInventoryScreen(receiver) { mode = null }
         return
     }
+    if (current == "Фото по QR") {
+        BWarePhotoLookupScreen(prefs) { mode = null }
+        return
+    }
     if (current == "Итог приёма") {
         ReceiveTotalScreen { mode = null }
         return
@@ -245,6 +249,7 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
                 TileSpec("Приём B-Ware", Icons.Default.Add) { mode = "Приём B-Ware" },
                 TileSpec("Инвентаризация", Icons.Default.Done) { mode = "Инвентаризация" },
                 TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
+                TileSpec("Фото по QR", Icons.Default.Info) { mode = "Фото по QR" },
                 TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" },
                 TileSpec("Выгрузка", Icons.Default.ShoppingCart) { mode = "Выгрузка" }
             )
