@@ -14,6 +14,8 @@ object PrintCfg {
     var ru by mutableStateOf(true)
     var en by mutableStateOf(true)
     var sign by mutableStateOf(true)
+    /** Адрес в шапке документов (несколько строк). Пусто — шапка без адреса. */
+    var address by mutableStateOf("")
 
     private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("print_cfg", Context.MODE_PRIVATE)
 
@@ -23,11 +25,18 @@ object PrintCfg {
         ru = s.getBoolean("ru", true)
         en = s.getBoolean("en", true)
         sign = s.getBoolean("sign", true)
+        address = s.getString("address", "") ?: ""
         if (!de && !ru && !en) ru = true
     }
 
     private fun store(ctx: Context) {
-        sp(ctx).edit().putBoolean("de", de).putBoolean("ru", ru).putBoolean("en", en).putBoolean("sign", sign).apply()
+        sp(ctx).edit().putBoolean("de", de).putBoolean("ru", ru).putBoolean("en", en).putBoolean("sign", sign)
+            .putString("address", address).apply()
+    }
+
+    fun setAddress(ctx: Context, v: String) {
+        address = v.lines().map { it.trim() }.filter { it.isNotEmpty() }.take(4).joinToString("\n")
+        store(ctx)
     }
 
     fun isOn(code: String) = when (code) {
@@ -61,7 +70,7 @@ object PrintCfg {
     }
 
     /** Применить значения из аккаунта (Firebase). */
-    fun applyCloud(ctx: Context, langs: List<*>?, signOn: Boolean?) {
+    fun applyCloud(ctx: Context, langs: List<*>?, signOn: Boolean?, addr: String? = null) {
         if (langs != null) {
             val l = langs.mapNotNull { it as? String }
             if (l.isNotEmpty()) {
@@ -71,6 +80,7 @@ object PrintCfg {
             }
         }
         if (signOn != null) sign = signOn
+        if (addr != null) address = addr
         store(ctx)
     }
 
@@ -126,7 +136,17 @@ private val T: Map<String, Array<String>> = mapOf(
     "sig_received" to arrayOf("Angenommen von (Unterschrift)", "Принял (подпись)", "Received by (signature)"),
     "sig_driver" to arrayOf("Fahrer (Unterschrift)", "Водитель (подпись)", "Driver (signature)"),
     "sig_compiled" to arrayOf("Erstellt von (Unterschrift)", "Составил (подпись)", "Prepared by (signature)"),
-    "sig_checked" to arrayOf("Geprüft von (Unterschrift)", "Проверил (подпись)", "Checked by (signature)")
+    "sig_checked" to arrayOf("Geprüft von (Unterschrift)", "Проверил (подпись)", "Checked by (signature)"),
+    "sig_recipient" to arrayOf("Unterschrift des Empfängers:", "Подпись принимающего:", "Recipient's signature:"),
+    "bw_t1" to arrayOf("ANNAHMEPROTOKOLL —", "АКТ ПРИЁМА —", "RECEIPT REPORT —"),
+    "bw_t2" to arrayOf("B-Ware (beschädigte Ware)", "B-Ware (повреждённый товар)", "B-Ware (damaged goods)"),
+    "inv_t1" to arrayOf("INVENTARLISTE —", "ОПИСЬ —", "INVENTORY —"),
+    "inv_t2" to arrayOf("B-Ware (beschädigte Ware im Lager)", "B-Ware (испорченный товар на складе)", "B-Ware (damaged goods in the warehouse)"),
+    "internal" to arrayOf("INTERN – FÜR BÜRO", "ВНУТРЕННИЙ – ДЛЯ ОФИСА", "INTERN – FOR OFFICE"),
+    "footer_note" to arrayOf("Dies ist ein internes Dokument und kein offizieller Beleg.", "Это внутренний документ, а не официальный документ.", "This is an internal document and not an official receipt."),
+    "page_word" to arrayOf("Seite", "Страница", "Page"),
+    "of_word" to arrayOf("von", "из", "of"),
+    "qr_label" to arrayOf("QR Code für System-Erfassung", "QR-код для ввода в систему", "QR code for system entry")
 )
 
 /** Переводы вариантов повреждений (в позициях хранится русский текст). */
@@ -172,6 +192,12 @@ private val OPT: Map<String, Array<String>> = mapOf(
 fun tr(key: String, sep: String = " / "): String {
     val a = T[key] ?: return key
     return PrintCfg.pick(a).joinToString(sep)
+}
+
+/** Надписи на включённых языках списком (порядок: немецкий, русский, английский). */
+fun trList(key: String): List<String> {
+    val a = T[key] ?: return listOf(key)
+    return PrintCfg.pick(a)
 }
 
 /** Надпись с переносом строк между языками (для узких заголовков таблиц). */

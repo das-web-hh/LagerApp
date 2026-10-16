@@ -141,30 +141,20 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
     if (!full && short.isEmpty() && excess.isEmpty() && extra.isEmpty() && defects.isEmpty()) return null
 
     val now = System.currentTimeMillis()
-    val sb = StringBuilder()
-    sb.append(
-        "<html><head><meta charset='utf-8'><style>" +
-            "body{font-family:sans-serif;font-size:13px;color:#111}" +
-            "h1{font-size:20px;margin:0 0 8px}h2{font-size:15px;margin:18px 0 6px}" +
-            "table{border-collapse:collapse;width:100%}" +
-            "th,td{border:1px solid #888;padding:5px 6px;text-align:left;vertical-align:top}" +
-            "th{background:#eee}.n{text-align:right;white-space:nowrap}" +
-            ".bad{color:#b00020;font-weight:bold}.warn{color:#9a6700;font-weight:bold}.ok{color:#1b6e2d}" +
-            ".info td{border:none;padding:2px 6px 2px 0}" +
-            Signature.CSS +
-            "</style></head><body>"
+    val info = DocLayout.info(
+        listOf(
+            tr("sender") to job.sender,
+            tr("order") to job.order,
+            tr("doc_time") to job.stamp,
+            tr("received_by") to receiver,
+            tr("printed") to fmtTime(now)
+        )
     )
-    sb.append("<h1>").append(trHead(if (full) "title_full" else "title_diff")).append("</h1>")
-    sb.append("<table class='info'>")
-    sb.append("<tr><td>${tr("sender")}:</td><td>${esc(job.sender)}</td></tr>")
-    sb.append("<tr><td>${tr("order")}:</td><td>${esc(job.order)}</td></tr>")
-    sb.append("<tr><td>${tr("doc_time")}:</td><td>${esc(job.stamp)}</td></tr>")
-    sb.append("<tr><td>${tr("received_by")}:</td><td>${esc(receiver)}</td></tr>")
-    sb.append("<tr><td>${tr("printed")}:</td><td>${fmtTime(now)}</td></tr>")
-    sb.append("</table>")
+    val top = DocLayout.top(info, DocLayout.title(if (full) "title_full" else "title_diff"))
+    val sb = StringBuilder()
 
     if (full) {
-        sb.append("<h2>${tr("state_h")}</h2><table><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th>")
+        sb.append("<h2>${tr("state_h")}</h2><table class='dt'><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th>")
         sb.append("<th>${trb("th_defect")}</th><th>${trb("th_good")}</th><th>${trb("th_diff")}</th><th>${trb("th_status")}</th></tr>")
         var tp = 0.0
         var tf = 0.0
@@ -187,12 +177,12 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("<td class='n'>${if (diff > 0) "+" else ""}${fmtNum(diff)}</td>")
             sb.append("<td class='$cls'>$text${if (l.defect > 0) ", " + tr("th_defect") else ""}</td></tr>")
         }
-        sb.append("<tr><th></th><th>${trb("total")}</th><th class='n'>${fmtNum(tp)}</th><th class='n'>${fmtNum(tf)}</th>")
+        sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${fmtNum(tp)}</th><th class='n'>${fmtNum(tf)}</th>")
         sb.append("<th class='n'>${fmtNum(td)}</th><th class='n'>${fmtNum(tf - td)}</th><th></th><th></th></tr>")
         sb.append("</table>")
     } else {
         if (short.isNotEmpty()) {
-            sb.append("<h2>${tr("h_short")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_missing")}</th></tr>")
+            sb.append("<h2>${tr("h_short")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_missing")}</th></tr>")
             short.forEach {
                 sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
                 sb.append("<td class='n bad'>${fmtNum(it.plan - it.fact)}</td></tr>")
@@ -200,7 +190,7 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("</table>")
         }
         if (excess.isNotEmpty()) {
-            sb.append("<h2>${tr("h_excess")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_surplus")}</th></tr>")
+            sb.append("<h2>${tr("h_excess")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_surplus")}</th></tr>")
             excess.forEach {
                 sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
                 sb.append("<td class='n warn'>${fmtNum(it.fact - it.plan)}</td></tr>")
@@ -208,21 +198,19 @@ private fun buildReport(job: AutoJob, f: IncomingFile, receiver: String, full: B
             sb.append("</table>")
         }
         if (extra.isNotEmpty()) {
-            sb.append("<h2>${tr("h_extra")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_arrived")}</th></tr>")
+            sb.append("<h2>${tr("h_extra")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_arrived")}</th></tr>")
             extra.forEach { sb.append("<tr><td>${esc(it.name)}</td><td class='n bad'>${fmtNum(it.fact)}</td></tr>") }
             sb.append("</table>")
         }
         if (defects.isNotEmpty()) {
-            sb.append("<h2>${tr("h_defects")}</h2><table><tr><th>${trb("th_item")}</th><th>${trb("th_recv_total")}</th><th>${trb("th_defect")}</th></tr>")
+            sb.append("<h2>${tr("h_defects")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_recv_total")}</th><th>${trb("th_defect")}</th></tr>")
             defects.forEach {
                 sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.fact)}</td><td class='n bad'>${fmtNum(it.defect)}</td></tr>")
             }
             sb.append("</table>")
         }
     }
-    sb.append(Signature.box("sig_received", receiver, now))
-    sb.append("</body></html>")
-    return sb.toString()
+    return DocLayout.page(top, sb.toString(), "<div></div>" + DocLayout.signBlock(receiver, now))
 }
 
 /** Сверка товаров одной партии: печать (мини-окно), сохранение и список «совпало / не совпало». */

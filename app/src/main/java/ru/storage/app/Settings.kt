@@ -61,6 +61,7 @@ object CloudSettings {
             "theme" to Ui.mode,
             "printLangs" to PrintCfg.codes(),
             "printSign" to PrintCfg.sign,
+            "docAddress" to PrintCfg.address,
             "screenOn" to ScreenCfg.enabled,
             "screenMinutes" to ScreenCfg.minutes,
             "updatedAt" to ts
@@ -107,7 +108,7 @@ object CloudSettings {
             prefs.formats = (snap.get("formats") as? List<*>)
                 ?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
             snap.getString("theme")?.let { Ui.set(ctx, it) }
-            PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"))
+            PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"), snap.getString("docAddress"))
             ScreenCfg.applyCloud(ctx, snap.getBoolean("screenOn"), snap.getLong("screenMinutes"))
             sp(ctx).edit().putLong("updated", remote).apply()
             return true
@@ -142,7 +143,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
     BackHandler(onBack = onBack)
     val sections = listOf(
         "Оформление" to "Светлая, тёмная или как в системе",
-        "Печать" to "Языки документа (немецкий, русский, английский), автоподпись",
+        "Печать" to "Языки документа, автоподпись, адрес в шапке документов",
         "Экран" to "Не выключать экран при подсчёте: вкл/выкл и сколько минут",
         "Сканер" to "Камера, типы штрих-кодов",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
@@ -617,6 +618,39 @@ private fun PrintSettings(prefs: Prefs, onBack: () -> Unit) {
                 }
             )
         }
+        Spacer(Modifier.height(24.dp))
+        Text("Адрес в шапке документов", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Печатается справа вверху на каждом листе всех документов (до 4 строк). Например: название склада, улица, индекс и город.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(8.dp))
+        var addr by remember { mutableStateOf(PrintCfg.address) }
+        OutlinedTextField(
+            value = addr,
+            onValueChange = { addr = it },
+            label = { Text("Адрес") },
+            minLines = 3,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        val saved = addr.lines().map { it.trim() }.filter { it.isNotEmpty() }.take(4).joinToString("\n") == PrintCfg.address
+        Button(
+            enabled = !saved,
+            onClick = {
+                PrintCfg.setAddress(ctx, addr)
+                addr = PrintCfg.address
+                CloudSettings.save(ctx, prefs)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (saved) "Сохранено ✓" else "Сохранить адрес") }
+        Spacer(Modifier.height(8.dp))
+        HtmlPreview(
+            "<html><head><meta charset='utf-8'><style>body{margin:10px}" + DocLayout.CSS + "</style></head><body>" +
+                DocLayout.header() + "</body></html>",
+            Modifier.fillMaxWidth().height(150.dp)
+        )
         if (PrintCfg.sign) {
             Spacer(Modifier.height(12.dp))
             val html = "<html><head><meta charset='utf-8'><style>body{margin:8px;font-family:sans-serif}" +

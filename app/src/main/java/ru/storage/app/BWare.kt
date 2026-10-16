@@ -52,12 +52,25 @@ object BWareHolder {
     /** 0 — ввод и подсчёт, 1 — предпросмотр и печать */
     var step by mutableIntStateOf(0)
 
+    /** Код приёма: он в QR на документе и в имени каждого фото (BW-КОД-….jpg). Пусто, пока не нужен. */
+    var code by mutableStateOf("")
+    /** Имена файлов фото испорченного товара этого приёма (до BW_MAX_PHOTOS). */
+    val photos = mutableStateListOf<String>()
+
+    fun ensureCode(): String {
+        if (code.isBlank()) code = newBwCode()
+        return code
+    }
+
+    /** Очистка не удаляет файлы фото: QR на уже напечатанном документе должен продолжать открывать их. */
     fun clear() {
         sender = ""
         order = ""
         truck = ""
         trailer = ""
         rows.clear()
+        photos.clear()
+        code = ""
         step = 0
     }
 }
@@ -138,31 +151,32 @@ internal const val DRIVER_SIGNED_DE = "Der Fahrer hat den Lieferschein unterschr
 /** HTML документа приёма для предпросмотра и печати. Язык(и) и автоподпись — по настройкам печати. */
 private fun bwareHtml(receiver: String, now: Long): String {
     val h = BWareHolder
+    // слева — только значения, как в образце; пустое значение — «–»
+    val info = DocLayout.info(
+        listOf(
+            "" to bwDash(h.sender),
+            "" to bwDash(h.order),
+            "" to bwDash(h.truck).uppercase(),
+            "" to bwDash(h.trailer).uppercase(),
+            "" to bwDash(receiver),
+            "" to fmtTime(now)
+        )
+    )
+    val top = DocLayout.top(info, DocLayout.title("bw_t1", "bw_t2"))
     val sb = StringBuilder()
-    sb.append("<html><head><meta charset='utf-8'><style>$BW_CSS</style></head><body>")
-    sb.append("<h1>${trHead("bw_title")}</h1>")
-    sb.append("<table class='info'>")
-    sb.append("<tr><td>${tr("sender")}:</td><td><b>${bwEsc(bwDash(h.sender))}</b></td></tr>")
-    sb.append("<tr><td>${tr("order")}:</td><td><b>${bwEsc(bwDash(h.order))}</b></td></tr>")
-    sb.append("<tr><td>${tr("truck")}:</td><td><b>${bwEsc(bwDash(h.truck).uppercase())}</b></td></tr>")
-    sb.append("<tr><td>${tr("trailer")}:</td><td><b>${bwEsc(bwDash(h.trailer).uppercase())}</b></td></tr>")
-    sb.append("<tr><td>${tr("received_by")}:</td><td>${bwEsc(bwDash(receiver))}</td></tr>")
-    sb.append("<tr><td>${tr("date_time")}:</td><td>${fmtTime(now)}</td></tr>")
-    sb.append("</table>")
-    sb.append("<h2>${tr("goods_h")}</h2><table><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th>${trb("th_qty")}</th><th>${trb("th_expiry")}</th><th>${trb("th_details")}</th></tr>")
+    sb.append("<table class='dt'><tr><th></th><th>${trb("th_item")}</th><th class='n'>${trb("th_qty")}</th>")
+    sb.append("<th>${trb("th_expiry")}</th><th>${trb("th_details")}</th></tr>")
     var total = 0.0
     h.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
         total += q
-        sb.append("<tr><td>${i + 1}</td><td>${bwEsc(r.name.trim())}</td><td class='n'>${bwFmt(q)}</td>")
+        sb.append("<tr><td>${i + 1}.</td><td>${bwEsc(r.name.trim())}</td><td class='n'>${bwFmt(q)}</td>")
         sb.append("<td>${bwEsc(bwDash(r.expiry))}</td><td>${bwDetailsHtml(r, BWareDetails.groups)}</td></tr>")
     }
-    sb.append("<tr><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
-    sb.append("<table class='sign'><tr><td>${Signature.cell("sig_received", receiver, now)}</td>")
-    // вместо места для подписи водителя — рукописная надпись по-немецки: водитель расписался на Lieferschein
-    sb.append("<td><div style='min-height:90px;display:flex;align-items:flex-end'>${Signature.handwritten(DRIVER_SIGNED_DE)}</div><div class='line'></div></td></tr></table>")
-    sb.append("</body></html>")
-    return sb.toString()
+    sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
+    val qr = if (h.code.isBlank()) "" else DocLayout.qrBlock(BW_QR_PREFIX + h.code)
+    val bottom = (if (qr.isEmpty()) "<div></div>" else qr) + DocLayout.signBlock(receiver, now)
+    return DocLayout.page(top, sb.toString(), bottom)
 }
 
 /** Невысокое поле ввода без рамки: подсказка внутри, заглавные буквы для номеров. */
@@ -444,13 +458,13 @@ fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
         BWareHeader(
             title = "Приём B-Ware",
             canClear = h.rows.isNotEmpty() || h.sender.isNotBlank() || h.order.isNotBlank() ||
-                h.truck.isNotBlank() || h.trailer.isNotBlank(),
+                h.truck.isNotBlank() || h.trailer.isNotBlank() || h.photos.isNotEmpty(),
             canNext = h.rows.isNotEmpty(),
             onClear = { clearOpen = true },
             onNext = {
                 val bad = h.rows.firstOrNull { bwQty(it.fact) <= 0.0 }
                 if (bad != null) error = "Укажите количество: ${bad.name.trim()}"
-                else { error = ""; h.step = 1 }
+                else { error = ""; h.ensureCode(); h.step = 1 }
             }
         )
         Spacer(Modifier.height(4.dp))
@@ -462,6 +476,8 @@ fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
         PlateField(h.truck, { h.truck = it }, "Номер машины", Modifier.fillMaxWidth())
         Spacer(Modifier.height(4.dp))
         PlateField(h.trailer, { h.trailer = it }, "Номер прицепа", Modifier.fillMaxWidth())
+        Spacer(Modifier.height(4.dp))
+        BWarePhotoButton()
         Spacer(Modifier.height(6.dp))
         CatalogWheel(
             rows = h.rows,
@@ -476,7 +492,7 @@ fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { clearOpen = false },
             title = { Text("Очистить приём?") },
-            text = { Text("Список товаров, отправитель, заказ и номера машины будут удалены.") },
+            text = { Text("Список товаров, отправитель, заказ, номера машины и фото будут убраны из окна. Уже сохранённые фото останутся доступны по QR-коду напечатанного документа.") },
             confirmButton = { Button(onClick = { h.clear(); clearOpen = false; error = "" }) { Text("Очистить") } },
             dismissButton = { TextButton(onClick = { clearOpen = false }) { Text("Отмена") } }
         )

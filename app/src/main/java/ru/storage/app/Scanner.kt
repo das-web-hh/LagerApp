@@ -53,7 +53,7 @@ private fun ownerOf(ctx: android.content.Context): LifecycleOwner? {
 }
 
 @Composable
-fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit) {
+fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit, onlyQr: Boolean = false) {
     val context = LocalContext.current
     var hasPermission by remember {
         mutableStateOf(
@@ -113,7 +113,7 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit)
                     val preview = Preview.Builder().build()
                     preview.setSurfaceProvider(previewView.surfaceProvider)
 
-                    val codes = prefs.formats.toList()
+                    val codes = if (onlyQr) listOf(Barcode.FORMAT_QR_CODE) else prefs.formats.toList()
                     val options = BarcodeScannerOptions.Builder().apply {
                         if (codes.isEmpty()) setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
                         else setBarcodeFormats(codes.first(), *codes.drop(1).toIntArray())
