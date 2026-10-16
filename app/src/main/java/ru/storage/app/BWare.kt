@@ -61,10 +61,6 @@ object BWareHolder {
     /** Имена файлов фото испорченного товара этого приёма (до BW_MAX_PHOTOS). */
     val photos = mutableStateListOf<String>()
 
-    /** PDF этого приёма на Google Диске: id файла и ссылка из QR-кода (создаются при первой печати). */
-    var pdfId by mutableStateOf("")
-    var pdfUrl by mutableStateOf("")
-
     fun ensureCode(): String {
         if (code.isBlank()) code = newBwCode()
         return code
@@ -78,8 +74,6 @@ object BWareHolder {
         trailer = ""
         rows.clear()
         photos.clear()
-        pdfId = ""
-        pdfUrl = ""
         code = ""
         step = 0
     }
@@ -159,7 +153,7 @@ internal const val BW_CSS =
 internal const val DRIVER_SIGNED_DE = "Der Fahrer hat den Lieferschein unterschrieben"
 
 /** HTML документа приёма для предпросмотра и печати. Язык(и) и автоподпись — по настройкам печати. */
-private fun bwareHtml(receiver: String, now: Long, qrPayload: String, photosHtml: String = ""): String {
+private fun bwareHtml(receiver: String, now: Long, photosHtml: String = ""): String {
     val h = BWareHolder
     // слева — только значения, как в образце; пустое значение — «–»
     val info = DocLayout.info(
@@ -184,8 +178,8 @@ private fun bwareHtml(receiver: String, now: Long, qrPayload: String, photosHtml
         sb.append("<td>${bwEsc(bwDash(r.expiry))}</td><td>${bwDetailsHtml(r, BWareDetails.groups)}</td></tr>")
     }
     sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
-    val qr = if (qrPayload.isBlank()) "" else DocLayout.qrBlock(qrPayload)
-    val bottom = (if (qr.isEmpty()) "<div></div>" else qr) + DocLayout.signBlock(receiver, now)
+    // внизу листа — только подпись (QR-кода нет)
+    val bottom = "<div></div>" + DocLayout.signBlock(receiver, now)
     return DocLayout.page(top, sb.toString(), bottom, after = photosHtml)
 }
 
@@ -198,42 +192,31 @@ private fun bwToast(ctx: Context, text: String) {
 }
 
 /**
- * Кнопка «Печать»: 1) на Диске резервируется PDF со ссылкой «по ссылке», она идёт в QR-код;
- * 2) на печать уходит документ БЕЗ фото; 3) в фоне тот же документ + фото одним PDF заменяет заготовку на Диске.
- * Если Диск не настроен или недоступен — документ всё равно печатается (QR по старой схеме, внутри приложения).
+ * Кнопка «Печать»: на принтер уходит документ БЕЗ фото; в фоне тот же документ с фото на втором листе
+ * (маленькие, 3×4 см) сохраняется PDF-файлом на Google Диск — обычной закрытой загрузкой, без публичной ссылки и без QR-кода.
  */
 private suspend fun bwPrintAndSave(ctx: Context, jobName: String, receiver: String, stamp: Long) {
     val h = BWareHolder
     val app = ctx.applicationContext
     val code = h.ensureCode()
-    var driveError = ""
-    if (!DriveCfg.ready(app)) {
-        driveError = "Google Диск не настроен (Профиль → Настройки)"
-    } else if (h.pdfId.isBlank()) {
-        try {
-            val slot = withContext(Dispatchers.IO) { DriveApi.reservePdf(app, "BWDOC-$code.pdf") }
-            h.pdfId = slot.id
-            h.pdfUrl = slot.downloadUrl
-        } catch (e: Exception) {
-            driveError = e.message ?: e.javaClass.simpleName
-        }
-    }
-    val driveId = h.pdfId
-    val qr = h.pdfUrl.ifBlank { BW_QR_PREFIX + code }
-    // оба документа собираются сейчас, пока приём не очищен: печать — без фото, PDF для Диска — с фото
-    val printHtml = bwareHtml(receiver, stamp, qr)
-    val driveHtml = if (driveId.isNotBlank()) bwareHtml(receiver, stamp, qr, bwPhotosHtml(app, h.photos.toList())) else ""
+    val driveOn = DriveCfg.ready(app)
+    // оба документа собираются сейчас, пока приём не очищен
+    val printHtml = bwareHtml(receiver, stamp)
+    val driveHtml = if (driveOn) bwareHtml(receiver, stamp, bwPhotosHtml(app, h.photos.toList())) else ""
 
     Printer.print(ctx, jobName, printHtml)
 
-    if (driveId.isBlank()) {
-        bwToast(app, "На Диск не сохранено: $driveError")
+    if (!driveOn) {
+        bwToast(app, "На Диск не сохранено: Google Диск не настроен (Профиль → Настройки)")
         return
     }
     bwBg.launch {
         try {
             val pdf = HtmlPdf.render(app, driveHtml) ?: throw RuntimeException("не удалось создать PDF")
-            withContext(Dispatchers.IO) { DriveApi.finalizePdf(app, driveId, pdf) }
+            val name = "BWDOC-$code.pdf"
+            // повторная печать того же приёма заменяет прежний файл
+            try { DriveApi.delete(app, name) } catch (e: Exception) { }
+            DriveApi.uploadBytes(app, name, "application/pdf", pdf)
             bwToast(app, "PDF с фото сохранён на Google Диск")
         } catch (e: Exception) {
             bwToast(app, "На Диск не сохранено: ${e.message ?: e.javaClass.simpleName}")
@@ -567,8 +550,7 @@ private fun BWarePreview(receiver: String) {
     val h = BWareHolder
     val ctx = LocalContext.current
     val stamp = remember { System.currentTimeMillis() }
-    // в предпросмотре QR того же размера; настоящая ссылка на PDF создаётся при нажатии «Печать»
-    val html = bwareHtml(receiver, stamp, h.pdfUrl.ifBlank { BW_QR_PREFIX + h.ensureCode() })
+    val html = bwareHtml(receiver, stamp)
     var clearOpen by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()

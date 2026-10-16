@@ -84,12 +84,13 @@ suspend fun bwPhotosFor(ctx: Context, code: String): List<String> = withContext(
 suspend fun bwPhotosHtml(ctx: Context, names: List<String>): String = withContext(Dispatchers.IO) {
     if (names.isEmpty()) return@withContext ""
     val sb = StringBuilder()
-    sb.append("<style>.phs{page-break-before:always}.ph{display:inline-block;width:48.5%;vertical-align:top;margin:0 1% 8px 0;page-break-inside:avoid}.ph img{width:100%;height:auto}</style>")
+    // второй лист: маленькие фото 3×4 см (вертикальный кадр, края обрезаются по рамке)
+    sb.append("<style>.phs{page-break-before:always}.ph{display:inline-block;width:30mm;height:40mm;vertical-align:top;margin:0 3mm 3mm 0;page-break-inside:avoid;overflow:hidden}.ph img{width:100%;height:100%;object-fit:cover;display:block}</style>")
     sb.append("<div class='phs'><h2>Fotos / Фото (${names.size})</h2>")
     for (n in names) {
         try {
             val f = Media.load(ctx, n) ?: continue
-            val bmp = Media.thumb(f, 700) ?: continue
+            val bmp = Media.thumb(f, 300) ?: continue
             val bos = java.io.ByteArrayOutputStream()
             bmp.compress(Bitmap.CompressFormat.JPEG, 80, bos)
             val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
@@ -132,7 +133,7 @@ private fun BWarePhotoDialog(onClose: () -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     "Сфотографируйте испорченный товар, до $BW_MAX_PHOTOS фото. " +
-                        "Они попадут только в PDF на Google Диске (QR-код на документе откроет его), на бумаге фото не печатаются.",
+                        "Фото попадут на второй лист PDF, который сохраняется на Google Диск (маленькие, 3×4 см). На бумаге фото не печатаются.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(10.dp))
@@ -218,20 +219,6 @@ fun BWarePhotoLookupScreen(prefs: Prefs, onBack: () -> Unit) {
         ScannerScreen(
             prefs = prefs,
             onResult = { raw ->
-                // QR на новых документах — ссылка на PDF на Google Диске: открываем её (PDF скачивается на этот телефон)
-                val t = raw.trim()
-                if (t.startsWith("https://drive.google.com/") || t.startsWith("https://docs.google.com/")) {
-                    try {
-                        ctx.startActivity(
-                            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(t))
-                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    } catch (e: Exception) {
-                        Toast.makeText(ctx, "Не удалось открыть ссылку", Toast.LENGTH_SHORT).show()
-                    }
-                    onBack()
-                    return@ScannerScreen
-                }
                 val c = bwCodeFromQr(raw)
                 code = c
                 bad = if (c == null) "Это не QR-код документа B-Ware." else ""

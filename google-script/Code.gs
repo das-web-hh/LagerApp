@@ -117,8 +117,6 @@ function doPost(e) {
     var payload = readPayload_(e);
     checkToken_(payload.token);
     var action = String(payload.action || 'upload').toLowerCase();
-    if (action === 'pdfreserve') return reservePdf_(payload);
-    if (action === 'pdffinalize') return finalizePdf_(payload);
     if (action === 'delete') return deleteByName_(payload);
     if (action !== 'upload') {
       return json_({ok: false, error: 'Неизвестное действие: ' + action});
@@ -249,55 +247,6 @@ function json_(value) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-
-// ── B-Ware: фото-лист PDF с QR-кодом ──────────────────────────────────
-// pdfReserve  — создаёт файл PDF в папке, открывает по ссылке «для всех»
-// и возвращает id (нужен, чтобы QR попал внутрь самого PDF).
-// pdfFinalize — заменяет содержимое файла готовым PDF; id и ссылка те же.
-function reservePdf_(payload) {
-  var folder = getFolder_(payload.folderId);
-  var name = safeFileName_(payload.fileName || 'bware.pdf');
-  if (!/\.pdf$/i.test(name)) name += '.pdf';
-  var blob = Utilities.newBlob('%PDF-1.4\n%placeholder\n', 'application/pdf', name);
-  var file = folder.createFile(blob);
-  // QR должен скачиваться с любого телефона без входа в аккаунт
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  return json_({ok: true, id: file.getId(), name: file.getName(), file: fileInfo_(file)});
-}
-
-function finalizePdf_(payload) {
-  var folder = getFolder_(payload.folderId);
-  var id = String(payload.id || '').trim();
-  if (!id) throw new Error('Не указан id файла.');
-  var file = DriveApp.getFileById(id);
-  // Защита: перезаписывать можно только файлы из настроенной папки
-  var inFolder = false, parents = file.getParents();
-  while (parents.hasNext()) {
-    if (parents.next().getId() === folder.getId()) { inFolder = true; break; }
-  }
-  if (!inFolder) throw new Error('Файл не находится в указанной папке.');
-  var base64 = String(payload.contentBase64 || '');
-  if (!base64) throw new Error('Пустое содержимое PDF.');
-  var bytes = Utilities.base64Decode(base64);
-  if (bytes.length < 5 || bytes[0] !== 0x25 || bytes[1] !== 0x50 || bytes[2] !== 0x44 || bytes[3] !== 0x46) {
-    throw new Error('Содержимое не является PDF.');
-  }
-  var response = UrlFetchApp.fetch(
-    'https://www.googleapis.com/upload/drive/v3/files/' + encodeURIComponent(id) + '?uploadType=media',
-    {
-      method: 'patch',
-      contentType: 'application/pdf',
-      payload: bytes,
-      headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()},
-      muteHttpExceptions: true
-    }
-  );
-  if (response.getResponseCode() >= 300) {
-    throw new Error('Drive API ' + response.getResponseCode() + ': ' + response.getContentText().slice(0, 300));
-  }
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  return json_({ok: true, id: id, file: fileInfo_(DriveApp.getFileById(id))});
-}
 
 // Запустите один раз вручную (▶ Выполнить), чтобы выдать разрешения на
 // Drive и внешние запросы, затем выпустите новую версию развёртывания.

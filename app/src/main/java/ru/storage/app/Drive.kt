@@ -35,9 +35,6 @@ object DriveCfg {
 
 class DrivePage(val names: List<String>, val next: String?)
 
-/** Заготовка PDF на Диске: id файла и прямая ссылка на скачивание (для QR-кода). */
-class PdfSlot(val id: String, val downloadUrl: String)
-
 /** Запросы к Google Apps Script (Web App), который работает с папкой на Google Диске. */
 object DriveApi {
     private val OURS = Regex("^(PR|RC|IN|BW)-.+")
@@ -135,31 +132,6 @@ object DriveApi {
             throw RuntimeException(r.optString("error", "ошибка Диска"))
         }
         return Base64.decode(r.getString("contentBase64"), Base64.DEFAULT)
-    }
-
-    /** Создать на Диске пустой PDF, открытый «по ссылке», и вернуть его ссылку (нужна скрипту Диска с действием pdfreserve). */
-    fun reservePdf(ctx: Context, name: String): PdfSlot {
-        val o = JSONObject()
-            .put("action", "pdfreserve")
-            .put("folderId", DriveCfg.folder(ctx))
-            .put("token", DriveCfg.token(ctx))
-            .put("fileName", name)
-        val r = check(http(DriveCfg.url(ctx), o.toString()))
-        val id = r.getString("id")
-        val url = r.optJSONObject("file")?.optString("downloadUrl").orEmpty()
-            .ifBlank { "https://drive.google.com/uc?export=download&id=$id" }
-        return PdfSlot(id, url)
-    }
-
-    /** Заменить содержимое заготовки готовым PDF; id и ссылка остаются теми же. */
-    fun finalizePdf(ctx: Context, id: String, pdf: ByteArray) {
-        val o = JSONObject()
-            .put("action", "pdffinalize")
-            .put("folderId", DriveCfg.folder(ctx))
-            .put("token", DriveCfg.token(ctx))
-            .put("id", id)
-            .put("contentBase64", Base64.encodeToString(pdf, Base64.NO_WRAP))
-        check(http(DriveCfg.url(ctx), o.toString()))
     }
 
     fun delete(ctx: Context, name: String) {
