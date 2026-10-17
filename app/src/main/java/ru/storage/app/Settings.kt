@@ -64,6 +64,7 @@ object CloudSettings {
             "docAddress" to PrintCfg.address,
             "screenOn" to ScreenCfg.enabled,
             "screenMinutes" to ScreenCfg.minutes,
+            "dateSimple" to DateCfg.simple,
             "updatedAt" to ts
         )
         // Google Диск настраивает только администратор; у остальных этих полей в аккаунте нет
@@ -110,6 +111,7 @@ object CloudSettings {
             snap.getString("theme")?.let { Ui.set(ctx, it) }
             PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"), snap.getString("docAddress"))
             ScreenCfg.applyCloud(ctx, snap.getBoolean("screenOn"), snap.getLong("screenMinutes"))
+            DateCfg.applyCloud(ctx, snap.getBoolean("dateSimple"))
             sp(ctx).edit().putLong("updated", remote).apply()
             return true
         }
@@ -563,6 +565,24 @@ private fun ScreenSettings(prefs: Prefs, onBack: () -> Unit) {
             "По умолчанию 10 минут. После этого времени без нажатий экран выключится.",
             style = MaterialTheme.typography.bodySmall
         )
+        Spacer(Modifier.height(28.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Упрощённый выбор срока годности", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (DateCfg.simple) "Включено: по умолчанию 2027 год, месяцы цифрами в два столбца (01–06 и 07–12), дни 1–31 всегда с понедельника. Выбрали только месяц и год — дата будет первым числом."
+                    else "Выключено: обычный календарь с названиями месяцев.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = DateCfg.simple,
+                onCheckedChange = {
+                    DateCfg.set(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
     }
 }
 

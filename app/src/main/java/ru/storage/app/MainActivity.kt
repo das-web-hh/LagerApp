@@ -68,6 +68,7 @@ class MainActivity : FragmentActivity() {
         Ui.load(applicationContext)
         PrintCfg.load(applicationContext)
         ScreenCfg.load(applicationContext)
+        DateCfg.load(applicationContext)
         Speaker.init(applicationContext)
         setContent {
             AppTheme { AppRoot() }

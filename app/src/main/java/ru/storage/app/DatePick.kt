@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
+import android.content.Context
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
@@ -39,6 +40,31 @@ import kotlin.math.abs
  *  - основная часть — дни месяца по неделям, как на календаре (с понедельника).
  * Результат — строка «дд.мм.гггг»; кнопка «Очистить» возвращает пустую строку.
  */
+
+/**
+ * Настройка «Выбор срока годности»: false — обычный календарь (месяцы названиями, дни по реальным неделям);
+ * true — упрощённый: год по умолчанию 2027, месяцы цифрами в два столбца (01–06 и 07–12), дни 1–31 всегда с понедельника
+ * и не сдвигаются при смене месяца/года; выбрали только месяц и год — день ставится первым.
+ */
+object DateCfg {
+    var simple by mutableStateOf(false)
+    const val DEFAULT_YEAR = 2027
+
+    private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("date_cfg", Context.MODE_PRIVATE)
+
+    fun load(ctx: Context) {
+        simple = sp(ctx).getBoolean("simple", false)
+    }
+
+    fun set(ctx: Context, on: Boolean) {
+        simple = on
+        sp(ctx).edit().putBoolean("simple", on).apply()
+    }
+
+    fun applyCloud(ctx: Context, on: Boolean?) {
+        if (on != null) set(ctx, on)
+    }
+}
 
 private val MONTH_NAMES = listOf(
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -63,9 +89,11 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
     val scope = rememberCoroutineScope()
     val today = remember { Calendar.getInstance() }
     val parsed = remember(initial) { Regex("""^(\d{2})\.(\d{2})\.(\d{4})$""").find(initial.trim()) }
-    val startYear = parsed?.groupValues?.get(3)?.toInt() ?: today.get(Calendar.YEAR)
+    val simple = remember { DateCfg.simple }
+    val startYear = parsed?.groupValues?.get(3)?.toInt() ?: if (simple) DateCfg.DEFAULT_YEAR else today.get(Calendar.YEAR)
     val startMonth = (parsed?.groupValues?.get(2)?.toInt() ?: (today.get(Calendar.MONTH) + 1)).coerceIn(1, 12)
-    val startDay = parsed?.groupValues?.get(1)?.toInt() ?: 0
+    // упрощённый вид: если день не выбирали, дата — первое число месяца
+    val startDay = parsed?.groupValues?.get(1)?.toInt() ?: if (simple) 1 else 0
 
     var year by remember { mutableIntStateOf(startYear) }
     var month by remember { mutableIntStateOf(startMonth) }
@@ -137,6 +165,36 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                 Spacer(Modifier.height(8.dp))
 
                 Row(Modifier.fillMaxWidth()) {
+                  if (simple) {
+                    // месяцы цифрами в два столбца: 01–06 и 07–12
+                    Row(Modifier.width(112.dp).height(GRID_H), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf(1..6, 7..12).forEach { col ->
+                            Column(Modifier.weight(1f).fillMaxHeight()) {
+                                col.forEach { m ->
+                                    val sel = m == month
+                                    Box(
+                                        Modifier.fillMaxWidth().weight(1f).padding(vertical = 2.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .then(if (sel) Modifier.background(MaterialTheme.colorScheme.primaryContainer) else Modifier)
+                                            .clickable {
+                                                month = m
+                                                Haptics.pulse(ctx, Haptics.PICKER)
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "%02d".format(m),
+                                            fontSize = if (sel) 20.sp else 17.sp,
+                                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (sel) MaterialTheme.colorScheme.onPrimaryContainer
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                  } else {
                     // месяцы — столбик-барабан слева
                     Box(Modifier.width(108.dp).height(GRID_H)) {
                         val st = rememberLazyListState(initialFirstVisibleItemIndex = month - 1)
@@ -178,6 +236,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                             }
                         }
                     }
+                  }
                     Spacer(Modifier.width(8.dp))
                     // дни по неделям
                     Column(Modifier.weight(1f).height(GRID_H)) {
@@ -189,12 +248,14 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                                 )
                             }
                         }
-                        repeat(6) { w ->
+                        repeat(if (simple) 5 else 6) { w ->
                             Row(Modifier.fillMaxWidth().height(40.dp)) {
                                 repeat(7) { c ->
-                                    val dn = w * 7 + c - offset + 1
+                                    // упрощённый вид: 1–31 всегда с понедельника, сетка не зависит от месяца и года
+                                    val dn = if (simple) w * 7 + c + 1 else w * 7 + c - offset + 1
                                     Box(Modifier.weight(1f).fillMaxHeight().padding(1.dp), contentAlignment = Alignment.Center) {
-                                        if (dn in 1..dim) {
+                                        if (dn in 1..(if (simple) 31 else dim)) {
+                                            val inMonth = dn <= dim
                                             val sel = dn == selDay
                                             val isToday = dn == today.get(Calendar.DAY_OF_MONTH) &&
                                                 month == today.get(Calendar.MONTH) + 1 &&
@@ -206,7 +267,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                                                         else if (isToday) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, CircleShape)
                                                         else Modifier
                                                     )
-                                                    .clickable {
+                                                    .clickable(enabled = inMonth) {
                                                         day = dn
                                                         Haptics.pulse(ctx, Haptics.TAP)
                                                     },
@@ -217,6 +278,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                                                     fontSize = 14.sp,
                                                     fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
                                                     color = if (sel) MaterialTheme.colorScheme.onPrimary
+                                                    else if (!inMonth) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
                                                     else MaterialTheme.colorScheme.onSurface
                                                 )
                                             }
