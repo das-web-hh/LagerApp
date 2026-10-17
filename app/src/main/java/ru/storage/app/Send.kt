@@ -743,30 +743,63 @@ internal fun BigCounter(
     }
 }
 
-/** Результат подсчёта Postwagen текстом: дата, время, принято, отправлено (для WhatsApp, Telegram и т. п.). */
-internal fun wagenText(op: WagenOp): String {
+/** Результат подсчёта Postwagen текстом на выбранном языке: дата, время, принято, отправлено (для WhatsApp, Telegram и т. п.). */
+internal fun wagenText(op: WagenOp, lang: String): String {
     val d = Date(op.createdAt)
+    val t = when (lang) {
+        "de" -> listOf("DHL Postwagen", "Datum", "Uhrzeit", "Erhalten", "Gesendet", "Notiz")
+        "en" -> listOf("DHL Postwagen", "Date", "Time", "Received", "Sent", "Note")
+        else -> listOf("DHL Postwagen", "Дата", "Время", "Принято", "Отправлено", "Заметка")
+    }
+    val title = t[0]; val date = t[1]; val time = t[2]; val recv = t[3]; val sent = t[4]; val note = t[5]
     val sb = StringBuilder()
-    sb.append("DHL Postwagen\n")
-    sb.append("Дата: ").append(SimpleDateFormat("dd.MM.yyyy", RU).format(d)).append('\n')
-    sb.append("Время: ").append(SimpleDateFormat("HH:mm", RU).format(d)).append('\n')
-    sb.append("Принято: ").append(op.received).append('\n')
-    sb.append("Отправлено: ").append(op.sent)
-    if (op.note.isNotBlank()) sb.append("\nЗаметка: ").append(op.note.trim())
+    sb.append(title).append('\n')
+    sb.append(date).append(": ").append(SimpleDateFormat("dd.MM.yyyy", RU).format(d)).append('\n')
+    sb.append(time).append(": ").append(SimpleDateFormat("HH:mm", RU).format(d)).append('\n')
+    sb.append(recv).append(": ").append(op.received).append('\n')
+    sb.append(sent).append(": ").append(op.sent)
+    if (op.note.isNotBlank()) sb.append('\n').append(note).append(": ").append(op.note.trim())
     return sb.toString()
 }
 
 /** Системное окно «Поделиться»: любое установленное приложение (WhatsApp, Telegram, почта, SMS…). */
-internal fun shareWagen(ctx: Context, op: WagenOp) {
+internal fun shareWagen(ctx: Context, op: WagenOp, lang: String) {
     try {
         val i = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, wagenText(op))
+            putExtra(Intent.EXTRA_TEXT, wagenText(op, lang))
         }
         ctx.startActivity(Intent.createChooser(i, "Отправить результат").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: Exception) {
         Toast.makeText(ctx, "Не удалось открыть отправку", Toast.LENGTH_SHORT).show()
     }
+}
+
+/** Выбор языка сообщения перед отправкой: Deutsch, Русский, English (последний выбор подсвечен и запоминается). */
+@Composable
+internal fun WagenLangDialog(op: WagenOp, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val sp = remember { ctx.applicationContext.getSharedPreferences("wagen_share", Context.MODE_PRIVATE) }
+    val last = remember { sp.getString("lang", "ru") ?: "ru" }
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Язык сообщения") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("de" to "Deutsch", "ru" to "Русский", "en" to "English").forEach { (code, label) ->
+                    val go = {
+                        sp.edit().putString("lang", code).apply()
+                        shareWagen(ctx, op, code)
+                        onDone()
+                    }
+                    if (code == last) Button(onClick = go, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(label) }
+                    else OutlinedButton(onClick = go, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(label) }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDone) { Text("Отмена") } }
+    )
 }
 
 @Composable
@@ -779,10 +812,12 @@ fun WagenAddScreen(onClose: () -> Unit) {
     var received by rememberSaveable { mutableIntStateOf(0) }
     var note by rememberSaveable { mutableStateOf("") }
     var picker by remember { mutableStateOf<String?>(null) }
+    var shareOp by remember { mutableStateOf<WagenOp?>(null) }
     val keySent = remember { Any() }
     val keyRecv = remember { Any() }
     // пока считаем, экран не выключается (время — в Настройки → Экран; каждое нажатие начинает отсчёт заново)
     KeepScreenOn(listOf(sent, received, note, picker))
+    shareOp?.let { op -> WagenLangDialog(op) { onClose() } }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -805,8 +840,7 @@ fun WagenAddScreen(onClose: () -> Unit) {
                         note = note.trim(), author = Session.displayName, updatedAt = now
                     )
                     scope.launch(Dispatchers.IO) { SendCloud.saveWagen(sdb, op) }
-                    shareWagen(ctx, op)
-                    onClose()
+                    shareOp = op   // выбор языка, потом системное окно отправки
                 },
                 enabled = sent > 0 || received > 0,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
@@ -852,6 +886,7 @@ fun WagenDetailScreen(id: String, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var w by remember { mutableStateOf<WagenOp?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var sharing by remember { mutableStateOf(false) }
     LaunchedEffect(id, SendState.version) { w = withContext(Dispatchers.IO) { sdb.getWagen(id) } }
     val cur = w
     if (cur == null) {
@@ -875,7 +910,7 @@ fun WagenDetailScreen(id: String, onClose: () -> Unit) {
             }
         }
         Spacer(Modifier.height(16.dp))
-        Button(onClick = { shareWagen(ctx, cur) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Button(onClick = { sharing = true }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
             Text("Отправить результат (WhatsApp, Telegram…)")
         }
         Spacer(Modifier.height(8.dp))
@@ -883,6 +918,7 @@ fun WagenDetailScreen(id: String, onClose: () -> Unit) {
             Text("Удалить операцию", color = MaterialTheme.colorScheme.error)
         }
     }
+    if (sharing) WagenLangDialog(cur) { sharing = false }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
