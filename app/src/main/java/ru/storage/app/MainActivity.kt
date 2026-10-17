@@ -52,6 +52,7 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         // приложение уходит в фон (звонок, другое приложение, клавиатура другого окна): черновики сразу на диск
         Incoming.persistOpen(applicationContext)
+        kotlin.concurrent.thread { BWareDraft.flushAll() }
         kotlin.concurrent.thread { AutoReceiveHolder.flushDrafts() }
         super.onStop()
     }

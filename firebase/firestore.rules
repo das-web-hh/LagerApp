@@ -79,6 +79,8 @@ service cloud.firestore {
     match /receipts/{id}         { allow read, write: if isActive(); }
     match /shipments/{id}        { allow read, write: if isActive(); }
     match /wagen_ops/{id}        { allow read, write: if isActive(); }
+    // черновики «Приём B-Ware» и «Инвентарь B-Ware» (чтобы незавершённая операция не пропадала при переустановке)
+    match /bware_drafts/{id}     { allow read, write: if isActive(); }
     match /unload_ops/{id}       { allow read, write: if isActive(); }
 
     // Шаблоны накладных: создавать может любой активный (автораспознавание), править и удалять — администратор

@@ -27,6 +27,7 @@ object BWareInvHolder {
     fun clear() {
         rows.clear()
         step = 0
+        BWareDraft.delete("inv")
     }
 }
 
@@ -41,6 +42,18 @@ object InvOptions {
         "Заморозка или перегрев",
         "Плесень или посторонний запах",
         "Вредители",
+        "Грызуны (мыши, крысы) повредили товар",
+        "Личинки или черви в товаре",
+        "Моль (из личинок)",
+        "Насекомые (жуки, тараканы)",
+        "Протечка крыши или сырость на складе",
+        "Слежался или затвердел от влаги",
+        "Испорчен солнцем (стоял на солнце)",
+        "Намок от дождя (стоял на улице)",
+        "Повреждён гвоздями или щепой из поддона",
+        "Проколот или порезан погрузчиком",
+        "Раздавлен при штабелировании",
+        "Загрязнён маслом или химией",
         "Заводской брак",
         "Причина неизвестна"
     )
@@ -58,9 +71,12 @@ object InvOptions {
         "Этикетка повреждена или отсутствует",
         "Загрязнён"
     )
+    /** Галочка «утилизировано»: попадает на документ колонкой и строкой под таблицей. */
+    const val DISPOSED = "Утилизировано (выброшено в мусорный бак)"
     val groups: List<Pair<String, List<String>>> = listOf(
         "Причина порчи" to reasons,
-        "Тип целостности" to damage
+        "Тип целостности" to damage,
+        "Утилизация" to listOf(DISPOSED)
     )
 }
 
@@ -76,8 +92,9 @@ private fun invHtml(receiver: String, now: Long): String {
     )
     val top = DocLayout.top(info, DocLayout.title("inv_t1", "inv_t2"))
     val sb = StringBuilder()
-    sb.append("<table class='dt'><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th class='n'>${trb("th_qty")}</th><th>${trb("th_expiry")}</th><th>${trb("th_reasons")}</th><th>${trb("th_integrity")}</th></tr>")
+    sb.append("<table class='dt'><tr><th>${trb("th_no")}</th><th>${trb("th_item")}</th><th class='n'>${trb("th_qty")}</th><th>${trb("th_expiry")}</th><th>${trb("th_reasons")}</th><th>${trb("th_integrity")}</th><th>${trb("th_disposal")}</th></tr>")
     var total = 0.0
+    var anyDisposed = false
     BWareInvHolder.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
         total += q
@@ -85,9 +102,13 @@ private fun invHtml(receiver: String, now: Long): String {
         if (r.note.isNotBlank()) sb.append("<div class='sub'>${bwEsc(r.note.trim()).replace("\n", "<br>")}</div>")
         sb.append("</td><td class='n'>${bwFmt(q)}</td><td>${bwEsc(bwDash(r.expiry))}</td>")
         sb.append("<td>${bullets(InvOptions.reasons.filter { it in r.reasons })}</td>")
-        sb.append("<td>${bullets(InvOptions.damage.filter { it in r.reasons })}</td></tr>")
+        sb.append("<td>${bullets(InvOptions.damage.filter { it in r.reasons })}</td>")
+        val disposed = InvOptions.DISPOSED in r.reasons
+        if (disposed) anyDisposed = true
+        sb.append("<td>${if (disposed) "✓ " + bwEsc(tr("disposed_short")) else "—"}</td></tr>")
     }
-    sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th><th></th></tr></table>")
+    sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th><th></th><th></th></tr></table>")
+    if (anyDisposed) sb.append("<div class='sub' style='margin-top:10px;font-size:12px'>${bwEsc(tr("disposed_note"))}</div>")
     val bottom = "<div class='sg'>${Signature.cell("sig_compiled", receiver, now)}</div>" +
         "<div class='sg'>${Signature.cell("sig_checked", "", now, auto = false)}</div>"
     return DocLayout.page(top, sb.toString(), bottom)
@@ -97,6 +118,7 @@ private fun invHtml(receiver: String, now: Long): String {
 fun BWareInventoryScreen(receiver: String, onBack: () -> Unit) {
     val h = BWareInvHolder
     BackHandler { if (h.step == 1) h.step = 0 else onBack() }
+    BWareDraftEffect("inv")   // состояние сохраняется на телефоне и в облаке: не пропадёт ни при выходе, ни при переустановке
     val ctx = LocalContext.current
     var clearOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }

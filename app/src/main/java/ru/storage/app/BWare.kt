@@ -79,6 +79,7 @@ object BWareHolder {
         photos.clear()
         code = ""
         step = 0
+        BWareDraft.delete("recv")
     }
 }
 
@@ -338,8 +339,10 @@ fun CatalogWheel(
             focusTarget = existing
             Toast.makeText(ctx, "Этот товар уже в списке", Toast.LENGTH_SHORT).show()
         } else {
-            rows.add(ItemRow(n, "", extra = true, productId = productId))
-            focusTarget = null
+            // новый товар — на самый верх списка
+            val fresh = ItemRow(n, "", extra = true, productId = productId)
+            rows.add(0, fresh)
+            focusTarget = fresh
         }
         addTick++
         query = ""
@@ -495,6 +498,7 @@ internal fun BWareHeader(title: String, canClear: Boolean, canNext: Boolean, onC
 fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
     val h = BWareHolder
     BackHandler { if (h.step == 1) h.step = 0 else onBack() }
+    BWareDraftEffect("recv")   // состояние сохраняется на телефоне и в облаке: не пропадёт ни при выходе, ни при переустановке
     if (h.step == 1) {
         BWarePreview(receiver)
         return
