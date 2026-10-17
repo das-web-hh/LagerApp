@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.content.Context
 import java.util.Calendar
@@ -111,6 +112,22 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
     val dim = first.getActualMaximum(Calendar.DAY_OF_MONTH)
     val selDay = if (day > dim) dim else day
 
+    // выбрали год/месяц/день — через 3 секунды без изменений дата сохраняется сама (каждое новое нажатие начинает отсчёт заново)
+    val initialSel = remember { Triple(startYear, startMonth, startDay) }
+    var pending by remember { mutableStateOf(false) }
+    LaunchedEffect(year, month, day) {
+        pending = false
+        if (Triple(year, month, day) != initialSel && selDay > 0) {
+            pending = true
+            delay(3000)
+            onPick(String.format(Locale.ROOT, "%02d.%02d.%04d", selDay, month, year))
+        }
+    }
+    val monthsBg = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+    val yearsBg = MaterialTheme.colorScheme.surfaceVariant                 // годы — серый
+    val daysBg = MaterialTheme.colorScheme.secondaryContainer              // дни — свой, насыщенный фон с рамкой
+    val daysBorder = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             modifier = Modifier.fillMaxWidth(0.96f),
@@ -122,7 +139,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                 Spacer(Modifier.height(8.dp))
 
                 // годы — барабан слева направо
-                BoxWithConstraints(Modifier.fillMaxWidth().height(52.dp)) {
+                BoxWithConstraints(Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(16.dp)).background(yearsBg)) {
                     val pad = (maxWidth - YEAR_W) / 2
                     val st = rememberLazyListState(initialFirstVisibleItemIndex = years.indexOf(year).coerceAtLeast(0))
                     LaunchedEffect(Unit) {
@@ -167,7 +184,10 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                 Row(Modifier.fillMaxWidth()) {
                   if (simple) {
                     // месяцы цифрами в два столбца: 01–06 и 07–12
-                    Row(Modifier.width(112.dp).height(GRID_H), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        Modifier.width(112.dp).height(GRID_H).clip(RoundedCornerShape(16.dp)).background(monthsBg).padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         listOf(1..6, 7..12).forEach { col ->
                             Column(Modifier.weight(1f).fillMaxHeight()) {
                                 col.forEach { m ->
@@ -196,7 +216,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                     }
                   } else {
                     // месяцы — столбик-барабан слева
-                    Box(Modifier.width(108.dp).height(GRID_H)) {
+                    Box(Modifier.width(108.dp).height(GRID_H).clip(RoundedCornerShape(16.dp)).background(monthsBg)) {
                         val st = rememberLazyListState(initialFirstVisibleItemIndex = month - 1)
                         LaunchedEffect(Unit) {
                             snapshotFlow { centerIndex(st) }.collect { i ->
@@ -239,7 +259,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                   }
                     Spacer(Modifier.width(8.dp))
                     // дни по неделям
-                    Column(Modifier.weight(1f).height(GRID_H)) {
+                    Column(Modifier.weight(1f).height(GRID_H).clip(RoundedCornerShape(16.dp)).background(daysBg).border(2.dp, daysBorder, RoundedCornerShape(16.dp)).padding(horizontal = 4.dp)) {
                         Row(Modifier.fillMaxWidth().height(20.dp)) {
                             WEEK_DAYS.forEach {
                                 Text(
@@ -292,7 +312,8 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
 
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (selDay > 0) "Выбрано: " + String.format(Locale.ROOT, "%02d.%02d.%04d", selDay, month, year)
+                    if (selDay > 0) "Выбрано: " + String.format(Locale.ROOT, "%02d.%02d.%04d", selDay, month, year) +
+                        (if (pending) "  · сохранится через 3 с" else "")
                     else "Выберите день",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 4.dp)
