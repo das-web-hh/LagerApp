@@ -71,7 +71,6 @@ fun OtherScreen(prefs: Prefs) {
         current == "Журнал" -> JournalScreen { section = null }
         current == "Документы" -> DocsScreen { section = null }
         current == "Bluetooth" -> BluetoothScreen { section = null }
-        current == "Отправить приложение" -> ShareAppScreen { section = null }
         current == "Файлы" -> FilesScreen(onBack = { section = null })
         current == "Рабочее время" -> WorkTimeScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
@@ -88,7 +87,6 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Документы", Icons.Default.Create) { section = "Документы" },
                     TileSpec("Файлы", Icons.Default.Share) { section = "Файлы" },
                     TileSpec("Bluetooth", Icons.Default.Settings) { section = "Bluetooth" },
-                    TileSpec("Отправить приложение", Icons.AutoMirrored.Filled.Send) { section = "Отправить приложение" },
                     TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" }
                 )
             )
@@ -109,6 +107,7 @@ fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
         current == "Лицензия" -> LicenseScreen(profile) { section = null }
         current == "О приложении" -> AboutAppScreen { section = null }
         current == "О системе" -> AboutSystemScreen { section = null }
+        current == "Отправить приложение" -> ShareAppScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Еще", style = MaterialTheme.typography.headlineMedium)
@@ -135,7 +134,7 @@ fun MoreScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit) {
                 MoreRow(Icons.Default.Build, "О системе", "Телефон, память, сеть, батарея") { section = "О системе" }
             }
             Spacer(Modifier.height(12.dp))
-            WideOutlinedButton(Icons.Default.Share, "Выгрузка данных") { section = "Выгрузка данных" }
+            WideOutlinedButton(Icons.Default.Share, "Отправить приложение") { section = "Отправить приложение" }
         }
     }
 }
