@@ -546,7 +546,7 @@ private fun WheelRow(
     rowH: Dp,
     centerOnly: Boolean,
     bigText: Boolean,
-    /** «Приём по имени»: «план N» стоит рядом с фактом, а в обычном списке тап по строке (в т.ч. по числу) = +1 */
+    /** «Приём по имени»: «план N» стоит рядом с фактом; в обычном списке тап по строке = +1, тап по числу открывает окно прокрутки количества */
     planBeside: Boolean = false,
     onSelect: () -> Unit,
     onPickExpiry: () -> Unit,
@@ -762,7 +762,7 @@ private fun WheelRow(
                 Modifier.defaultMinSize(minWidth = if (bigText) 44.dp else 56.dp)
                     .clip(RoundedCornerShape(if (bigText) 8.dp else 12.dp))
                     .background(scheme.surface)
-                    .clickable(enabled = canEdit && !(plain && planBeside)) { onPickFact() }
+                    .clickable(enabled = canEdit) { onPickFact() }
                     .padding(horizontal = if (bigText) 8.dp else 10.dp, vertical = if (bigText) 6.dp else 8.dp),
                 contentAlignment = Alignment.Center
             ) {
