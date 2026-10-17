@@ -76,6 +76,9 @@ import kotlin.math.roundToInt
 private val ROW_H = 76.dp
 /** Приём по имени: компактная строка в одну линию (было 114 dp). Единственное число — меняется здесь. */
 private val ROW_H_BIG = 80.dp
+
+/** «Приём по имени»: больше стольких строк — вместо колеса обычный список (строки заполняют экран). */
+private const val NAME_WHEEL_MAX = 6
 private val DIGIT_H = 46.dp
 private const val CYCLE_BASE = 1_000_000
 
@@ -173,12 +176,13 @@ private fun GraphicsLayerScope.applyBigCenter(state: LazyListState, index: Int, 
     val k = dPx / info.size            // расстояние до середины в «строках», со знаком
     val ak = abs(k)
     val near = ak.coerceAtMost(1f)
-    val s = 1f - 0.5f * near           // середина 1.0, соседи и дальше 0.5
+    val m = 0.75f                      // соседи и дальше: 0.75 (было 0.5 — на 50% крупнее)
+    val s = 1f - (1f - m) * near       // середина 1.0
     scaleX = s
     scaleY = s
     alpha = if (ak <= 1f) 1f - 0.3f * ak else (0.7f - 0.2f * (ak - 1f)).coerceAtLeast(0.3f)
     // уменьшенные строки подтягиваем к середине, чтобы между ними не было больших дыр
-    val ideal = if (ak <= 1f) 0.25f * ak else 0.5f * ak - 0.25f
+    val ideal = if (ak <= 1f) (1f - m) / 2f * ak else (1f - m) * (ak - 0.5f)
     translationY = -Math.signum(k) * ideal * info.size * 0.7f
     rotationX = -(dPx / half).coerceIn(-1f, 1f) * tilt
     cameraDistance = 14f * density
@@ -329,7 +333,9 @@ fun CountWheelList(
     // пока считаем товар, экран не выключается (время — в Настройки → Экран; каждое нажатие/ввод начинает отсчёт заново)
     KeepScreenOn(listOf(rows.map { it.fact + "|" + it.defect }, query, picking, editing))
     val density = LocalDensity.current
-    val bigRows = nameMode && !plain
+    // «Приём по имени»: когда строк больше 6, они заполняют экран — колесо отключается, показывается обычный список одинаковых строк
+    val usePlain = plain || (nameMode && rows.size > NAME_WHEEL_MAX)
+    val bigRows = nameMode && !usePlain
     val rowH = if (bigRows) ROW_H_BIG else ROW_H
     val rowPx = with(density) { rowH.roundToPx() }
 
@@ -373,7 +379,7 @@ fun CountWheelList(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(emptyText, style = MaterialTheme.typography.bodyMedium)
                 }
-            } else if (plain) {
+            } else if (usePlain) {
                 val plainState = rememberLazyListState()
                 LaunchedEffect(focusRow, n) {
                     val fr = focusRow
@@ -398,7 +404,7 @@ fun CountWheelList(
                             plain = true,
                             bware = bware,
                             extraLabel = extraLabel,
-                            rowH = rowH, centerOnly = false, bigText = false, onSelect = { focusRow = row },
+                            rowH = rowH, centerOnly = false, bigText = false, planBeside = nameMode, onSelect = { focusRow = row },
                             onPickExpiry = { expiryRow = row },
                             onDetails = onDetails?.let { cb -> { cb(row) } },
                             onPickFact = { picking = row to true },
@@ -477,7 +483,7 @@ fun CountWheelList(
                                     plain = false,
                                     bware = bware,
                                     extraLabel = extraLabel,
-                                    rowH = rowH, centerOnly = bigRows, bigText = bigRows, onSelect = { focusRow = row },
+                                    rowH = rowH, centerOnly = bigRows, bigText = bigRows, planBeside = nameMode, onSelect = { focusRow = row },
                                     onPickExpiry = { expiryRow = row },
                                     onDetails = onDetails?.let { cb -> { cb(row) } },
                                     onPickFact = { picking = row to true },
@@ -497,7 +503,7 @@ fun CountWheelList(
                     maxH = if (bigRows) 96.dp else 280.dp
                 )
             }
-            if (scanFab && onScan != null && editable && n > 0 && !plain) {
+            if (scanFab && onScan != null && editable && n > 0 && (!usePlain || nameMode)) {
                 ScanFab { onScan() }
             }
             CountOverlay()
@@ -540,6 +546,8 @@ private fun WheelRow(
     rowH: Dp,
     centerOnly: Boolean,
     bigText: Boolean,
+    /** «Приём по имени»: «план N» стоит рядом с фактом, а в обычном списке тап по строке (в т.ч. по числу) = +1 */
+    planBeside: Boolean = false,
     onSelect: () -> Unit,
     onPickExpiry: () -> Unit,
     onDetails: (() -> Unit)?,
@@ -734,7 +742,7 @@ private fun WheelRow(
                 } else {
                     val sub = buildList {
                         // в компактной строке план стоит рядом с фактом, а не под названием
-                        if (row.extra) { if (extraLabel.isNotEmpty()) add(extraLabel) } else if (!bigText) add("план ${fmtQ(planD)}")
+                        if (row.extra) { if (extraLabel.isNotEmpty()) add(extraLabel) } else if (!(bigText || planBeside)) add("план ${fmtQ(planD)}")
                         if (defD > 0) add("брак ${fmtQ(defD)}")
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")
@@ -742,7 +750,7 @@ private fun WheelRow(
                 }
             }
             // план — рядом с фактическим количеством
-            if (bigText && !bware && !row.extra) {
+            if ((bigText || planBeside) && !bware && !row.extra) {
                 Text(
                     "план ${fmtQ(planD)}",
                     fontSize = 13.sp, maxLines = 1, color = scheme.onSurfaceVariant,
@@ -754,7 +762,7 @@ private fun WheelRow(
                 Modifier.defaultMinSize(minWidth = if (bigText) 44.dp else 56.dp)
                     .clip(RoundedCornerShape(if (bigText) 8.dp else 12.dp))
                     .background(scheme.surface)
-                    .clickable(enabled = canEdit) { onPickFact() }
+                    .clickable(enabled = canEdit && !(plain && planBeside)) { onPickFact() }
                     .padding(horizontal = if (bigText) 8.dp else 10.dp, vertical = if (bigText) 6.dp else 8.dp),
                 contentAlignment = Alignment.Center
             ) {

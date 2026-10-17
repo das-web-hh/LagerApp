@@ -14,6 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalView
@@ -1179,6 +1182,19 @@ private fun ColumnScope.NameModeMain(
     val senderText = job.sender.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
     val orderText = job.order.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
 
+    // линия прогресса на самом верху окна: сколько процентов плана уже посчитано (половина — 50%, всё — 100%)
+    val planRows = job.items.filter { !it.extra }
+    val planned = planRows.sumOf { normalizeQty(it.qty).toDoubleOrNull() ?: 0.0 }
+    val counted = planRows.sumOf { minOf(normalizeQty(it.fact).toDoubleOrNull() ?: 0.0, normalizeQty(it.qty).toDoubleOrNull() ?: 0.0) }
+    val pct = if (planned > 0) Math.round(counted / planned * 100).toInt().coerceIn(0, 100) else 0
+    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        LinearProgressIndicator(
+            progress = pct / 100f,
+            modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp))
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("$pct%", fontWeight = FontWeight.Bold)
+    }
     // 1-я строка: отправитель слева, номер заказа справа (над «Далее»); 2-я строка: «Далее» справа. Тап по тексту открывает правку
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
