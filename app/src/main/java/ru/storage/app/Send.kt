@@ -743,6 +743,32 @@ internal fun BigCounter(
     }
 }
 
+/** Результат подсчёта Postwagen текстом: дата, время, принято, отправлено (для WhatsApp, Telegram и т. п.). */
+internal fun wagenText(op: WagenOp): String {
+    val d = Date(op.createdAt)
+    val sb = StringBuilder()
+    sb.append("DHL Postwagen\n")
+    sb.append("Дата: ").append(SimpleDateFormat("dd.MM.yyyy", RU).format(d)).append('\n')
+    sb.append("Время: ").append(SimpleDateFormat("HH:mm", RU).format(d)).append('\n')
+    sb.append("Принято: ").append(op.received).append('\n')
+    sb.append("Отправлено: ").append(op.sent)
+    if (op.note.isNotBlank()) sb.append("\nЗаметка: ").append(op.note.trim())
+    return sb.toString()
+}
+
+/** Системное окно «Поделиться»: любое установленное приложение (WhatsApp, Telegram, почта, SMS…). */
+internal fun shareWagen(ctx: Context, op: WagenOp) {
+    try {
+        val i = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, wagenText(op))
+        }
+        ctx.startActivity(Intent.createChooser(i, "Отправить результат").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: Exception) {
+        Toast.makeText(ctx, "Не удалось открыть отправку", Toast.LENGTH_SHORT).show()
+    }
+}
+
 @Composable
 fun WagenAddScreen(onClose: () -> Unit) {
     BackHandler(onBack = onClose)
@@ -779,11 +805,26 @@ fun WagenAddScreen(onClose: () -> Unit) {
                         note = note.trim(), author = Session.displayName, updatedAt = now
                     )
                     scope.launch(Dispatchers.IO) { SendCloud.saveWagen(sdb, op) }
+                    shareWagen(ctx, op)
                     onClose()
                 },
                 enabled = sent > 0 || received > 0,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
-            ) { Text("Сохранить", style = MaterialTheme.typography.titleMedium) }
+            ) { Text("Сохранить и отправить коллеге", style = MaterialTheme.typography.titleMedium) }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    val now = System.currentTimeMillis()
+                    val op = WagenOp(
+                        id = newSendId(), createdAt = now, sent = sent, received = received,
+                        note = note.trim(), author = Session.displayName, updatedAt = now
+                    )
+                    scope.launch(Dispatchers.IO) { SendCloud.saveWagen(sdb, op) }
+                    onClose()
+                },
+                enabled = sent > 0 || received > 0,
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) { Text("Только сохранить") }
         }
         CountOverlay()
     }
@@ -834,6 +875,10 @@ fun WagenDetailScreen(id: String, onClose: () -> Unit) {
             }
         }
         Spacer(Modifier.height(16.dp))
+        Button(onClick = { shareWagen(ctx, cur) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Text("Отправить результат (WhatsApp, Telegram…)")
+        }
+        Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Удалить операцию", color = MaterialTheme.colorScheme.error)
         }
