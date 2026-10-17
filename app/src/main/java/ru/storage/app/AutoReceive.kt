@@ -168,6 +168,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     val appContext: Context get() = app
     val pages = mutableStateListOf<PageState>()
     var running by mutableStateOf(false)
+
+    /** Партия пришла из очереди автоприёма: при паузе автоприёма её распознавание ждёт «Продолжить». */
+    @Volatile var fromQueue = false
     var message by mutableStateOf("")
     var sender by mutableStateOf("none")
     var order by mutableStateOf("none")
@@ -542,6 +545,11 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 for (i in 0 until n) {
                     val st = pages[i]
                     if (onlyFailed && st.ok) continue
+                    while (fromQueue && AutoPause.paused) {
+                        st.status = "пауза"
+                        message = "Автоприём на паузе"
+                        delay(1000)
+                    }
                     st.ok = false
                     message = "Лист ${i + 1} из $n"
                     st.status = "подготовка…"
@@ -595,6 +603,10 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     }
                     rebuild()
                     if (i < n - 1) delay(2000)
+                }
+                while (fromQueue && AutoPause.paused) {
+                    message = "Автоприём на паузе"
+                    delay(1000)
                 }
                 val failed = pages.count { !it.ok }
                 message = if (failed == 0) "Готово: распознано листов — $n"

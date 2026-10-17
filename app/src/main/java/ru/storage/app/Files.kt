@@ -45,6 +45,36 @@ class FolderFile(
     val folder: String
 )
 
+/**
+ * Пауза автоприёма: пока включена, папки не проверяются на новые файлы, очередь не двигается и ИИ ничего не получает —
+ * окно только показывает файлы. Хранится на телефоне и в аккаунте (Firebase), поэтому держится и после перезапуска,
+ * и после удаления и повторной установки приложения (после входа в тот же аккаунт).
+ */
+object AutoPause {
+    var paused by mutableStateOf(false)
+        private set
+
+    private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("auto_pause", Context.MODE_PRIVATE)
+
+    fun load(ctx: Context) {
+        paused = sp(ctx).getBoolean("paused", false)
+    }
+
+    /** Нажатие «Пауза» / «Продолжить»: запоминается сразу и уходит в облако. */
+    fun set(ctx: Context, v: Boolean) {
+        paused = v
+        sp(ctx).edit().putBoolean("paused", v).apply()
+        CloudSettings.save(ctx, Prefs(ctx))
+    }
+
+    /** Значение из аккаунта (после входа или переустановки). */
+    fun applyCloud(ctx: Context, v: Boolean?) {
+        if (v == null) return
+        paused = v
+        sp(ctx).edit().putBoolean("paused", v).apply()
+    }
+}
+
 object Folders {
     val folders = mutableStateListOf<String>()
     private val processed = mutableStateMapOf<String, Boolean>()
@@ -161,7 +191,7 @@ object Folders {
     fun scanAll(ctx: Context, enqueue: Boolean): List<FolderFile> {
         load(ctx)
         val all = folders.toList().flatMap { listTree(ctx, Uri.parse(it)) }.sortedByDescending { it.modified }
-        if (enqueue && auto) {
+        if (enqueue && auto && !AutoPause.paused) {
             all.filter { !isProcessed(it.id) }.sortedBy { it.modified }.forEach { FolderQueue.enqueue(ctx, it) }
         }
         return all
@@ -185,7 +215,7 @@ object Folders {
 
     /** Подпись состояния файла в списке. */
     fun status(f: FolderFile): String {
-        if (f.id in FolderQueue.queued) return "В очереди на распознавание"
+        if (f.id in FolderQueue.queued) return if (AutoPause.paused) "В очереди — автоприём на паузе" else "В очереди на распознавание"
         val path = FolderQueue.tracked[f.id]
         if (path != null) {
             val j = AutoReceiveHolder.find(path)
@@ -205,6 +235,7 @@ object FolderQueue {
 
     @Synchronized
     fun enqueue(ctx: Context, f: FolderFile) {
+        if (AutoPause.paused) return
         if (f.id in queued || tracked.containsKey(f.id)) return
         val app = ctx.applicationContext
         if (!started) {
@@ -217,18 +248,24 @@ object FolderQueue {
 
     private suspend fun work(app: Context, f: FolderFile) {
         try {
+            // пауза: файл ждёт в очереди, пока автоприём не продолжат
+            while (AutoPause.paused) delay(1000)
             val dir = File(app.cacheDir, "incoming/" + UUID.randomUUID().toString()).also { it.mkdirs() }
             val target = File(dir, f.name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
             val ins = app.contentResolver.openInputStream(f.uri) ?: throw RuntimeException("Файл недоступен")
             ins.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
             val job = AutoReceiveHolder.create(app, IncomingFile(f.name, target.path), false)
             tracked[f.id] = target.path
+            job.fromQueue = true
             job.startOnce()
             queued.remove(f.id)
-            val t0 = System.currentTimeMillis()
+            var t0 = System.currentTimeMillis()
             delay(500)
-            // ждём, пока ИИ дочитает все листы этого файла (не дольше 20 минут)
-            while (job.running && System.currentTimeMillis() - t0 < 20 * 60_000L) delay(1000)
+            // ждём, пока ИИ дочитает все листы этого файла (не дольше 20 минут; время паузы не считается)
+            while (job.running && System.currentTimeMillis() - t0 < 20 * 60_000L) {
+                if (AutoPause.paused) t0 += 1000
+                delay(1000)
+            }
         } catch (e: Exception) {
         } finally {
             queued.remove(f.id)
@@ -288,7 +325,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
     var reload by remember { mutableIntStateOf(0) }
     var baseline by remember { mutableStateOf<Pair<Uri, List<FolderFile>>?>(null) }
 
-    LaunchedEffect(reload, Folders.folders.size, Folders.auto) {
+    LaunchedEffect(reload, Folders.folders.size, Folders.auto, AutoPause.paused) {
         loading = true
         files = withContext(Dispatchers.IO) { Folders.scanAll(ctx, true) }
         loading = false
@@ -351,6 +388,21 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
+            // пауза / продолжить автоприём (хранится в аккаунте: держится после перезапуска и переустановки)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(if (AutoPause.paused) "⏸ Автоприём на паузе" else "▶ Автоприём работает", style = MaterialTheme.typography.titleMedium,
+                        color = if (AutoPause.paused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                    Text(
+                        if (AutoPause.paused) "Новые файлы не проверяются и не отправляются на распознавание, окно только показывает файлы. Пауза сохраняется, пока вы не нажмёте «Продолжить»."
+                        else "Новые файлы из папок идут на распознавание по очереди.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                if (AutoPause.paused) Button(onClick = { AutoPause.set(ctx, false) }) { Text("▶ Продолжить") }
+                else OutlinedButton(onClick = { AutoPause.set(ctx, true) }) { Text("⏸ Пауза") }
+            }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Принимать новые файлы автоматически", style = MaterialTheme.typography.bodyLarge)
@@ -381,6 +433,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
             }
             if (newCount > 0 && !Folders.auto) {
                 OutlinedButton(
+                    enabled = !AutoPause.paused,
                     onClick = {
                         files.filter { !Folders.isProcessed(it.id) }.sortedBy { it.modified }.forEach { FolderQueue.enqueue(ctx, it) }
                     },

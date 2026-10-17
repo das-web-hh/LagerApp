@@ -70,6 +70,7 @@ class MainActivity : FragmentActivity() {
         PrintCfg.load(applicationContext)
         ScreenCfg.load(applicationContext)
         DateCfg.load(applicationContext)
+        AutoPause.load(applicationContext)
         Speaker.init(applicationContext)
         setContent {
             AppTheme { AppRoot() }
