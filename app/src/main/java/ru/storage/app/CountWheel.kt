@@ -102,11 +102,14 @@ private fun findRows(rows: List<ItemRow>, q: String): List<ItemRow> {
     return rows
         .filter { r ->
             val n = r.name.lowercase()
-            words.all { n.contains(it) }
+            val bc = r.barcode.lowercase()
+            // слово запроса есть в названии или в штрих-коде строки
+            words.all { n.contains(it) || (bc.isNotEmpty() && bc.contains(it)) }
         }
         .sortedBy { r ->
             val n = r.name.lowercase()
             when {
+                r.barcode.isNotEmpty() && r.barcode.lowercase().startsWith(w0) -> 0
                 n.startsWith(w0) -> 0
                 n.split(' ', ',', '-', '/', '(', ')').any { it.startsWith(w0) } -> 1
                 else -> 2
@@ -227,7 +230,7 @@ private fun ListSearchField(
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (query.isEmpty()) {
                 Text(
-                    "Поиск по списку",
+                    "Название или штрих-код",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1
