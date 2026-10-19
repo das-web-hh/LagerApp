@@ -1,10 +1,11 @@
-@file:OptIn(ExperimentalFoundationApi::class)
+@file:OptIn(ExperimentalFoundationApi::class, kotlinx.coroutines.FlowPreview::class)
 
 package ru.storage.app
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -46,6 +47,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -56,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -135,6 +139,11 @@ private suspend fun scrollToRow(state: LazyListState, k: Int, cycle: Int, rowPx:
     val t = if (cur - base <= base + cycle - cur) base else base + cycle
     val off = -(h - rowPx) / 2
     if (animate) state.animateScrollToItem(t, off) else state.scrollToItem(t, off)
+}
+
+/** Ждёт, пока высота списка перестанет меняться (закрылась/открылась клавиатура), иначе прокрутка собьётся. */
+private suspend fun awaitStableViewport(state: LazyListState) {
+    snapshotFlow { state.layoutInfo.viewportSize.height }.debounce(180).first()
 }
 
 /** Эффект колеса: чем дальше строка от середины, тем она меньше, бледнее и сильнее наклонена. */
@@ -252,7 +261,16 @@ private fun ListSearchField(
 /** Мини-окно с подходящими товарами под полем поиска. */
 @Composable
 private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier, maxH: Dp = 280.dp) {
-    Card(modifier.fillMaxWidth().heightIn(max = maxH)) {
+    // свой цвет и рамка — чтобы окно подсказок отличалось от основного списка
+    Card(
+        modifier.fillMaxWidth().heightIn(max = maxH),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.tertiary)
+    ) {
         if (hits.isEmpty()) {
             Text("Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
         } else {
@@ -269,7 +287,7 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
                         }.joinToString(" · ")
                         Text(info, style = MaterialTheme.typography.bodySmall)
                     }
-                    if (i < hits.lastIndex) HorizontalDivider()
+                    if (i < hits.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f))
                 }
             }
         }
@@ -326,6 +344,9 @@ fun CountWheelList(
     var expiryRow by remember { mutableStateOf<ItemRow?>(null) }
     var focusRow by remember { mutableStateOf<ItemRow?>(null) }
     var blinkRow by remember { mutableStateOf<ItemRow?>(null) }
+    var focusBlink by remember { mutableStateOf(true) }      // мигнуть два раза, когда строка встала на середину
+    var focusAfterIme by remember { mutableStateOf(false) }  // сначала дождаться, пока закроется клавиатура
+    val keyboard = LocalSoftwareKeyboardController.current
     var blinkTick by remember { mutableIntStateOf(0) }
     val memo = remember { arrayOfNulls<ItemRow>(1) } // строка, стоявшая посередине (чтобы не терять место)
     val focusManager = LocalFocusManager.current
@@ -342,12 +363,13 @@ fun CountWheelList(
     LaunchedEffect(addTick) {
         if (addTick > 0) {
             query = ""
+            focusBlink = true; focusAfterIme = false
             focusRow = focusTarget ?: rows.lastOrNull()
         }
     }
 
     LaunchedEffect(jumpTick) {
-        if (jumpTick > 0 && jumpTo != null) focusRow = jumpTo
+        if (jumpTick > 0 && jumpTo != null) { focusBlink = true; focusAfterIme = false; focusRow = jumpTo }
     }
     LaunchedEffect(searchTick) {
         if (searchTick > 0) query = searchText
@@ -355,7 +377,8 @@ fun CountWheelList(
     // пока набираем текст, первая найденная строка сама встаёт на середину
     if (bigRows) {
         LaunchedEffect(query) {
-            if (query.isNotBlank()) findRows(rows, query).firstOrNull()?.let { focusRow = it }
+            // пока печатаем — встаёт на середину без мигания; мигает после выбора в окне подсказок
+            if (query.isNotBlank()) findRows(rows, query).firstOrNull()?.let { focusBlink = false; focusAfterIme = false; focusRow = it }
         }
     }
 
@@ -364,9 +387,12 @@ fun CountWheelList(
     val hits = if (query.isBlank()) emptyList() else findRows(rows, query)
 
     fun pick(row: ItemRow) {
+        focusBlink = true
+        focusAfterIme = true
         focusRow = row
         query = ""
         focusManager.clearFocus()
+        keyboard?.hide()
     }
 
     Column(modifier) {
@@ -381,14 +407,21 @@ fun CountWheelList(
                 }
             } else if (usePlain) {
                 val plainState = rememberLazyListState()
+                val plainItemPx = with(density) { 68.dp.roundToPx() }
                 LaunchedEffect(focusRow, n) {
                     val fr = focusRow
                     if (fr != null) {
                         val k = rows.indexOf(fr)
                         if (k >= 0) {
-                            plainState.animateScrollToItem(k)
-                            blinkRow = fr
-                            blinkTick++
+                            if (focusAfterIme) awaitStableViewport(plainState)
+                            // строка — на середину списка (у самого начала и конца списка — насколько хватает места)
+                            val h = plainState.layoutInfo.viewportSize.height
+                            val shift = ((h - plainItemPx) / 2).coerceIn(0, k * plainItemPx)
+                            plainState.animateScrollToItem(k, -shift)
+                            if (focusBlink) {
+                                blinkRow = fr
+                                blinkTick++
+                            }
                         }
                         focusRow = null
                     }
@@ -432,10 +465,15 @@ fun CountWheelList(
                         if (fr != null) {
                             val k = rows.indexOf(fr)
                             if (k >= 0) {
+                                // выбрали в подсказках: клавиатура закрывается и меняет высоту списка — ждём, потом прокручиваем
+                                if (focusAfterIme) awaitStableViewport(listState)
                                 scrollToRow(listState, k, cycle, rowPx, true)
+                                memo[0] = fr
                                 // строка встала на середину — мигнуть два раза
-                                blinkRow = fr
-                                blinkTick++
+                                if (focusBlink) {
+                                    blinkRow = fr
+                                    blinkTick++
+                                }
                             }
                             focusRow = null
                         }
@@ -447,7 +485,8 @@ fun CountWheelList(
                             if (h > 0) {
                                 if (lastH[0] != 0 && lastH[0] != h) {
                                     val k = memo[0]?.let { rows.indexOf(it) } ?: -1
-                                    if (k >= 0) scrollToRow(listState, k, cycle, rowPx, false)
+                                    // пока ждёт выбранная строка (focusRow), старое место не возвращаем — иначе она «откатывается» назад
+                                    if (k >= 0 && focusRow == null) scrollToRow(listState, k, cycle, rowPx, false)
                                 }
                                 lastH[0] = h
                             }
