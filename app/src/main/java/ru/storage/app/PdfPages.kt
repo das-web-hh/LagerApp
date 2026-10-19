@@ -14,7 +14,7 @@ import java.io.File
 interface PageSource : AutoCloseable {
     val count: Int
     /** Лист [index] (с нуля) → чёрно-белый PNG. */
-    fun renderBw(index: Int, longSide: Int = 1800, bw: Boolean = true): ByteArray
+    fun renderBw(index: Int, longSide: Int = 1600, bw: Boolean = true): ByteArray
 }
 
 fun isImageName(name: String): Boolean {
@@ -146,7 +146,7 @@ fun bitmapToGrayJpeg(bmp: Bitmap): ByteArray {
     c.drawColor(Color.WHITE)
     c.drawBitmap(bmp, 0f, 0f, paint)
     val out = ByteArrayOutputStream()
-    gray.compress(Bitmap.CompressFormat.JPEG, 88, out)
+    gray.compress(Bitmap.CompressFormat.JPEG, 80, out)
     gray.recycle()
     bmp.recycle()
     return out.toByteArray()
@@ -206,7 +206,23 @@ fun bitmapToCleanJpeg(bmp: Bitmap): ByteArray {
     }
     bmp.setPixels(px, 0, w, 0, 0, w, h)
     val out = ByteArrayOutputStream()
-    bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
+    bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
     bmp.recycle()
     return out.toByteArray()
+}
+
+/** Лист почти без тёмных пикселей (пустая оборотная сторона): в ИИ не отправляется — экономия запроса. */
+fun isBlankPage(jpeg: ByteArray): Boolean {
+    val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, BitmapFactory.Options().apply { inSampleSize = 2 }) ?: return false
+    val w = bmp.width
+    val h = bmp.height
+    val px = IntArray(w * h)
+    bmp.getPixels(px, 0, w, 0, 0, w, h)
+    bmp.recycle()
+    var dark = 0
+    for (c in px) {
+        val g = (((c shr 16) and 0xFF) * 299 + ((c shr 8) and 0xFF) * 587 + (c and 0xFF) * 114) / 1000
+        if (g < 140) dark++
+    }
+    return dark.toDouble() / px.size < 0.0005
 }

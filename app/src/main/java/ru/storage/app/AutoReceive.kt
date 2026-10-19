@@ -559,17 +559,24 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                         st.status = "ошибка листа: ${e.message}"
                         continue
                     }
+                    // пустой лист (кроме первого) в ИИ не отправляем: экономия токенов
+                    if (i > 0 && isBlankPage(png)) {
+                        results[i] = PageResult("none", "none", emptyList())
+                        st.ok = true
+                        st.status = "пустой лист — пропущен"
+                        rebuild()
+                        continue
+                    }
                     // одновременно в ИИ идёт один лист (из любой партии) — чтобы не упереться в лимиты
                     AutoReceiveHolder.aiLock.withLock {
                         for (a in 1..attempts) {
                             st.status = if (a == 1) "отправка…" else "повтор $a из $attempts…"
                             try {
                                 // со 2-й попытки — серая картинка покрупнее вместо чёрно-белой
-                                if (a == 2) png = try { doc.renderBw(i, 2200, false) } catch (e: Exception) { png }
+                                if (a == 2) png = try { doc.renderBw(i, 1700, false) } catch (e: Exception) { png }
                                 val r = Ai.recognize(app, png, i + 1, n, rules)
-                                // пустой лист — повтор; на первом листе без товаров тоже (там таблица почти всегда есть)
-                                val blank = r.items.isEmpty() && r.sender == "none" && r.order == "none"
-                                if ((blank || (i == 0 && r.items.isEmpty())) && a < attempts) {
+                                // повтор (двойной расход токенов) — только на первом листе без товаров: там таблица почти всегда есть
+                                if (i == 0 && r.items.isEmpty() && a < attempts) {
                                     throw RuntimeException("не нашёл товары, пробую в другом виде")
                                 }
                                 results[i] = r

@@ -66,6 +66,7 @@ object CloudSettings {
             "screenMinutes" to ScreenCfg.minutes,
             "dateSimple" to DateCfg.simple,
             "autoPaused" to AutoPause.paused,
+            "fileSwipe" to FileNavCfg.dir.toLong(),
             "updatedAt" to ts
         )
         // Google Диск настраивает только администратор; у остальных этих полей в аккаунте нет
@@ -114,6 +115,7 @@ object CloudSettings {
             ScreenCfg.applyCloud(ctx, snap.getBoolean("screenOn"), snap.getLong("screenMinutes"))
             DateCfg.applyCloud(ctx, snap.getBoolean("dateSimple"))
             AutoPause.applyCloud(ctx, snap.getBoolean("autoPaused"))
+            FileNavCfg.applyCloud(ctx, snap.getLong("fileSwipe"))
             sp(ctx).edit().putLong("updated", remote).apply()
             return true
         }
@@ -584,6 +586,24 @@ private fun ScreenSettings(prefs: Prefs, onBack: () -> Unit) {
                     CloudSettings.save(ctx, prefs)
                 }
             )
+        }
+        Spacer(Modifier.height(28.dp))
+        Text("Листание файлов (раздел «Файлы»)", style = MaterialTheme.typography.titleMedium)
+        Text("Какой жест открывает СЛЕДУЮЩИЙ файл. Противоположный жест открывает предыдущий. Кнопки «Назад» и «Вперёд» есть всегда.", style = MaterialTheme.typography.bodySmall)
+        listOf("Свайп влево", "Свайп вправо", "Свайп вверх", "Свайп вниз").forEachIndexed { i, label ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    FileNavCfg.set(ctx, i)
+                    CloudSettings.save(ctx, prefs)
+                },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(selected = FileNavCfg.dir == i, onClick = {
+                    FileNavCfg.set(ctx, i)
+                    CloudSettings.save(ctx, prefs)
+                })
+                Text(label)
+            }
         }
     }
 }

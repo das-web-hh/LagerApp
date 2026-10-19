@@ -71,6 +71,7 @@ class MainActivity : FragmentActivity() {
         ScreenCfg.load(applicationContext)
         DateCfg.load(applicationContext)
         AutoPause.load(applicationContext)
+        FileNavCfg.load(applicationContext)
         Speaker.init(applicationContext)
         setContent {
             AppTheme { AppRoot() }

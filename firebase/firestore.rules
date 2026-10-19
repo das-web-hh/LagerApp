@@ -53,7 +53,7 @@ service cloud.firestore {
       // email администратора нужен новому работнику, чтобы создать задачу «подтвердить»
       allow get: if id == 'admin' && signedIn();
       allow read: if isActive();
-      allow write: if isAdmin() || (id == 'worktime' && isActive());
+      allow write: if isAdmin();
     }
 
     // Настройки аккаунта (документ = логин; у администратора — «admin»). Читать можно у администратора: у всех те же настройки Диска.

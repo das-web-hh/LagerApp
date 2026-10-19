@@ -75,15 +75,12 @@ fun WorkTimeScreen(onBack: () -> Unit) {
     }
 }
 
-/** Окно «Настройки → Рабочее время»: учёт на этом телефоне, права доступа; точку, радиус, зону подхода, расписание и короткие дни меняет администратор. */
+/** Окно «Настройки → Рабочее время»: каждый пользователь сам включает учёт и сам настраивает точку, радиус, зону подхода, расписание и короткие дни; всё хранится только на его телефоне. */
 @Composable
 fun WorkSettingsScreen(onBack: () -> Unit) {
     var picking by rememberSaveable { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
     val ctx = LocalContext.current
-    LaunchedEffect(Unit) {
-        if (WorkCloud.pull(ctx)) tick++
-    }
     if (picking) {
         BackHandler { picking = false }
         val c = remember { WorkStore.cfg(ctx) }
@@ -92,7 +89,6 @@ fun WorkSettingsScreen(onBack: () -> Unit) {
             onPick = { lat, lon ->
                 val n = WorkStore.cfg(ctx).copy(hasPoint = true, lat = lat, lon = lon)
                 WorkStore.saveCfg(ctx, n)
-                WorkCloud.push(ctx, n)
                 picking = false
                 tick++
             },
@@ -429,7 +425,7 @@ private fun YearTab(tick: Int) {
 @Composable
 private fun WorkSettingsTab(tick: Int, onPickPoint: () -> Unit, onChanged: () -> Unit) {
     val ctx = LocalContext.current
-    val admin = Session.isAdmin
+    val admin = true   // каждый пользователь сам настраивает свои параметры (ничего не раздаётся с сервера)
     var cfg by remember(tick) { mutableStateOf(WorkStore.cfg(ctx)) }
     var radiusText by remember { mutableStateOf(cfg.radius.toString()) }
     var intervalText by remember { mutableStateOf(cfg.intervalMin.toString()) }
@@ -442,7 +438,6 @@ private fun WorkSettingsTab(tick: Int, onPickPoint: () -> Unit, onChanged: () ->
     fun upd(n: WorkCfg, shared: Boolean = true) {
         cfg = n
         WorkStore.saveCfg(ctx, n)
-        if (shared && admin) WorkCloud.push(ctx, n)
         onChanged()
     }
 

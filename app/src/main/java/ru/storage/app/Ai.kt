@@ -264,7 +264,7 @@ object Ai {
                     )
                 }
                 content.put(JSONObject().put("type", "text").put("text", prompt))
-                val body = JSONObject().put("model", model).put("max_tokens", 4096).put(
+                val body = JSONObject().put("model", model).put("max_tokens", 3000).put(
                     "messages", JSONArray().put(JSONObject().put("role", "user").put("content", content))
                 )
                 val r = post(

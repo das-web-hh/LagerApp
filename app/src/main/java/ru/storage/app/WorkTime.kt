@@ -471,62 +471,13 @@ class WorkBootReceiver : BroadcastReceiver() {
 }
 
 /**
- * Общие настройки рабочего времени (точка, радиус, зона подхода, расписание, короткие дни) меняет только администратор;
- * они хранятся в Firebase config/worktime и подтягиваются на все телефоны. Включение учёта («enabled») — на каждом телефоне своё.
+ * Раньше настройки рабочего времени раздавались с сервера всем телефонам. Теперь (безопасность) каждый пользователь
+ * настраивает и считает рабочее время сам, только на своём телефоне: общей записи в Firebase нет и она не читается.
  */
 object WorkCloud {
-    private fun ref() = FirebaseFirestore.getInstance().collection("config").document("worktime")
+    @Suppress("UNUSED_PARAMETER")
+    fun push(ctx: Context, c: WorkCfg) { }
 
-    fun push(ctx: Context, c: WorkCfg) {
-        if (!Session.isAdmin) return
-        val now = System.currentTimeMillis()
-        WorkStore.setCfgUpdated(ctx, now)
-        try {
-            ref().set(
-                hashMapOf<String, Any>(
-                    "hasPoint" to c.hasPoint, "lat" to c.lat, "lon" to c.lon, "radius" to c.radius,
-                    "fromMin" to c.fromMin, "toMin" to c.toMin, "intervalMin" to c.intervalMin,
-                    "farIntervalMin" to c.farIntervalMin, "approachKm" to c.approachKm,
-                    "days" to c.days.toList(), "shortDays" to c.shortDays.toList(), "shortToMin" to c.shortToMin,
-                    "updatedAt" to now
-                )
-            )
-        } catch (e: Exception) {
-        }
-    }
-
-    /** true — настройки на телефоне обновились. Не в главном потоке не обязательно: функция приостанавливающая. */
-    suspend fun pull(ctx: Context): Boolean {
-        return try {
-            val d = ref().get().awaitIt()
-            val cur = WorkStore.cfg(ctx)
-            if (!d.exists()) {
-                if (Session.isAdmin && cur.hasPoint) push(ctx, cur)
-                return false
-            }
-            val upd = d.getLong("updatedAt") ?: 0L
-            if (upd <= WorkStore.cfgUpdated(ctx)) return false
-            fun ints(k: String): Set<Int> = (d.get(k) as? List<*>)?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
-            val n = cur.copy(
-                hasPoint = d.getBoolean("hasPoint") ?: cur.hasPoint,
-                lat = d.getDouble("lat") ?: cur.lat,
-                lon = d.getDouble("lon") ?: cur.lon,
-                radius = (d.getLong("radius") ?: cur.radius.toLong()).toInt(),
-                fromMin = (d.getLong("fromMin") ?: cur.fromMin.toLong()).toInt(),
-                toMin = (d.getLong("toMin") ?: cur.toMin.toLong()).toInt(),
-                intervalMin = (d.getLong("intervalMin") ?: cur.intervalMin.toLong()).toInt(),
-                farIntervalMin = (d.getLong("farIntervalMin") ?: cur.farIntervalMin.toLong()).toInt(),
-                approachKm = (d.getLong("approachKm") ?: cur.approachKm.toLong()).toInt(),
-                days = ints("days").ifEmpty { cur.days },
-                shortDays = ints("shortDays"),
-                shortToMin = (d.getLong("shortToMin") ?: cur.shortToMin.toLong()).toInt()
-            )
-            WorkStore.saveCfg(ctx, n)
-            WorkStore.setCfgUpdated(ctx, upd)
-            WorkTracker.ensureService(ctx)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun pull(ctx: Context): Boolean = false
 }
