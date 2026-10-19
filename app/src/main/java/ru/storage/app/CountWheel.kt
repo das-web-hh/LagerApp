@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
@@ -347,6 +348,7 @@ fun CountWheelList(
     var expiryRow by remember { mutableStateOf<ItemRow?>(null) }
     var focusRow by remember { mutableStateOf<ItemRow?>(null) }
     var blinkRow by remember { mutableStateOf<ItemRow?>(null) }
+    var selectedRow by remember { mutableStateOf<ItemRow?>(null) } // выбранная в поиске строка — выделена постоянно
     var focusBlink by remember { mutableStateOf(true) }      // мигнуть два раза, когда строка встала на середину
     var focusAfterIme by remember { mutableStateOf(false) }  // сначала дождаться, пока закроется клавиатура
     val keyboard = LocalSoftwareKeyboardController.current
@@ -422,6 +424,7 @@ fun CountWheelList(
                             val shift = ((h - plainItemPx) / 2).coerceIn(0, k * plainItemPx)
                             plainState.animateScrollToItem(k, -shift)
                             if (focusBlink) {
+                                selectedRow = fr
                                 blinkRow = fr
                                 blinkTick++
                             }
@@ -434,6 +437,7 @@ fun CountWheelList(
                         WheelRow(
                             row = row,
                             blinkKey = if (row === blinkRow) blinkTick else 0,
+                            selected = row === selectedRow,
                             index = 0,
                             listState = plainState,
                             editable = editable,
@@ -474,6 +478,7 @@ fun CountWheelList(
                                 memo[0] = fr
                                 // строка встала на середину — мигнуть два раза
                                 if (focusBlink) {
+                                    selectedRow = fr
                                     blinkRow = fr
                                     blinkTick++
                                 }
@@ -519,6 +524,7 @@ fun CountWheelList(
                                 WheelRow(
                                     row = row,
                                     blinkKey = if (row === blinkRow) blinkTick else 0,
+                            selected = row === selectedRow,
                                     index = index,
                                     listState = listState,
                                     editable = editable,
@@ -579,6 +585,7 @@ fun CountWheelList(
 private fun WheelRow(
     row: ItemRow,
     blinkKey: Int,
+    selected: Boolean = false,
     index: Int,
     listState: LazyListState,
     editable: Boolean,
@@ -724,12 +731,16 @@ private fun WheelRow(
                 .background(scheme.surfaceVariant)
                 // средняя строка колеса другого цвета: плавно «заливается» по мере подхода к середине
                 .drawBehind {
-                    if (!plain) {
+                    if (selected) {
+                        // выбранная строка: свой цвет, всегда
+                        drawRect(scheme.tertiaryContainer)
+                    } else if (!plain) {
                         val t = centerness(listState, index)
                         if (t > 0f) drawRect(scheme.primaryContainer.copy(alpha = t))
                     }
                 }
                 .background(scheme.primary.copy(alpha = 0.55f * blink.value))
+                .then(if (selected) Modifier.border(2.5.dp, scheme.tertiary, RoundedCornerShape(14.dp)) else Modifier)
                 .draggable(
                     orientation = Orientation.Horizontal,
                     enabled = canEdit,
