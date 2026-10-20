@@ -202,7 +202,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         if (rows.isNotEmpty()) {
             Text(
-                "Позиций: ${rows.size}. Тап по строке — +1, по числу — барабан; свайп вправо — срок годности, влево — брак и удаление.",
+                "Позиций: ${rows.size}. Тап по строке посередине — +1, по числу — барабан; другую строку — прокруткой или тапом; свайп вправо — срок годности, влево — брак и удаление.",
                 style = MaterialTheme.typography.bodySmall
             )
             Spacer(Modifier.height(4.dp))
@@ -215,7 +215,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
             addTick = addTick,
             emptyText = "Список пуст: найдите товар или нажмите «Вставить»",
             showSearch = false,
-            plain = true,
+            nameMode = true, // тот же барабан, что и в «Приём по имени» (распознавание, Excel, «Поделиться»)
             focusTarget = focusTarget,
             extraLabel = ""
         )
@@ -260,7 +260,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                     id = UUID.randomUUID().toString(),
                     sender = sender.trim(), orderNo = order.trim(), receivedAt = metaAt ?: now, receiver = receiver,
                     items = items,
-                    photos = photos, invoices = invoices, updatedAt = now, stamp = metaStamp
+                    photos = (photos + rows.flatMap { it.defectPhotos }).distinct(), invoices = invoices, updatedAt = now, stamp = metaStamp
                 )
                 scope.launch(Dispatchers.IO) {
                     Cloud.saveReceipt(db, r)
