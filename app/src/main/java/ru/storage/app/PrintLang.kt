@@ -151,6 +151,7 @@ private val T: Map<String, Array<String>> = mapOf(
     "of_word" to arrayOf("von", "из", "of"),
     "qr_label" to arrayOf("QR Code für System-Erfassung", "QR-код для ввода в систему", "QR code for system entry"),
     "photos" to arrayOf("Fotos", "Фото", "Photos"),
+    "defect_photos" to arrayOf("Fotos der beschädigten Ware", "Фото брака", "Photos of damaged goods"),
     "driver_signed" to arrayOf("Der Fahrer hat den Lieferschein unterschrieben", "Водитель расписался на накладной", "The driver signed the delivery note")
 )
 

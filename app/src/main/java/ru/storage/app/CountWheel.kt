@@ -570,7 +570,8 @@ fun CountWheelList(
                 if (isFact) CountAnnouncer.picked(appCtx, v.toString(), v.toString())
                 else CountAnnouncer.picked(appCtx, "Брак $v", "брак $v")
             },
-            onDismiss = { picking = null }
+            onDismiss = { picking = null },
+            photos = if (!isFact && !bware) row.defectPhotos else null
         )
     }
     editing?.let { row -> RowEditDialog(row) { editing = null } }
@@ -884,7 +885,14 @@ private fun CountWheel(state: LazyListState) {
  * после остановки колеса; кнопка «Готово» — сразу.
  */
 @Composable
-fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit, onDismiss: () -> Unit) {
+fun CountPickerDialog(
+    title: String,
+    initial: Int,
+    onApply: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    /** не null — в окне можно снять фото (брак); автоприменение отключается, число применяет «Готово» */
+    photos: SnapshotStateList<String>? = null
+) {
     val start = initial.coerceIn(0, MAX_COUNT)
     // первый видимый индекс = число; число стоит третьим сверху, то есть посередине
     val state = rememberLazyListState(initialFirstVisibleItemIndex = start)
@@ -901,7 +909,7 @@ fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit, onDis
         }
     }
     LaunchedEffect(value, scrolling, touched) {
-        if (touched && !scrolling) {
+        if (touched && !scrolling && photos == null) {
             delay(3000)
             onApply(value)
         }
@@ -915,9 +923,25 @@ fun CountPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit, onDis
                 CountWheel(state)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Выбрано: $value · применится само через 3 секунды",
+                    if (photos == null) "Выбрано: $value · применится само через 3 секунды" else "Выбрано: $value",
                     style = MaterialTheme.typography.bodySmall
                 )
+                if (photos != null) {
+                    val pctx = LocalContext.current
+                    val pdb = remember { ProductDb.get(pctx) }
+                    Spacer(Modifier.height(8.dp))
+                    Text("Фото брака (печатается на последнем листе документа)", style = MaterialTheme.typography.bodySmall)
+                    if (photos.isNotEmpty()) {
+                        PhotoGrid(photos.toList()) { n ->
+                            Media.discard(pctx, pdb, listOf(n))
+                            photos.remove(n)
+                        }
+                    }
+                    MediaButtons(kind = "RC", allowFile = false) { n ->
+                        photos.add(n)
+                        Media.uploadPending(pctx, pdb)
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = onDismiss) { Text("Отмена") }

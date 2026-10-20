@@ -141,14 +141,17 @@ private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: S
     if (!full && short.isEmpty() && excess.isEmpty() && extra.isEmpty() && defects.isEmpty()) return null
 
     val now = System.currentTimeMillis()
+    val (truck, trailer) = job.vehicle()
     val info = DocLayout.info(
-        listOf(
-            tr("sender") to job.sender,
-            tr("order") to job.order,
-            tr("doc_time") to job.stamp,
-            tr("received_by") to receiver,
-            tr("printed") to fmtTime(now)
-        )
+        buildList {
+            add(tr("sender") to job.sender)
+            add(tr("order") to job.order)
+            if (truck.isNotEmpty()) add(tr("truck") to truck)
+            if (trailer.isNotEmpty()) add(tr("trailer") to trailer)
+            add(tr("doc_time") to job.stamp)
+            add(tr("received_by") to receiver)
+            add(tr("printed") to fmtTime(now))
+        }
     )
     val top = DocLayout.top(info, DocLayout.title(if (full) "title_full" else "title_diff"))
     val sb = StringBuilder()
@@ -213,27 +216,42 @@ private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: S
     return DocLayout.page(top, sb.toString(), "<div></div>" + DocLayout.signBlock(receiver, now), after = itemPhotosHtml(ctx, job))
 }
 
-/** Фото товаров, добавленных вручную: последний лист документа, под каждым фото — название товара (6×8 см). */
+/** Одна фото-карточка 6×8 см с подписью; null — файла нет. */
+private fun photoCardHtml(ctx: Context, photo: String, caption: String): String? {
+    return try {
+        val f = Media.file(ctx, photo)
+        if (!f.exists() || f.length() == 0L) return null
+        val bmp = Media.thumb(f, 600) ?: return null
+        val bos = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos)
+        val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+        "<div class='ip'><div class='im'><img src='data:image/jpeg;base64,$b64'></div><div class='cp'>${esc(caption)}</div></div>"
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/** Последний лист документа: фото добавленных вручную товаров и фото брака, под каждым фото — название товара (6×8 см). */
 private fun itemPhotosHtml(ctx: Context, job: AutoJob): String {
     val list = job.items.filter { it.photo.isNotBlank() && it.name.isNotBlank() }
-    if (list.isEmpty()) return ""
+    // фото брака печатаются только у товаров, где брак действительно записан
+    val bad = job.items.filter { it.name.isNotBlank() && num(it.defect) > 0 && it.defectPhotos.isNotEmpty() }
+    if (list.isEmpty() && bad.isEmpty()) return ""
     val sb = StringBuilder()
     sb.append("<style>.ip{display:inline-block;width:60mm;vertical-align:top;margin:0 4mm 4mm 0;page-break-inside:avoid}.ip .im{width:60mm;height:80mm;overflow:hidden}.ip img{width:100%;height:100%;object-fit:cover;display:block}.ip .cp{font-size:10px;margin-top:2px}</style>")
-    sb.append("<div><h2>").append(esc(trList("photos").joinToString(" / "))).append("</h2>")
-    for (r in list) {
-        try {
-            val f = Media.file(ctx, r.photo)
-            if (!f.exists() || f.length() == 0L) continue
-            val bmp = Media.thumb(f, 600) ?: continue
-            val bos = java.io.ByteArrayOutputStream()
-            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos)
-            val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
-            sb.append("<div class='ip'><div class='im'><img src='data:image/jpeg;base64,").append(b64).append("'></div>")
-            sb.append("<div class='cp'>").append(esc(r.name.trim())).append("</div></div>")
-        } catch (e: Exception) {
-        }
+    if (list.isNotEmpty()) {
+        sb.append("<div><h2>").append(esc(trList("photos").joinToString(" / "))).append("</h2>")
+        for (r in list) photoCardHtml(ctx, r.photo, r.name.trim())?.let { sb.append(it) }
+        sb.append("</div>")
     }
-    sb.append("</div>")
+    if (bad.isNotEmpty()) {
+        sb.append("<div><h2>").append(esc(trList("defect_photos").joinToString(" / "))).append("</h2>")
+        for (r in bad) {
+            val cap = r.name.trim() + " — " + tr("th_defect") + " " + fmtNum(num(r.defect))
+            for (p in r.defectPhotos) photoCardHtml(ctx, p, cap)?.let { sb.append(it) }
+        }
+        sb.append("</div>")
+    }
     return sb.toString()
 }
 
