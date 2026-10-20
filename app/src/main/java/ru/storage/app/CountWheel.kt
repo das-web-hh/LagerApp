@@ -82,8 +82,6 @@ private val ROW_H = 76.dp
 /** Приём по имени: компактная строка в одну линию (было 114 dp). Единственное число — меняется здесь. */
 private val ROW_H_BIG = 80.dp
 
-/** «Приём по имени»: больше стольких строк — вместо колеса обычный список (строки заполняют экран). */
-private const val NAME_WHEEL_MAX = 6
 private val DIGIT_H = 46.dp
 private const val CYCLE_BASE = 1_000_000
 
@@ -360,7 +358,8 @@ fun CountWheelList(
     KeepScreenOn(listOf(rows.map { it.fact + "|" + it.defect }, query, picking, editing))
     val density = LocalDensity.current
     // «Приём по имени»: когда строк больше 6, они заполняют экран — колесо отключается, показывается обычный список одинаковых строк
-    val usePlain = plain || (nameMode && rows.size > NAME_WHEEL_MAX)
+    // «Приём по имени» — всегда барабан с бесконечной прокруткой, сколько бы ни было строк
+    val usePlain = plain
     val bigRows = nameMode && !usePlain
     val rowH = if (bigRows) ROW_H_BIG else ROW_H
     val rowPx = with(density) { rowH.roundToPx() }
@@ -519,12 +518,15 @@ fun CountWheelList(
                         items(count = Int.MAX_VALUE) { index ->
                             val row = rows.getOrNull(index % cycle)
                             if (row == null) {
-                                Spacer(Modifier.fillMaxWidth().height(rowH))
+                                // граница круга: после последней строки — линия, затем снова первая
+                                Box(Modifier.fillMaxWidth().height(rowH), contentAlignment = Alignment.Center) {
+                                    HorizontalDivider(Modifier.padding(horizontal = 24.dp), thickness = 2.dp, color = MaterialTheme.colorScheme.outline)
+                                }
                             } else {
                                 WheelRow(
                                     row = row,
                                     blinkKey = if (row === blinkRow) blinkTick else 0,
-                            selected = row === selectedRow,
+                                    selected = row === selectedRow,
                                     index = index,
                                     listState = listState,
                                     editable = editable,
