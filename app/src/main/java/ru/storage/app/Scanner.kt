@@ -24,6 +24,8 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import android.os.SystemClock
+import androidx.compose.ui.graphics.Color
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -42,6 +44,41 @@ val allFormats = listOf(
     "PDF417" to Barcode.FORMAT_PDF417,
     "Aztec" to Barcode.FORMAT_AZTEC
 )
+
+/** Контрольная цифра GTIN (EAN-8, UPC-A, EAN-13, GTIN-14). false — код прочитан с ошибкой. */
+fun gtinOk(s: String): Boolean {
+    if (s.length !in intArrayOf(8, 12, 13, 14) || !s.all { it in '0'..'9' }) return false
+    val d = s.reversed()
+    var sum = 0
+    for (i in 1 until d.length) sum += (d[i] - '0') * (if (i % 2 == 1) 3 else 1)
+    return (10 - sum % 10) % 10 == d[0] - '0'
+}
+
+/** Один и тот же товарный код в разной записи: UPC-A (12) и EAN-13 с нулём впереди — это один код. */
+fun barcodeVariants(code: String): List<String> {
+    val c = code.trim()
+    if (c.isEmpty() || !c.all { it in '0'..'9' }) return listOf(c)
+    val core = c.trimStart('0')
+    if (core.isEmpty()) return listOf(c)
+    val out = linkedSetOf(c, core)
+    for (len in intArrayOf(8, 12, 13, 14)) if (len >= core.length) out.add(core.padStart(len, '0'))
+    return out.toList()
+}
+
+fun sameBarcode(a: String, b: String): Boolean =
+    a.isNotBlank() && b.isNotBlank() && (a.trim() == b.trim() || b.trim() in barcodeVariants(a))
+
+/** Сколько раз подряд (с паузой между кадрами) код должен прочитаться одинаково, чтобы считаться верным. */
+private const val CONFIRM_GAP_MS = 400L
+private const val CONFIRM_WINDOW_MS = 3000L
+
+/** Из результатов кадра берём только код, у которого сходится контрольная цифра (EAN/UPC), — ошибочные чтения отбрасываются. */
+private fun validValue(list: List<Barcode>): String? = list.firstOrNull { b ->
+    val v = b.rawValue?.trim()
+    v != null && v.isNotEmpty() && (
+        (b.format != Barcode.FORMAT_EAN_13 && b.format != Barcode.FORMAT_EAN_8 && b.format != Barcode.FORMAT_UPC_A) || gtinOk(v)
+        )
+}?.rawValue?.trim()
 
 private fun ownerOf(ctx: android.content.Context): LifecycleOwner? {
     var c: android.content.Context? = ctx
@@ -86,6 +123,10 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit,
     val executor = remember { Executors.newSingleThreadExecutor() }
     val done = remember { AtomicBoolean(false) }
     val alive = remember { AtomicBoolean(true) }
+    // двойная проверка: код принимается, только когда два чтения подряд (с паузой) совпали
+    val cand = remember { arrayOf<String?>(null) }
+    val candAt = remember { longArrayOf(0L) }
+    var hint by remember { mutableStateOf("") }
     val scannerRef = remember { arrayOfNulls<com.google.mlkit.vision.barcode.BarcodeScanner>(1) }
     // Порядок важен: сначала отвязать камеру, потом гасить поток, иначе кадр уходит в закрытый executor и приложение падает.
     DisposableEffect(Unit) {
@@ -131,9 +172,17 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit,
                                 val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
                                 scanner.process(image)
                                     .addOnSuccessListener { result ->
-                                        val value = result.firstOrNull()?.rawValue
-                                        if (value != null && alive.get() && done.compareAndSet(false, true)) {
-                                            onResult(value)
+                                        val value = validValue(result)
+                                        if (value != null && alive.get() && !done.get()) {
+                                            val now = SystemClock.elapsedRealtime()
+                                            if (cand[0] != value || now - candAt[0] > CONFIRM_WINDOW_MS) {
+                                                // первое чтение (или другое значение) — запоминаем и ждём подтверждения
+                                                cand[0] = value
+                                                candAt[0] = now
+                                                hint = "Проверяю код…"
+                                            } else if (now - candAt[0] >= CONFIRM_GAP_MS && done.compareAndSet(false, true)) {
+                                                onResult(value)
+                                            }
                                         }
                                     }
                                     .addOnCompleteListener { proxy.close() }
@@ -159,6 +208,15 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit,
                 previewView
             }
         )
+        if (hint.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                color = Color.Black.copy(alpha = 0.6f)
+            ) {
+                Text(hint, color = Color.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
+        }
         Button(
             onClick = onClose,
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)

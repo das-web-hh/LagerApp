@@ -90,10 +90,7 @@ suspend fun bwPhotosHtml(ctx: Context, names: List<String>): String = withContex
     for (n in names) {
         try {
             val f = Media.load(ctx, n) ?: continue
-            val bmp = Media.thumb(f, 600) ?: continue
-            val bos = java.io.ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.JPEG, 80, bos)
-            val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            val b64 = PrintPhoto.base64(f) ?: continue
             sb.append("<div class='ph'><img src='data:image/jpeg;base64,").append(b64).append("'></div>")
         } catch (e: Exception) {
         }

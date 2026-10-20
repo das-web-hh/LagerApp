@@ -215,8 +215,15 @@ class ProductDb private constructor(context: Context) :
     fun getProduct(id: String): Product? =
         readProducts("SELECT $pcols FROM products WHERE id = ?", arrayOf(id)).firstOrNull()
 
-    fun findByBarcode(code: String): Product? =
-        readProducts("SELECT $pcols FROM products WHERE barcode = ? LIMIT 1", arrayOf(code)).firstOrNull()
+    /** Точное совпадение; затем тот же код в другой записи (UPC-A 12 цифр = EAN-13 с нулём впереди и т. п.). */
+    fun findByBarcode(code: String): Product? {
+        val c = code.trim()
+        readProducts("SELECT $pcols FROM products WHERE barcode = ? LIMIT 1", arrayOf(c)).firstOrNull()?.let { return it }
+        val v = barcodeVariants(c).filter { it != c }
+        if (v.isEmpty()) return null
+        val ph = v.joinToString(",") { "?" }
+        return readProducts("SELECT $pcols FROM products WHERE barcode IN ($ph) LIMIT 1", v.toTypedArray()).firstOrNull()
+    }
 
     fun findByName(name: String): Product? =
         readProducts("SELECT $pcols FROM products WHERE name_lc = ? LIMIT 1", arrayOf(name.trim().lowercase())).firstOrNull()

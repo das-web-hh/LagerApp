@@ -1186,7 +1186,7 @@ private fun ColumnScope.NameModeMain(
     // нет в списке — окно «Добавить товар»; нет и в каталоге — окно «Новый товар» с этим кодом.
     fun findByCode(code: String) {
         scope.launch {
-            val inList = job.items.firstOrNull { it.barcode == code }
+            val inList = job.items.firstOrNull { sameBarcode(it.barcode, code) }
             if (inList != null) {
                 setSearch("")
                 jump(inList)
@@ -1214,7 +1214,7 @@ private fun ColumnScope.NameModeMain(
         scope.launch {
             val owner = withContext(Dispatchers.IO) { db.findByBarcode(code) }
             val ownerIsRow = owner != null && (owner.id == row.productId || owner.name.trim().equals(row.name.trim(), true))
-            val otherRow = job.items.firstOrNull { it !== row && it.barcode == code }
+            val otherRow = job.items.firstOrNull { it !== row && sameBarcode(it.barcode, code) }
             if ((owner != null && !ownerIsRow) || otherRow != null) {
                 conflict = Triple(row, code, otherRow?.name ?: owner?.name ?: "")
             } else {

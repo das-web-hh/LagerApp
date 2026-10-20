@@ -221,10 +221,7 @@ private fun photoCardHtml(ctx: Context, photo: String, caption: String): String?
     return try {
         val f = Media.file(ctx, photo)
         if (!f.exists() || f.length() == 0L) return null
-        val bmp = Media.thumb(f, 600) ?: return null
-        val bos = java.io.ByteArrayOutputStream()
-        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos)
-        val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+        val b64 = PrintPhoto.base64(f) ?: return null
         "<div class='ip'><div class='im'><img src='data:image/jpeg;base64,$b64'></div><div class='cp'>${esc(caption)}</div></div>"
     } catch (e: Exception) {
         null
