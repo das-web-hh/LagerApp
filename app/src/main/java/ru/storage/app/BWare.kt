@@ -169,12 +169,6 @@ private fun bwareHtml(receiver: String, now: Long, photosHtml: String = ""): Str
     )
     val top = DocLayout.top(info, DocLayout.title("bw_t1", "bw_t2"))
     val sb = StringBuilder()
-    // рукописная надпись «водитель расписался на накладной» — вверху 1-го листа, на языке(ах) документа
-    if (h.driverSigned) {
-        sb.append("<style>.drv .sigtext{max-width:520px}.drv{margin:0 0 18px}</style><div class='drv'>")
-        trList("driver_signed").forEach { sb.append(Signature.handwritten(it, 900.0)) }
-        sb.append("</div>")
-    }
     sb.append("<table class='dt'><tr><th></th><th>${trb("th_item")}</th><th class='n'>${trb("th_qty")}</th>")
     sb.append("<th>${trb("th_expiry")}</th><th>${trb("th_details")}</th></tr>")
     var total = 0.0
@@ -185,6 +179,12 @@ private fun bwareHtml(receiver: String, now: Long, photosHtml: String = ""): Str
         sb.append("<td>${bwEsc(bwDash(r.expiry))}</td><td>${bwDetailsHtml(r, BWareDetails.groups)}</td></tr>")
     }
     sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
+    // рукописная надпись «водитель расписался на накладной» — под списком товаров, на языке(ах) документа
+    if (h.driverSigned) {
+        sb.append("<style>.drv .sigtext{max-width:520px}.drv{margin:16px 0 0;page-break-inside:avoid}</style><div class='drv'>")
+        trList("driver_signed").forEach { sb.append(Signature.handwritten(it, 900.0)) }
+        sb.append("</div>")
+    }
     // внизу листа — только подпись (QR-кода нет)
     val bottom = "<div></div>" + DocLayout.signBlock(receiver, now)
     return DocLayout.page(top, sb.toString(), bottom, after = photosHtml)
