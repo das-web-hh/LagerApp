@@ -79,6 +79,46 @@ object ProductParse {
         )
     }
 
+    private val SIZE = Regex("(\\d+(?:[.,]\\d+)?)\\s*(kg|ml|mg|g|lt|ltr|liter|l|t)(?![A-Za-z])", RegexOption.IGNORE_CASE)
+    private val PACKS = listOf(
+        "sack" to Regex("\\b(sack|säcke|sacke|sak)\\b", RegexOption.IGNORE_CASE),
+        "bucket" to Regex("\\b(eimer)\\b", RegexOption.IGNORE_CASE),
+        "bottle" to Regex("\\b(flasche|fla|bottle)\\b", RegexOption.IGNORE_CASE),
+        "can" to Regex("\\b(dose|tin)\\b", RegexOption.IGNORE_CASE),
+        "canister" to Regex("\\b(kanister|kan)\\b", RegexOption.IGNORE_CASE),
+        "box" to Regex("\\b(karton)\\b", RegexOption.IGNORE_CASE),
+        "bag" to Regex("\\b(beutel|tüte|tute)\\b", RegexOption.IGNORE_CASE),
+        "bale" to Regex("\\b(ballen)\\b", RegexOption.IGNORE_CASE),
+        "tube" to Regex("\\b(tube|tubus)\\b", RegexOption.IGNORE_CASE),
+        "pack" to Regex("\\b(packung|pack)\\b", RegexOption.IGNORE_CASE)
+    )
+
+    /** Разбор названий на телефоне: вес/объём, единица и упаковка — по словам и числам в самой строке. Производитель — первое слово, если оно написано заглавными (DERBY, EQUIPUR). */
+    fun parseLocal(names: List<String>): List<ProductParts?> = names.map { raw ->
+        val t = raw.trim()
+        if (t.isEmpty()) return@map null
+        val m = SIZE.find(t)
+        val size = m?.groupValues?.get(1)?.replace(',', '.')?.removeSuffix(".0") ?: ""
+        val unitCode = when (m?.groupValues?.get(2)?.lowercase()) {
+            "kg" -> "kg"
+            "g" -> "g"
+            "t" -> "t"
+            "ml" -> "ml"
+            "l", "lt", "ltr", "liter" -> "l"
+            else -> ""
+        }
+        val pack = PACKS.firstOrNull { it.second.containsMatchIn(t) }?.first ?: "none"
+        val first = t.split(Regex("\\s+")).firstOrNull() ?: ""
+        val manufacturer = if (first.length >= 3 && first.all { it.isUpperCase() || it.isDigit() || it == '-' } && first.any { it.isLetter() }) first else ""
+        ProductParts(
+            manufacturer = manufacturer,
+            name = t,
+            size = size,
+            unit = if (size.isEmpty()) "" else unitRu(unitCode),
+            pack = packRu(pack)
+        )
+    }
+
     private fun promptMany(lines: List<String>, hint: String) = """
         You split product lines from ONE goods-receipt / delivery note into fields. The text may be German, English, Czech, Dutch or mixed. Do NOT translate product names.
         Answer with JSON only (no markdown, no comments), one object per input line, in the same order, exactly ${lines.size} objects:

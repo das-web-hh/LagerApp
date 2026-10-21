@@ -448,10 +448,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             parsing = true
             message = "Разбор товаров…"
             try {
-                val hint = sender.takeIf { !it.equals("none", true) } ?: ""
-                val res = AutoReceiveHolder.aiLock.withLock {
-                    withContext(Dispatchers.IO) { ProductParse.parseMany(app, todo, hint) }
-                }
+                // разбор названий (вес, единица, упаковка) делает телефон, без запроса к ИИ
+                val res = ProductParse.parseLocal(todo)
                 todo.forEachIndexed { i, n -> res.getOrNull(i)?.let { partsCache[n] = it } }
             } finally {
                 parsing = false
@@ -612,7 +610,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                             try {
                                 // со 2-й попытки — серая картинка покрупнее вместо чёрно-белой
                                 if (a == 2) png = try { doc.renderBw(i, 1700, false) } catch (e: Exception) { png }
-                                val r = Ai.recognize(app, png, i + 1, n, rules)
+                                val r = Ai.recognize(app, png, i + 1, n, rules, !nameMode)
                                 // повтор (двойной расход токенов) — только на первом листе без товаров: там таблица почти всегда есть
                                 if (i == 0 && r.items.isEmpty() && a < attempts) {
                                     throw RuntimeException("не нашёл товары, пробую в другом виде")
@@ -632,7 +630,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                                         // у поставщика есть подтверждённый шаблон: этот лист читаем ещё раз с правилами, остальные — сразу с ними
                                         rules = rl
                                         st.status = "уточнение по шаблону…"
-                                        try { results[i] = Ai.recognize(app, png, i + 1, n, rl) } catch (e: Exception) { }
+                                        try { results[i] = Ai.recognize(app, png, i + 1, n, rl, !nameMode) } catch (e: Exception) { }
                                         st.status = "готово"
                                     } else if (InvoiceProfiles.find(app, r.sender) == null && r.items.isNotEmpty()) {
                                         genSender = r.sender

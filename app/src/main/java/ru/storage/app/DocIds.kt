@@ -143,3 +143,17 @@ object QtyExpand {
         return Fixed(cleaned.ifBlank { name }, total.toString())
     }
 }
+
+/**
+ * Строки, которые в накладной не товар: европаллеты, фрахт, упаковка, «Versandpapier», «Versandbeutel» (сколько пакетиков отправлено) и т.п.
+ * Такие строки отбрасываются сразу после ответа ИИ, в приём они не попадают.
+ */
+object NonGoods {
+    private val RE = Regex(
+        "(europal|euro[- ]?pal|ew[- ]?pal|einweg[- ]?pal|epal|chep|pallet|palett|\\bpalette\\b|" +
+            "fracht|versand|verpackung|leihgeb|pfand|gutschrift|porto|transportkosten|frachtkosten)",
+        RegexOption.IGNORE_CASE
+    )
+
+    fun isNonGoods(name: String): Boolean = RE.containsMatchIn(name)
+}

@@ -315,7 +315,7 @@ private fun sizeText(b: Long): String = when {
  * onPickFiles — кнопка «Выбрать файлы» (разовый выбор файлов без папки).
  */
 @Composable
-fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (() -> Unit)? = null) {
+fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (() -> Unit)? = null, onScan: (() -> Unit)? = null) {
     BackHandler(onBack = onBack)
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -427,6 +427,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
             Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { picker.launch(null) }) { Text("Добавить папку") }
                 if (onPickFiles != null) OutlinedButton(onClick = onPickFiles) { Text("Выбрать файлы") }
+                if (onScan != null) OutlinedButton(onClick = onScan) { Text("Снимок") }
                 OutlinedButton(onClick = { reload++ }, enabled = !loading && Folders.folders.isNotEmpty()) {
                     Text(if (loading) "Проверка…" else "Проверить")
                 }

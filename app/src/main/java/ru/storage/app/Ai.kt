@@ -292,26 +292,28 @@ object Ai {
         }
     }
 
-    private fun prompt(page: Int, total: Int, rules: String = "") = """
-        This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
-        The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
-        A warehouse worker has checked the printed lines with a pen (ticks, crosses, strike-throughs, handwritten numbers). Read these pen marks carefully: pen marks are often in blue (or other colored) ink, the printed text is black.
-        A mark belongs to the table row it is vertically aligned with (usually drawn in the left margin, left of the position number). Marks of neighbouring rows can touch or overlap: decide for each row separately by where the center of the mark lies, and never give one mark to two rows.
-        Extract ONLY the goods lines (product name and quantity) from THIS page; the sender and the order number are found by the app itself, do not look for them. Answer with JSON only (no markdown, no comments):
-        {"items": [{"name": "...", "qty": "...", "barcode": "", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
-        Rules:
-        - The document may also be an invoice (Rechnung) or an order confirmation instead of a delivery note: treat its goods table the same way. Prices (Einzelpreis, Gesamtpreis, Preis, EUR) are never a quantity; the position number (Pos) is not part of the name.
-        - items: every GOODS line of this page, in the order of the page. Lines that are crossed out, struck through or have quantity 0 must be included too — never skip a goods line.
-          Skip lines that are not goods: freight (Frachtkosten, Fracht), pallets and pallet deposits (Euro-Palette, EW Pallets, Leihgebühr, Gutschrift), packaging, totals, weight summaries, table headers, addresses, footers.
-        - name: the product name exactly as written (keep the original language). If the name continues on the next line (for example "Nachfüller") or a size line follows (for example "20 kg", "500 ml", "2,5 Lt"), append it to the name. Do not include article number, expiry date (Verfallsdatum) or batch (Charge) in the name.
-        - qty: the PRINTED number of delivered units of this line (columns like Stück, Anz., Anzahl, Menge (if a small extra column with 1 or a unit code follows Menge, the quantity is the Menge number) with unit ST / PCE / Sack / Eimer / Dose / Kan / Fla, aktuelle Liefermenge / Liefermenge, Množství, Počet, ks, Aantal, Stuks). Number only. If the line shows pallets times pieces (for example "9x24" or "9 x 24"), write it exactly as printed in qty ("9x24"): the app multiplies it itself. Do not use the weight per unit, total weight (Gesamt in kg), price, article number, batch number, "bestellt" (ordered) or "offen" (open) columns when a delivered piece count exists.
-        - barcode: the EAN / GTIN / barcode number of this line (8 to 14 digits, usually next to labels EAN, GTIN, Barcode, Strichcode) if it is printed on the document; digits only. If the document has no barcode for this line, use an empty string. Do not invent it and do not use the article number, price or batch number.
-        - mark: the pen mark that belongs to this line (usually at the left of the line): "check" = a tick (✓, √ or a slash-like tick); "cross" = a hand-drawn X, or the whole line struck through with a pen (goods did not arrive); "none" = no pen mark.
-        - qty_crossed: true only if the printed quantity itself is crossed out or marked with an X / correction while the rest of the line is not struck through; otherwise false.
-        - hand_qty: if a quantity is handwritten with a pen next to this line or its quantity (for example "9 stk", "15"), give that number only; otherwise "".
-        - Ignore handwritten notes that do not belong to a line: names, dates, pallet counts like "6P" or "7P", signatures, scribbles, arrows.
-        If the page has no goods lines, use an empty items array.
-    """.trimIndent() + (if (rules.isBlank()) "" else "\nNotes about the layout of THIS supplier's documents (checked by the warehouse manager; they are more important than the general rules above):\n" + rules.trim())
+    /** Короткий запрос: лишнее в ИИ не отправляем. marks=false (приём по имени) — про пометки ручкой не спрашиваем вообще. */
+    private fun prompt(page: Int, total: Int, rules: String = "", marks: Boolean = true): String {
+        val base = """
+        Page $page/$total of a scanned goods-receipt (delivery note or invoice; German, sometimes Czech/Dutch). May be grey, skewed, rotated: read anyway. Do not translate.
+        Answer ONLY with compact JSON, no other text: {"i":[{"n":"name","q":"qty"}]}
+        Add the keys m, h, x, b to a line only when they apply, otherwise leave them out.
+        i = every goods line of this page in page order, also struck-out lines and lines with quantity 0.
+        Not goods (skip): freight, pallets, deposits, packaging, shipping paper, shipping bags, totals, table headers, addresses, footers.
+        n = product name as written; append the wrapped name part or size line ("20 kg"); no article number, expiry date, batch or position number.
+        q = delivered piece count as printed (Stück, Anz., Menge, Liefermenge, Množství, Aantal ...), number only. Pallets times pieces ("9x24") write as printed. Never weight, price, article number, ordered or open columns.
+        b = EAN/GTIN (8-14 digits) of this line, only if printed.
+        """.trimIndent()
+        val pen = """
+        Pen marks (often blue) in the left margin belong to the row they are aligned with; decide per row.
+        m = "c" tick; "x" hand-drawn X or whole line struck through (goods did not arrive). Tick and X on the same row: "x".
+        x = 1 only if the printed quantity itself is crossed out / X-ed while the rest of the line is not struck through.
+        h = quantity handwritten with a pen next to the line, number only.
+        Ignore other handwriting (names, dates, pallet counts like 6P, signatures).
+        """.trimIndent()
+        return base + (if (marks) "\n" + pen else "") +
+            (if (rules.isBlank()) "" else "\nSupplier layout notes (more important than the rules above):\n" + rules.trim())
+    }
 
     private fun idPrompt(page: Int, total: Int) = """
         This is page $page of $total of a scanned goods-receipt document (Lieferschein / delivery note / packing slip / invoice). It may be black-and-white or grayscale, a bit blurry, skewed, rotated or upside down: read it anyway.
@@ -345,30 +347,40 @@ object Ai {
     }
 
     /** Распознать один лист. Бросает исключение при ошибке/таймауте — вызывающий повторит. */
-    fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int, rules: String = ""): PageResult {
-        val text = call(ctx, prompt(page, total, rules), png)
+    fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int, rules: String = "", marks: Boolean = true): PageResult {
+        val text = call(ctx, prompt(page, total, rules, marks), png)
         val o = parseJson(text)
         val items = ArrayList<AiItem>()
-        val arr = o.optJSONArray("items")
+        val arr = o.optJSONArray("i") ?: o.optJSONArray("items")
         if (arr != null) {
             for (i in 0 until arr.length()) {
                 val it = arr.optJSONObject(i) ?: continue
-                val name = it.optString("name").trim()
-                if (name.isEmpty()) continue
-                val q0 = (it.opt("qty")?.toString() ?: "").trim()
-                val fx = QtyExpand.apply(name, q0)
-                val q = fx.qty
-                val hand = (it.opt("hand_qty")?.toString() ?: "").trim().let { h -> if (h.equals("null", true)) "" else h }
-                val mark = when (it.optString("mark").trim().lowercase()) {
-                    "check", "tick", "ok" -> "check"
-                    "cross", "x" -> "cross"
+                fun str(vararg keys: String): String {
+                    for (k in keys) {
+                        val v = it.opt(k)?.toString()?.trim() ?: continue
+                        if (v.isNotEmpty() && !v.equals("null", true)) return v
+                    }
+                    return ""
+                }
+                val name = str("n", "name")
+                if (name.isEmpty() || NonGoods.isNonGoods(name)) continue
+                val fx = QtyExpand.apply(name, str("q", "qty"))
+                if (!marks) {
+                    val bc0 = str("b", "barcode").filter { ch -> ch.isDigit() }.let { d -> if (d.length in 8..14) d else "" }
+                    items.add(AiItem(fx.name, fx.qty, "none", "", false, bc0))
+                    continue
+                }
+                val mark = when (str("m", "mark").lowercase()) {
+                    "c", "check", "tick", "ok" -> "check"
+                    "x", "cross" -> "cross"
                     else -> "none"
                 }
-                val bc = (it.opt("barcode")?.toString() ?: "").filter { ch -> ch.isDigit() }.let { d -> if (d.length in 8..14) d else "" }
-                items.add(AiItem(fx.name, q, mark, hand, it.optBoolean("qty_crossed", false), bc))
+                val crossed = str("x", "qty_crossed").lowercase().let { v -> v == "1" || v == "true" }
+                val bc = str("b", "barcode").filter { ch -> ch.isDigit() }.let { d -> if (d.length in 8..14) d else "" }
+                items.add(AiItem(fx.name, fx.qty, mark, str("h", "hand_qty"), crossed, bc))
             }
         }
-        val sender = cleanSenderName(o.optString("sender", "none").trim()).ifBlank { "none" }
-        return PageResult(sender, normalizeOrder(o.optString("order_number", "none")), items)
+        // отправитель и номер заказа ИИ не читает: их находит приложение (DocIds)
+        return PageResult("none", "none", items)
     }
 }

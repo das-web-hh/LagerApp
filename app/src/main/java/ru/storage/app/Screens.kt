@@ -174,6 +174,35 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         if (uris.isNotEmpty()) thread { uris.forEach { Incoming.accept(ctx, it, m, open = uris.size == 1) } }
     }
 
+    // «Снимок» в Автоприёме: сканер документа (до 30 листов) → PDF → Google Диск (очередь) → распознавание → автосохранение
+    val autoScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            val pdf = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
+            if (pdf != null) thread {
+                val db = ProductDb.get(ctx)
+                val inv = Media.importUri(ctx, pdf, db, "IN")
+                Media.uploadPending(ctx, db)
+                Incoming.accept(ctx, pdf, "auto", open = true, driveName = inv ?: "")
+            }
+        }
+    }
+    val startAutoScan: () -> Unit = {
+        val act = findActivity(ctx)
+        if (act != null) {
+            val opts = GmsDocumentScannerOptions.Builder()
+                .setGalleryImportAllowed(false)
+                .setPageLimit(30)
+                .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+                .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+                .build()
+            GmsDocumentScanning.getClient(opts).getStartScanIntent(act)
+                .addOnSuccessListener { sender -> autoScanLauncher.launch(IntentSenderRequest.Builder(sender).build()) }
+                .addOnFailureListener {
+                    Toast.makeText(ctx, "Сканер недоступен: " + (it.message ?: ""), Toast.LENGTH_LONG).show()
+                }
+        }
+    }
+
     val rid = viewReceipt
     if (rid != null) {
         ReceiptCardScreen(rid) { viewReceipt = null }
@@ -223,7 +252,8 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                 )
-            }
+            },
+            onScan = startAutoScan
         )
         return
     }
