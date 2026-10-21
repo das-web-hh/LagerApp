@@ -955,6 +955,8 @@ suspend fun saveJob(
     for (r in job.items) {
         val name = r.name.trim()
         if (name.isEmpty()) continue
+        // автоприём: строка с крестиком слева (не пришла) отбрасывается, в приём не попадает
+        if (!nameMode && r.status == "missing") continue
         // товар, который за этот день уже принимали с тем же количеством и по которому выбрали «Отказать»
         if (job.dupDecision[InvoiceCheck.norm(name)] == false) continue
         var pid = withContext(Dispatchers.IO) { r.productId.ifEmpty { db.findByName(name)?.id ?: "" } }

@@ -424,10 +424,16 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
             }
         }
         item {
+            // «Снимок» — отдельной строкой на всю ширину: в общем ряду кнопка уезжала за край экрана
+            if (onScan != null) {
+                Button(
+                    onClick = onScan,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                ) { Text("📷 Снимок документа") }
+            }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { picker.launch(null) }) { Text("Добавить папку") }
+                OutlinedButton(onClick = { picker.launch(null) }) { Text("Добавить папку") }
                 if (onPickFiles != null) OutlinedButton(onClick = onPickFiles) { Text("Выбрать файлы") }
-                if (onScan != null) OutlinedButton(onClick = onScan) { Text("Снимок") }
                 OutlinedButton(onClick = { reload++ }, enabled = !loading && Folders.folders.isNotEmpty()) {
                     Text(if (loading) "Проверка…" else "Проверить")
                 }
