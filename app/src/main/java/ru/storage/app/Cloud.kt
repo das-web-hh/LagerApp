@@ -346,7 +346,12 @@ object Cloud {
     suspend fun findDuplicate(db: ProductDb, order: String, fileName: String, stamp: String, docHash: String = ""): Dup? {
         class Check(val label: String, val field: String, val column: String, val value: String, val kind: String, val hard: Boolean)
         val checks = ArrayList<Check>()
-        if (order.isNotBlank() && order != "none") checks.add(Check("номер заказа", "orderNo", "order_no", order, "order", true))
+        if (order.isNotBlank() && order != "none") {
+            checks.add(Check("номер заказа", "orderNo", "order_no", order, "order", true))
+            // старые записи хранят номер с кириллическим «ЕБ»
+            val legacy = Ai.legacyOrder(order)
+            if (legacy != order) checks.add(Check("номер заказа", "orderNo", "order_no", legacy, "order", true))
+        }
         if (docHash.isNotBlank()) checks.add(Check("тот же файл (содержимое)", "docHash", "doc_hash", docHash, "hash", true))
         if (fileName.isNotBlank()) checks.add(Check("имя файла", "fileName", "file_name", fileName, "file", true))
         if (stamp.length == 16) checks.add(Check("дата и время", "stamp", "stamp", stamp, "stamp", false))

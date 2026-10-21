@@ -195,11 +195,15 @@ data class IdResult(val sender: String, val order: String)
 object Ai {
     private val ORDER = Regex("[ЕеEe][БбBb6]\\s*[-–]?\\s*(\\d{7})")
 
-    /** «ЕБ» + 7 цифр или "none". */
+    /** «EB» (латиница) + 7 цифр или "none". */
     fun normalizeOrder(s: String): String {
         val m = ORDER.find(s) ?: return "none"
-        return "ЕБ" + m.groupValues[1]
+        return "EB" + m.groupValues[1]   // латиница
     }
+
+    /** Старые записи в базе хранят номер с кириллическим «ЕБ»: для сравнения и поиска приводим к одному виду. */
+    fun latinOrder(s: String): String = ORDER.find(s)?.let { "EB" + it.groupValues[1] } ?: s.trim()
+    fun legacyOrder(s: String): String = ORDER.find(s)?.let { "ЕБ" + it.groupValues[1] } ?: s.trim()
 
     private fun post(url: String, headers: Map<String, String>, body: String, timeoutMs: Int): JSONObject {
         val c = URL(url).openConnection() as HttpURLConnection

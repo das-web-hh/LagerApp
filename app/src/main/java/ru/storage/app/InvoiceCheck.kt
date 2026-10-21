@@ -140,7 +140,7 @@ object InvoiceCheck {
         var bestDist = Long.MAX_VALUE
         for (r in list) {
             if (r.invoices.isNotEmpty()) continue
-            if (o.isNotEmpty() && r.orderNo.isNotBlank() && r.orderNo != o) continue
+            if (o.isNotEmpty() && r.orderNo.isNotBlank() && Ai.latinOrder(r.orderNo) != Ai.latinOrder(o)) continue
             var by = ""
             if (s.isNotEmpty() && r.sender.isNotBlank() && sameSender(s, r.sender)) {
                 by = "отправитель и товары"

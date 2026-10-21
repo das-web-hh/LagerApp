@@ -40,7 +40,38 @@ object DocIds {
     /** Наше имя в любом написании: Stroeh, STROEH, STRÖH, Ströh, ströh и т.п. */
     fun isOwn(name: String): Boolean {
         val f = fold(name)
-        return f.contains("stroh") || f.contains("stroeh")
+        if (f.contains("stroh") || f.contains("stroeh")) return true
+        // «похоже на stroeh»: OCR мог исказить букву (Str0h, Strbh ...)
+        return f.split(Regex("[^a-z0-9]+")).any { t ->
+            t.length in 4..7 && (lev(t, "stroh") <= 1 || lev(t, "stroeh") <= 1)
+        }
+    }
+
+    private fun lev(a: String, b: String): Int {
+        val d = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = d[0]
+            d[0] = i
+            for (j in 1..b.length) {
+                val tmp = d[j]
+                d[j] = minOf(d[j] + 1, d[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
+                prev = tmp
+            }
+        }
+        return d[b.length]
+    }
+
+    /** Название фирмы перед формой собственности: «Equovis GmbH», «Müller Tiernahrung GmbH & Co. KG» (до 3 слов в одной строке). */
+    private val COMPANY = Regex(
+        """((?:[\p{L}0-9&.'\-]+[ \t]+){0,2}[\p{L}0-9&.'\-]+)[ \t]+(?:GmbH(?:[ \t]*&[ \t]*Co\.?[ \t]*KG)?|mbH|AG|KG|OHG|UG|e\.K\.|eG|B\.V\.|Ltd\.?|S\.?R\.?L\.?|s\.r\.o\.?)(?![\p{L}])"""
+    )
+
+    private fun companyFromText(text: String): String {
+        for (m in COMPANY.findAll(text)) {
+            val name = m.groupValues[1].trim().trim('.', ',', '-', '&').trim()
+            if (name.length >= 2 && !isOwn(name) && name.any { it.isLetter() }) return name
+        }
+        return ""
     }
 
     private fun label(host: String): String {
@@ -80,7 +111,8 @@ object DocIds {
             val n = label(h)
             if (accept(n)) return n
         }
-        return ""
+        // 4) название фирмы с GmbH / AG / KG ...: любая фирма, кроме нашей (Ströh E-Commerce GmbH и похожие написания)
+        return companyFromText(text)
     }
 
     fun orderFromText(text: String): String {

@@ -3,6 +3,7 @@
 package ru.storage.app
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
@@ -80,13 +81,13 @@ import kotlin.math.roundToInt
 
 private val ROW_H = 76.dp
 /** Приём по имени: компактная строка в одну линию (было 114 dp). Единственное число — меняется здесь. */
-private val ROW_H_BIG = 80.dp
+private val ROW_H_BIG = 81.dp  // строка посередине; остальные в 1,5 раза ниже (54 dp)
 
 private val DIGIT_H = 46.dp
 private const val CYCLE_BASE = 1_000_000
 
 /** Наклон строк у краёв «колеса», градусы. Если наклон выглядит «наоборот» — поменять знак. */
-private const val WHEEL_TILT = 38f
+private const val WHEEL_TILT = 12f
 
 private fun parseQ(s: String): Double = normalizeQty(s).toDoubleOrNull() ?: 0.0
 
@@ -184,19 +185,19 @@ private fun GraphicsLayerScope.applyBigCenter(state: LazyListState, index: Int, 
     if (half <= 0f) return
     val center = (li.viewportStartOffset + li.viewportEndOffset) / 2f
     val dPx = info.offset + info.size / 2f - center
-    val k = dPx / info.size            // расстояние до середины в «строках», со знаком
-    val ak = abs(k)
-    val near = ak.coerceAtMost(1f)
-    val m = 0.75f                      // соседи и дальше: 0.75 (было 0.5 — на 50% крупнее)
-    val s = 1f - (1f - m) * near       // середина 1.0
-    scaleX = s
-    scaleY = s
+    val ak = abs(dPx / info.size)
+    // ширина у всех строк одинаковая (без масштаба); размер выбранной строки задаёт её высота (в 1,5 раза больше)
     alpha = if (ak <= 1f) 1f - 0.3f * ak else (0.7f - 0.2f * (ak - 1f)).coerceAtLeast(0.3f)
-    // уменьшенные строки подтягиваем к середине, чтобы между ними не было больших дыр
-    val ideal = if (ak <= 1f) (1f - m) / 2f * ak else (1f - m) * (ak - 0.5f)
-    translationY = -Math.signum(k) * ideal * info.size * 0.7f
     rotationX = -(dPx / half).coerceIn(-1f, 1f) * tilt
     cameraDistance = 14f * density
+}
+
+/** Линия середины списка проходит через эту строку: она «выбрана» и становится крупной. */
+private fun containsCenter(state: LazyListState, index: Int): Boolean {
+    val li = state.layoutInfo
+    val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
+    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+    return c >= info.offset && c < info.offset + info.size
 }
 
 /** 1 — строка ровно посередине, 0 — на расстоянии строки и дальше. */
@@ -404,12 +405,15 @@ fun CountWheelList(
             ListSearchField(query, { query = it }, onAdd, onScan) { hits.firstOrNull()?.let { pick(it) } }
             Spacer(Modifier.height(8.dp))
         }
-        Box(Modifier.fillMaxWidth().weight(1f)) {
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            // «Приём по имени»: если все товары помещаются на экране — обычный список без повторов; барабан — только когда не помещаются
+            val fitsAll = nameMode && n > 0 && 68.dp * n <= maxHeight
+            val plainNow = usePlain || fitsAll
             if (n == 0) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(emptyText, style = MaterialTheme.typography.bodyMedium)
                 }
-            } else if (usePlain) {
+            } else if (plainNow) {
                 val plainState = rememberLazyListState()
                 val plainItemPx = with(density) { 68.dp.roundToPx() }
                 LaunchedEffect(focusRow, n) {
@@ -519,7 +523,7 @@ fun CountWheelList(
                             val row = rows.getOrNull(index % cycle)
                             if (row == null) {
                                 // граница круга: после последней строки — линия, затем снова первая
-                                Box(Modifier.fillMaxWidth().height(rowH), contentAlignment = Alignment.Center) {
+                                Box(Modifier.fillMaxWidth().height(if (bigRows) rowH / 1.5f else rowH), contentAlignment = Alignment.Center) {
                                     HorizontalDivider(Modifier.padding(horizontal = 24.dp), thickness = 2.dp, color = MaterialTheme.colorScheme.outline)
                                 }
                             } else {
@@ -553,7 +557,7 @@ fun CountWheelList(
                     maxH = if (bigRows) 96.dp else 280.dp
                 )
             }
-            if (scanFab && onScan != null && editable && n > 0 && (!usePlain || nameMode)) {
+            if (scanFab && onScan != null && editable && n > 0 && (!plainNow || nameMode)) {
                 ScanFab { onScan() }
             }
             CountOverlay()
@@ -636,10 +640,16 @@ private fun WheelRow(
         derivedStateOf { !centerOnly || plain || centerness(listState, index) > 0.5f }
     }
     val canEdit = editable && active
+    // барабан «Приёма по имени»: выбранная (на середине) строка в 1,5 раза выше остальных, ширина одинаковая
+    val isCenterRow by remember(listState, index, centerOnly, plain) {
+        derivedStateOf { centerOnly && !plain && containsCenter(listState, index) }
+    }
+    val animH by animateDpAsState(if (isCenterRow) rowH else rowH / 1.5f, tween(120), label = "rowH")
+    val emph = !bigText || isCenterRow  // крупные шрифты только у выбранной строки
 
     Box(
         Modifier.fillMaxWidth()
-            .height(if (plain) 68.dp else rowH)
+            .height(if (plain) 68.dp else if (centerOnly) animH else rowH)
             .padding(horizontal = if (plain) 0.dp else 12.dp, vertical = 3.dp)
             .then(if (plain) Modifier else Modifier.graphicsLayer { applyBigCenter(listState, index, WHEEL_TILT) })
     ) {
@@ -783,8 +793,8 @@ private fun WheelRow(
                     row.name.ifBlank { "—" },
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    fontSize = if (bigText) 16.sp else 15.sp,
-                    lineHeight = if (bigText) 19.sp else 18.sp,
+                    fontSize = if (bigText) (if (emph) 18.sp else 13.sp) else 15.sp,
+                    lineHeight = if (bigText) (if (emph) 21.sp else 16.sp) else 18.sp,
                     fontWeight = FontWeight.Medium
                 )
                 if (bware) {
@@ -819,12 +829,12 @@ private fun WheelRow(
                     .clip(RoundedCornerShape(if (bigText) 8.dp else 12.dp))
                     .background(scheme.surface)
                     .clickable(enabled = canEdit) { onPickFact() }
-                    .padding(horizontal = if (bigText) 8.dp else 10.dp, vertical = if (bigText) 6.dp else 8.dp),
+                    .padding(horizontal = if (bigText) 8.dp else 10.dp, vertical = if (bigText) (if (emph) 6.dp else 2.dp) else 8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     fmtQ(factD),
-                    fontSize = if (bigText) 26.sp else 22.sp,
+                    fontSize = if (bigText) (if (emph) 28.sp else 19.sp) else 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = when {
                         row.fact.isBlank() -> scheme.onSurfaceVariant
