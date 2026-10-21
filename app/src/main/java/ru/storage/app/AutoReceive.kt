@@ -543,8 +543,21 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     results.clear()
                 }
                 val attempts = AiCfg.attempts(app).coerceIn(1, 8)
-                // шаблоны накладных поставщиков (из Firebase, не чаще раза в 5 минут)
-                try { InvoiceProfiles.refresh(app) } catch (e: Exception) { }
+                // true — «проверка с шаблоном»; false — обычная: каждый лист в ИИ ровно один раз, без шаблонов
+                val tpl = AiCfg.templateMode(app)
+                // номер заказа и отправитель приложение определяет само (OCR на телефоне), ИИ их не читает
+                if (!onlyFailed && !idDone) {
+                    message = "Поиск заказа и отправителя…"
+                    try {
+                        val ids = DocIds.find(doc) { message = "Поиск заказа и отправителя: лист ${it + 1} из $n" }
+                        if (InvoiceCheck.isNone(sender) && ids.sender != "none") sender = ids.sender
+                        if (InvoiceCheck.isNone(order) && ids.order != "none") order = ids.order
+                    } catch (e: Exception) {
+                    }
+                    idDone = true
+                }
+                // шаблоны накладных поставщиков (из Firebase, не чаще раза в 5 минут) — только в режиме с шаблоном
+                if (tpl) try { InvoiceProfiles.refresh(app) } catch (e: Exception) { }
                 // Единственная защита от повторов — тот же самый файл (по содержимому): его второй раз в ИИ не отправляем.
                 // Другой файл с тем же номером заказа (продолжение, повторный снимок) распознаётся и принимается как обычно.
                 if (!onlyFailed && !saved) {
@@ -557,10 +570,10 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     }
                 }
                 var rules = ""
-                var rulesChecked = false
+                var rulesChecked = !tpl
                 var needGen = false
                 val knownSender = InvoiceCheck.clean(sender)
-                if (knownSender.isNotEmpty() && idDone) {
+                if (tpl && knownSender.isNotEmpty() && idDone) {
                     // отправитель известен с этапа 1: подтверждённый шаблон используем сразу для всех листов
                     seenSender = knownSender
                     rulesChecked = true
@@ -607,7 +620,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                                 results[i] = r
                                 st.ok = true
                                 st.status = "готово"
-                                if (needGen && genPng == null && r.items.isNotEmpty()) {
+                                if (tpl && needGen && genPng == null && r.items.isNotEmpty()) {
                                     genSender = knownSender
                                     genPng = png
                                 }
@@ -654,7 +667,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                     }
                 }
                 var profileNote: String
-                if (failed != 0) {
+                if (!tpl) {
+                    profileNote = "Обычная проверка (без шаблона)"
+                } else if (failed != 0) {
                     profileNote = "Шаблон не создан: не все листы распознаны"
                 } else {
                     profileNote = try {

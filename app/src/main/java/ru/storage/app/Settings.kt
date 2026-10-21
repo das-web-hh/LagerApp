@@ -352,6 +352,7 @@ fun AiSettings(onBack: () -> Unit) {
     var timeout by remember { mutableStateOf(AiCfg.timeoutSec(ctx).toString()) }
     var attempts by remember { mutableStateOf(AiCfg.attempts(ctx).toString()) }
     var msg by remember { mutableStateOf("") }
+    var templateMode by remember { mutableStateOf(AiCfg.templateMode(ctx)) }
     BackHandler(onBack = onBack)
 
     fun save() {
@@ -411,6 +412,28 @@ fun AiSettings(onBack: () -> Unit) {
                 modifier = Modifier.weight(1f)
             )
         }
+        Spacer(Modifier.height(16.dp))
+        Text("Режим проверки накладной", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                    if (templateMode) "Проверка с шаблоном" else "Обычная проверка",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    if (templateMode)
+                        "ИИ читает лист с правилами шаблона поставщика и создаёт шаблон для нового поставщика (лишний запрос, больше токенов)."
+                    else
+                        "Каждый лист уходит в ИИ один раз: только название товара и количество. Токены экономятся.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(checked = templateMode, onCheckedChange = { templateMode = it; AiCfg.setTemplateMode(ctx, it) })
+        }
+        Text(
+            "Номер заказа (EB + 7 цифр) и имя отправителя приложение находит само, без ИИ.",
+            style = MaterialTheme.typography.bodySmall
+        )
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { save(); msg = "Сохранено" }) { Text("Сохранить") }

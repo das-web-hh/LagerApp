@@ -179,6 +179,7 @@ object ConnCfg {
         val ai = JSONObject().put("keys", JSONArray(AiKeys.toJson(AiKeys.list(ctx))))
             .put("active", AiKeys.activeId(ctx))
             .put("timeout", AiCfg.timeoutSec(ctx)).put("attempts", AiCfg.attempts(ctx))
+            .put("template", AiCfg.templateMode(ctx))
         o.put("ai", ai)
         return o.toString(2)
     }
@@ -221,6 +222,7 @@ object ConnCfg {
             val keys = AiKeys.fromJson(ai.optJSONArray("keys")?.toString())
             if (keys.isNotEmpty()) AiKeys.replaceAll(ctx, keys, ai.optString("active"))
             AiCfg.saveCommon(ctx, ai.optInt("timeout", AiCfg.timeoutSec(ctx)), ai.optInt("attempts", AiCfg.attempts(ctx)))
+            if (ai.has("template")) AiCfg.setTemplateMode(ctx, ai.optBoolean("template", false))
         }
         sp(ctx).edit().putString("adminLogin", l.adminLogin).apply()
     }

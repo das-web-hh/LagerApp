@@ -146,6 +146,15 @@ object AiCfg {
         else -> "claude-haiku-5-5"
     }
 
+    /**
+     * false — обычная проверка: каждый лист уходит в ИИ один раз (только название и количество), токены экономятся;
+     * true — проверка с шаблоном: после чтения ИИ сверяет лист по шаблону поставщика и создаёт новый шаблон (больше токенов).
+     */
+    fun templateMode(ctx: Context): Boolean = sp(ctx).getBoolean("template", false)
+    fun setTemplateMode(ctx: Context, on: Boolean) {
+        sp(ctx).edit().putBoolean("template", on).apply()
+    }
+
     fun saveCommon(ctx: Context, timeout: Int, attempts: Int) {
         sp(ctx).edit().putInt("timeout", timeout).putInt("attempts", attempts).apply()
     }
@@ -288,16 +297,14 @@ object Ai {
         The document is almost always in German; sometimes in Czech or Dutch. Do NOT translate anything.
         A warehouse worker has checked the printed lines with a pen (ticks, crosses, strike-throughs, handwritten numbers). Read these pen marks carefully: pen marks are often in blue (or other colored) ink, the printed text is black.
         A mark belongs to the table row it is vertically aligned with (usually drawn in the left margin, left of the position number). Marks of neighbouring rows can touch or overlap: decide for each row separately by where the center of the mark lies, and never give one mark to two rows.
-        Extract data from THIS page only and answer with JSON only (no markdown, no comments):
-        {"sender": "...", "order_number": "...", "items": [{"name": "...", "qty": "...", "barcode": "", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
+        Extract ONLY the goods lines (product name and quantity) from THIS page; the sender and the order number are found by the app itself, do not look for them. Answer with JSON only (no markdown, no comments):
+        {"items": [{"name": "...", "qty": "...", "barcode": "", "mark": "check", "qty_crossed": false, "hand_qty": ""}]}
         Rules:
-        - sender: the company that SENT the goods (supplier / shipper / seller), usually in the letterhead, logo or the small sender line at the top (words like Absender, Lieferant, Verkäufer, Odesílatel, Dodavatel, Afzender, Leverancier). It is NOT the recipient (Empfänger, Lieferadresse, Příjemce, Odběratel, Ontvanger; here usually "Ströh E-Commerce GmbH"). Company name only, without street or city. NEVER output an e-mail address: if the sender is known only from an e-mail (for example info@papier.com), output just the word between "@" and the last dot, i.e. delete everything up to and including "@" and delete the last "." together with everything after it (info@papier.com -> papier). If it is not on this page, use "none".
-        - order_number: a code that starts with ЕБ (Cyrillic) or EB (Latin) followed by exactly 7 digits, for example ЕБ1234567. It may be written with a space or hyphen (EB 1234567, EB-1234567), usually next to a label like Bestellnummer / Ihre Bestell-Nr. / Bestell-Nr. / Objednávka / Bestelnummer (not the Auftrag, Kunden- or Lieferschein number). It may also stand inside a text or a line of the table (for example "BelegNr-EB2612798"); then use it as order_number and do NOT list that line as an item. If it is not on this page, use "none".
         - The document may also be an invoice (Rechnung) or an order confirmation instead of a delivery note: treat its goods table the same way. Prices (Einzelpreis, Gesamtpreis, Preis, EUR) are never a quantity; the position number (Pos) is not part of the name.
         - items: every GOODS line of this page, in the order of the page. Lines that are crossed out, struck through or have quantity 0 must be included too — never skip a goods line.
           Skip lines that are not goods: freight (Frachtkosten, Fracht), pallets and pallet deposits (Euro-Palette, EW Pallets, Leihgebühr, Gutschrift), packaging, totals, weight summaries, table headers, addresses, footers.
         - name: the product name exactly as written (keep the original language). If the name continues on the next line (for example "Nachfüller") or a size line follows (for example "20 kg", "500 ml", "2,5 Lt"), append it to the name. Do not include article number, expiry date (Verfallsdatum) or batch (Charge) in the name.
-        - qty: the PRINTED number of delivered units of this line (columns like Stück, Anz., Anzahl, Menge (if a small extra column with 1 or a unit code follows Menge, the quantity is the Menge number) with unit ST / PCE / Sack / Eimer / Dose / Kan / Fla, aktuelle Liefermenge / Liefermenge, Množství, Počet, ks, Aantal, Stuks). Number only. Do not use the weight per unit, total weight (Gesamt in kg), price, article number, batch number, "bestellt" (ordered) or "offen" (open) columns when a delivered piece count exists.
+        - qty: the PRINTED number of delivered units of this line (columns like Stück, Anz., Anzahl, Menge (if a small extra column with 1 or a unit code follows Menge, the quantity is the Menge number) with unit ST / PCE / Sack / Eimer / Dose / Kan / Fla, aktuelle Liefermenge / Liefermenge, Množství, Počet, ks, Aantal, Stuks). Number only. If the line shows pallets times pieces (for example "9x24" or "9 x 24"), write it exactly as printed in qty ("9x24"): the app multiplies it itself. Do not use the weight per unit, total weight (Gesamt in kg), price, article number, batch number, "bestellt" (ordered) or "offen" (open) columns when a delivered piece count exists.
         - barcode: the EAN / GTIN / barcode number of this line (8 to 14 digits, usually next to labels EAN, GTIN, Barcode, Strichcode) if it is printed on the document; digits only. If the document has no barcode for this line, use an empty string. Do not invent it and do not use the article number, price or batch number.
         - mark: the pen mark that belongs to this line (usually at the left of the line): "check" = a tick (✓, √ or a slash-like tick); "cross" = a hand-drawn X, or the whole line struck through with a pen (goods did not arrive); "none" = no pen mark.
         - qty_crossed: true only if the printed quantity itself is crossed out or marked with an X / correction while the rest of the line is not struck through; otherwise false.
@@ -348,7 +355,9 @@ object Ai {
                 val it = arr.optJSONObject(i) ?: continue
                 val name = it.optString("name").trim()
                 if (name.isEmpty()) continue
-                val q = (it.opt("qty")?.toString() ?: "").trim()
+                val q0 = (it.opt("qty")?.toString() ?: "").trim()
+                val fx = QtyExpand.apply(name, q0)
+                val q = fx.qty
                 val hand = (it.opt("hand_qty")?.toString() ?: "").trim().let { h -> if (h.equals("null", true)) "" else h }
                 val mark = when (it.optString("mark").trim().lowercase()) {
                     "check", "tick", "ok" -> "check"
@@ -356,7 +365,7 @@ object Ai {
                     else -> "none"
                 }
                 val bc = (it.opt("barcode")?.toString() ?: "").filter { ch -> ch.isDigit() }.let { d -> if (d.length in 8..14) d else "" }
-                items.add(AiItem(name, q, mark, hand, it.optBoolean("qty_crossed", false), bc))
+                items.add(AiItem(fx.name, q, mark, hand, it.optBoolean("qty_crossed", false), bc))
             }
         }
         val sender = cleanSenderName(o.optString("sender", "none").trim()).ifBlank { "none" }
