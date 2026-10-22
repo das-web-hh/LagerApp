@@ -263,7 +263,7 @@ private fun ListSearchField(
 
 /** Мини-окно с подходящими товарами под полем поиска. */
 @Composable
-private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier, maxH: Dp = 280.dp) {
+private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier, maxH: Dp = 280.dp, compact: Boolean = false) {
     // свой цвет и рамка — чтобы окно подсказок отличалось от основного списка
     Card(
         modifier.fillMaxWidth().heightIn(max = maxH),
@@ -279,7 +279,24 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
         } else {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 hits.forEachIndexed { i, r ->
-                    Column(
+                    if (compact) {
+                        // компактно: название и плановое количество в одной строке — в окне помещается больше подсказок
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onPick(r) }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                r.name, Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 14.sp,
+                                lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
+                            )
+                            val info = buildList {
+                                if (r.extra) add("нет в плане") else add(fmtQ(parseQ(r.qty)))
+                                if (r.fact.isNotBlank()) add("факт ${fmtQ(parseQ(r.fact))}")
+                            }.joinToString(" · ")
+                            Text(info, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                        }
+                    } else Column(
                         Modifier.fillMaxWidth().clickable { onPick(r) }
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
@@ -447,7 +464,7 @@ fun CountWheelList(
                             plain = true,
                             bware = bware,
                             extraLabel = extraLabel,
-                            rowH = rowH, centerOnly = false, bigText = false, planBeside = nameMode, onSelect = { focusRow = row },
+                            rowH = rowH, centerOnly = false, bigText = false, planBeside = nameMode, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
                             onPickExpiry = { expiryRow = row },
                             onDetails = onDetails?.let { cb -> { cb(row) } },
                             onPickFact = { picking = row to true },
@@ -537,7 +554,7 @@ fun CountWheelList(
                                     plain = false,
                                     bware = bware,
                                     extraLabel = extraLabel,
-                                    rowH = rowH, centerOnly = bigRows, bigText = bigRows, planBeside = nameMode, onSelect = { focusRow = row },
+                                    rowH = rowH, centerOnly = bigRows, bigText = bigRows, planBeside = nameMode, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
                                     onPickExpiry = { expiryRow = row },
                                     onDetails = onDetails?.let { cb -> { cb(row) } },
                                     onPickFact = { picking = row to true },
@@ -551,10 +568,13 @@ fun CountWheelList(
                     }
                 }
             }
-            if (query.isNotBlank() && !(bigRows && hits.size == 1)) {
+            // «Приём по имени»: подсказки появляются с третьей буквы и остаются, пока есть похожие названия
+            // или пока не нажали на название (в подсказках или в списке); без совпадений окно скрывается
+            val showSuggestions = if (nameMode) query.trim().length >= 3 && hits.isNotEmpty() else query.isNotBlank()
+            if (showSuggestions) {
                 SuggestionsCard(
                     hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter),
-                    maxH = if (bigRows) 96.dp else 280.dp
+                    maxH = if (nameMode) 240.dp else 280.dp, compact = nameMode
                 )
             }
             if (scanFab && onScan != null && editable && n > 0 && (!plainNow || nameMode)) {
@@ -605,6 +625,8 @@ private fun WheelRow(
     /** «Приём по имени»: «план N» стоит рядом с фактом; в обычном списке тап по строке = +1, тап по числу открывает окно прокрутки количества */
     planBeside: Boolean = false,
     onSelect: () -> Unit,
+    /** любое нажатие на строку списка (закрывает окно подсказок) */
+    onTap: () -> Unit = {},
     onPickExpiry: () -> Unit,
     onDetails: (() -> Unit)?,
     onPickFact: () -> Unit,
@@ -775,6 +797,7 @@ private fun WheelRow(
                 .combinedClickable(
                     enabled = editable,
                     onClick = {
+                        onTap()
                         if (!active) onSelect()
                         else if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
                         else {
@@ -818,7 +841,7 @@ private fun WheelRow(
             // план — рядом с фактическим количеством
             if ((bigText || planBeside) && !bware && !row.extra) {
                 Text(
-                    "план ${fmtQ(planD)}",
+                    fmtQ(planD),
                     fontSize = 13.sp, maxLines = 1, color = scheme.onSurfaceVariant,
                     modifier = Modifier.padding(end = 8.dp)
                 )
