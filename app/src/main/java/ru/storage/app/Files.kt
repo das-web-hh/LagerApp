@@ -267,6 +267,7 @@ object FolderQueue {
                 delay(1000)
             }
         } catch (e: Exception) {
+        } catch (e: OutOfMemoryError) {
         } finally {
             queued.remove(f.id)
             Folders.markProcessed(app, listOf(f.id))

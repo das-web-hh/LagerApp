@@ -722,6 +722,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                 if (failed == 0 && !nameMode && !attached) autoFinish()
             } catch (e: Exception) {
                 message = "Ошибка: " + (e.message ?: e.javaClass.simpleName)
+            } catch (e: OutOfMemoryError) {
+                message = "Ошибка: не хватило памяти на этом файле — повторите нераспознанные листы"
             } finally {
                 doc?.close()
                 running = false

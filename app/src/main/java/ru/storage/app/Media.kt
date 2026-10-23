@@ -151,6 +151,8 @@ object Media {
     }
 
     /** Отправка ожидающих файлов на Google Диск в фоне; при ошибке повторится при следующем вызове. */
+    private val tooBig = java.util.Collections.synchronizedSet(HashSet<String>())
+
     fun uploadPending(ctx: Context, db: ProductDb) {
         val app = ctx.applicationContext
         if (!DriveCfg.ready(app)) return
@@ -161,7 +163,10 @@ object Media {
                     val list = db.pendingUploads()
                     if (list.isEmpty()) break
                     var failed = false
+                    var progress = false
                     for (name in list) {
+                        // файл, на котором уже не хватило памяти, в этом запуске пропускаем: остальные файлы всё равно отправляются
+                        if (name in tooBig) continue
                         val f = file(app, name)
                         if (!f.exists() || f.length() == 0L) {
                             db.removeUpload(name)
@@ -172,6 +177,12 @@ object Media {
                             db.removeUpload(name)
                             lastError = ""
                             version++
+                            progress = true
+                        } catch (e: OutOfMemoryError) {
+                            // большой многолистовой файл: раньше это закрывало приложение при каждом включении интернета
+                            tooBig.add(name)
+                            lastError = "Файл слишком большой для отправки на Диск (${f.length() / 1048576} МБ): $name"
+                            version++
                         } catch (e: Exception) {
                             lastError = "Ошибка отправки на Диск: " + (e.message ?: e.javaClass.simpleName)
                             version++
@@ -179,6 +190,7 @@ object Media {
                             break
                         }
                     }
+                    if (!progress && !failed) break
                     if (failed) break
                 }
             } finally {

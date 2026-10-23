@@ -36,6 +36,7 @@
     <application
         android:name=".LagerApp"
         android:allowBackup="false"
+        android:largeHeap="true"
         android:usesCleartextTraffic="false"
         android:label="Warehouse"
         android:icon="@mipmap/ic_launcher"
