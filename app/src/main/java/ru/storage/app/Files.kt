@@ -267,7 +267,6 @@ object FolderQueue {
                 delay(1000)
             }
         } catch (e: Exception) {
-        } catch (e: OutOfMemoryError) {
         } finally {
             queued.remove(f.id)
             Folders.markProcessed(app, listOf(f.id))
@@ -376,36 +375,6 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
         )
     }
 
-    // админ: нажатие на распознанную строку открывает выбор — «По наименованию» или принять автоматически
-    var choiceFile by remember { mutableStateOf<FolderFile?>(null) }
-    choiceFile?.let { f ->
-        val job = FolderQueue.tracked[f.id]?.let { AutoReceiveHolder.find(it) }
-        AlertDialog(
-            onDismissRequest = { choiceFile = null },
-            title = { Text(f.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            text = { Text(if (job != null) job.statusLine else "") },
-            confirmButton = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { choiceFile = null; scope.launch(Dispatchers.IO) { openFolderFileByName(ctx, f) } }
-                    ) { Text("Открыть «По наименованию»") }
-                    OutlinedButton(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            choiceFile = null
-                            scope.launch {
-                                val err = job?.adminAccept()
-                                Toast.makeText(ctx, err ?: "Принят", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    ) { Text("Принят (автоматически)") }
-                    TextButton(modifier = Modifier.fillMaxWidth(), onClick = { choiceFile = null }) { Text("Отмена") }
-                }
-            }
-        )
-    }
-
     val newCount = files.count { f -> !Folders.isProcessed(f.id) && f.id !in FolderQueue.queued && !FolderQueue.tracked.containsKey(f.id) }
 
     LazyColumn(Modifier.fillMaxSize()) {
@@ -498,9 +467,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
                         if (f.id in FolderQueue.queued) {
                             Toast.makeText(ctx, "Файл в очереди на распознавание", Toast.LENGTH_SHORT).show()
                         } else {
-                            val j = FolderQueue.tracked[f.id]?.let { AutoReceiveHolder.find(it) }
-                            if (Session.isAdmin && j != null && !j.saved && !j.running && !j.saving && j.items.isNotEmpty()) choiceFile = f
-                            else scope.launch(Dispatchers.IO) { openFolderFileByName(ctx, f) }
+                            scope.launch(Dispatchers.IO) { openFolderFileByName(ctx, f) }
                         }
                     }
                     .padding(horizontal = 16.dp, vertical = 8.dp),
