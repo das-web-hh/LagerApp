@@ -106,6 +106,34 @@ function doGet(e) {
       });
     }
 
+    // Android: файл по частям (до 2 МБ за запрос) — большие накладные не упираются в память телефона и скрипта
+    if (action === 'getchunk') {
+      var cname = String(params.name || '').trim();
+      if (!cname) throw new Error('Не указано имя файла.');
+      var cfound = folder.getFilesByName(cname);
+      if (!cfound.hasNext()) return json_({ok: false, error: 'not_found'});
+      var cfile = cfound.next();
+      var csize = cfile.getSize();
+      var offset = Math.max(parseInt(params.offset, 10) || 0, 0);
+      var length = Math.min(Math.max(parseInt(params.length, 10) || 1048576, 1), 2097152);
+      if (offset >= csize) return json_({ok: true, size: csize, contentBase64: ''});
+      var end = Math.min(offset + length, csize) - 1;
+      var cresp = UrlFetchApp.fetch(
+        'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(cfile.getId()) + '?alt=media',
+        {
+          headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + offset + '-' + end},
+          muteHttpExceptions: true
+        }
+      );
+      var ccode = cresp.getResponseCode();
+      if (ccode !== 200 && ccode !== 206) {
+        throw new Error('Drive API ' + ccode + ': ' + cresp.getContentText().slice(0, 300));
+      }
+      var cbytes = cresp.getContent();
+      if (ccode === 200) cbytes = cbytes.slice(offset, end + 1); // сервер проигнорировал Range
+      return json_({ok: true, size: csize, contentBase64: Utilities.base64Encode(cbytes)});
+    }
+
     return json_({ok: false, error: 'Неизвестное действие: ' + action});
   } catch (error) {
     return json_({ok: false, error: errorMessage_(error)});
@@ -118,6 +146,7 @@ function doPost(e) {
     checkToken_(payload.token);
     var action = String(payload.action || 'upload').toLowerCase();
     if (action === 'delete') return deleteByName_(payload);
+    if (action === 'init') return initResumable_(payload);
     if (action !== 'upload') {
       return json_({ok: false, error: 'Неизвестное действие: ' + action});
     }
@@ -157,6 +186,48 @@ function doPost(e) {
   } catch (error) {
     return json_({ok: false, error: errorMessage_(error)});
   }
+}
+
+// Android: большой файл. Скрипт только открывает «возобновляемую» сессию загрузки в Drive и отдаёт её адрес;
+// сами данные телефон отправляет в Google напрямую кусками по 4 МБ (с докачкой при обрыве) —
+// ни тело запроса, ни память скрипта, ни память телефона размером файла не ограничены.
+function initResumable_(payload) {
+  var folder = getFolder_(payload.folderId);
+  var fileName = safeFileName_(payload.fileName);
+  var mimeType = String(payload.mimeType || 'application/octet-stream');
+  var size = parseInt(payload.size, 10) || 0;
+
+  if (payload.skipIfExists === true || String(payload.skipIfExists).toLowerCase() === 'true') {
+    var existing = folder.getFilesByName(fileName);
+    if (existing.hasNext()) {
+      return json_({ok: true, exists: true, file: fileInfo_(existing.next()), message: 'Файл уже есть.'});
+    }
+  }
+
+  var headers = {
+    Authorization: 'Bearer ' + ScriptApp.getOAuthToken(),
+    'X-Upload-Content-Type': mimeType
+  };
+  if (size > 0) headers['X-Upload-Content-Length'] = String(size);
+
+  var resp = UrlFetchApp.fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size',
+    {
+      method: 'post',
+      contentType: 'application/json; charset=UTF-8',
+      headers: headers,
+      payload: JSON.stringify({name: fileName, parents: [folder.getId()], mimeType: mimeType}),
+      muteHttpExceptions: true
+    }
+  );
+  var code = resp.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error('Drive API ' + code + ': ' + resp.getContentText().slice(0, 300));
+  }
+  var all = resp.getAllHeaders();
+  var location = all['Location'] || all['location'];
+  if (!location) throw new Error('Drive не вернул адрес загрузки.');
+  return json_({ok: true, sessionUrl: String(location)});
 }
 
 // Android: удалить (в корзину) файл по имени из настроенной папки

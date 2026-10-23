@@ -222,10 +222,10 @@ object Media {
         if (f.exists() && f.length() > 0) return@withContext f
         if (!DriveCfg.ready(ctx)) return@withContext null
         try {
-            val bytes = DriveApi.download(ctx, name) ?: return@withContext null
-            f.writeBytes(bytes)
-            f
+            if (DriveApi.downloadTo(ctx, name, f)) f else null
         } catch (e: Exception) {
+            null
+        } catch (e: OutOfMemoryError) {
             null
         }
     }

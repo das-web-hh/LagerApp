@@ -12,6 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -104,10 +105,148 @@ object DriveApi {
         return r.optString("folderName")
     }
 
+    /** Размер куска при отправке в Google: кратен 256 КБ, как требует Drive. */
+    private const val CHUNK = 4 * 1024 * 1024
+
+    /** Файлы до этого размера уходят одним запросом (как раньше), большие — кусками. */
+    private const val SMALL = 3L * 1024 * 1024
+
     fun upload(ctx: Context, name: String, f: File) {
         val ext = f.extension.lowercase()
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
-        uploadBytes(ctx, name, mime, f.readBytes())
+        if (f.length() <= SMALL) {
+            uploadBytes(ctx, name, mime, f.readBytes())
+            return
+        }
+        // большой файл: скрипт открывает сессию загрузки, данные идут в Google кусками по 4 МБ с докачкой
+        val init = http(
+            DriveCfg.url(ctx),
+            JSONObject()
+                .put("action", "init")
+                .put("folderId", DriveCfg.folder(ctx))
+                .put("token", DriveCfg.token(ctx))
+                .put("fileName", name)
+                .put("mimeType", mime)
+                .put("size", f.length())
+                .put("skipIfExists", true)
+                .toString()
+        )
+        if (!init.optBoolean("ok")) {
+            val err = init.optString("error", "ошибка Диска")
+            if (err.startsWith("Неизвестное действие")) {
+                // скрипт Диска старый: новый Code.gs ещё не выпущен
+                if (f.length() > 20L * 1024 * 1024) {
+                    throw RuntimeException("Скрипт Диска устарел: обновите Code.gs (файл ${f.length() / 1048576} МБ)")
+                }
+                uploadBytes(ctx, name, mime, f.readBytes())
+                return
+            }
+            throw RuntimeException(err)
+        }
+        if (init.optBoolean("exists")) return
+        sendResumable(init.getString("sessionUrl"), f)
+    }
+
+    private class Put(val code: Int, val range: Long?)
+
+    /** PUT одного куска (или запрос состояния, если data == null). Возвращает код ответа и сколько байт Google уже принял. */
+    private fun put(session: String, data: ByteArray?, n: Int, contentRange: String): Put {
+        val c = URL(session).openConnection() as HttpURLConnection
+        try {
+            c.connectTimeout = 20000
+            c.readTimeout = 120000
+            c.instanceFollowRedirects = false
+            c.requestMethod = "PUT"
+            c.doOutput = true
+            c.setRequestProperty("Content-Range", contentRange)
+            c.setFixedLengthStreamingMode(n)
+            if (data != null && n > 0) c.outputStream.use { it.write(data, 0, n) }
+            val code = c.responseCode
+            val rng = c.getHeaderField("Range")?.substringAfter('-', "")?.toLongOrNull()?.let { it + 1 }
+            if (code >= 400) {
+                val t = c.errorStream?.bufferedReader()?.use { it.readText() }?.take(150) ?: ""
+                throw RuntimeException("Диск: HTTP $code $t")
+            }
+            return Put(code, rng)
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    private fun sendResumable(session: String, f: File) {
+        val total = f.length()
+        val buf = ByteArray(CHUNK)
+        var offset = 0L
+        var fails = 0
+        RandomAccessFile(f, "r").use { raf ->
+            while (offset < total) {
+                val n = minOf(CHUNK.toLong(), total - offset).toInt()
+                raf.seek(offset)
+                raf.readFully(buf, 0, n)
+                try {
+                    val r = put(session, buf, n, "bytes $offset-${offset + n - 1}/$total")
+                    when (r.code) {
+                        200, 201 -> return
+                        308 -> offset = r.range ?: 0L
+                        else -> throw RuntimeException("Диск: HTTP ${r.code}")
+                    }
+                    fails = 0
+                } catch (e: Exception) {
+                    if (++fails > 4) throw e
+                    Thread.sleep(2000L * fails)
+                    // после обрыва спрашиваем у Google, сколько он уже принял, и докачиваем с этого места
+                    try {
+                        val st = put(session, null, 0, "bytes */$total")
+                        if (st.code == 200 || st.code == 201) return
+                        offset = st.range ?: 0L
+                    } catch (e2: Exception) {
+                    }
+                }
+            }
+        }
+    }
+
+    /** Размер куска при скачивании с Диска (скрипт отдаёт не больше 2 МБ за запрос). */
+    private const val DL_CHUNK = 1024 * 1024
+
+    /**
+     * Скачивание файла по имени сразу на диск телефона кусками — в памяти только один кусок.
+     * false — на Диске такого файла нет. Со старым скриптом (без кусков) качает целиком, как раньше.
+     */
+    fun downloadTo(ctx: Context, name: String, dest: File): Boolean {
+        val tmp = File(dest.path + ".part")
+        var offset = 0L
+        var total = -1L
+        try {
+            tmp.outputStream().use { out ->
+                while (total < 0 || offset < total) {
+                    val r = http(query(ctx, "getchunk", "name" to name, "offset" to offset.toString(), "length" to DL_CHUNK.toString()), null)
+                    if (!r.optBoolean("ok")) {
+                        val err = r.optString("error", "ошибка Диска")
+                        if (err == "not_found") return false
+                        if (err.startsWith("Неизвестное действие") && offset == 0L) {
+                            val all = download(ctx, name) ?: return false
+                            out.write(all)
+                            total = all.size.toLong()
+                            offset = total
+                            break
+                        }
+                        throw RuntimeException(err)
+                    }
+                    total = r.getLong("size")
+                    val part = Base64.decode(r.getString("contentBase64"), Base64.DEFAULT)
+                    if (part.isEmpty()) break
+                    out.write(part)
+                    offset += part.size
+                }
+            }
+            if (total >= 0 && offset < total) throw RuntimeException("Файл скачан не полностью")
+            if (dest.exists()) dest.delete()
+            if (!tmp.renameTo(dest)) throw RuntimeException("Не удалось сохранить файл")
+            return true
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
     }
 
     /** Загрузка готового массива байт (используется для частей APK). Файл с таким именем повторно не создаётся. */
