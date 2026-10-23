@@ -113,10 +113,13 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     var openProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var openReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var section by rememberSaveable { mutableStateOf<String?>(null) }
+    var browseQuery by rememberSaveable { mutableStateOf<String?>(null) }   // «Файлы» с подставленным запросом из главного поиска
+    var receiptHits by remember { mutableStateOf(emptyList<ReceiptHit>()) } // приёмки: по номеру заказа, дате, файлу, отправителю
+    var fileHits by remember { mutableStateOf(emptyList<FolderFile>()) }    // файлы из папок: по дате и названию
     var all by remember { mutableStateOf(emptyList<Receipt>()) }
     var productCount by remember { mutableIntStateOf(0) }
     val enough = query.trim().length >= MIN_SEARCH_CHARS
-    SideEffect { TabRoot.set(0, !scanning && openProductId == null && openReceiptId == null && section == null && query.isEmpty()) }
+    SideEffect { TabRoot.set(0, !scanning && openProductId == null && openReceiptId == null && section == null && browseQuery == null && query.isEmpty()) }
 
     LaunchedEffect(Unit) {
         InvoiceProfiles.load(ctx)
@@ -126,6 +129,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
         try {
             Cloud.runReceipts(db, sync, false)
             Cloud.runProducts(db, sync, false)
+            if (Cloud.migrateOrdersToLatin(db) > 0) sync.version++
         } catch (e: Exception) { }
     }
     LaunchedEffect(sync.version, Media.version) {
@@ -138,11 +142,27 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     // товары, принятые без карточки в каталоге, показываются отдельным списком ниже
     LaunchedEffect(query, sync.version, all) {
         if (query.trim().length < MIN_SEARCH_CHARS) {
-            prodHits = emptyList(); results = emptyList()
+            prodHits = emptyList(); results = emptyList(); receiptHits = emptyList(); fileHits = emptyList()
         } else withContext(Dispatchers.IO) {
             prodHits = searchProducts(db, all, query)
             val ids = db.allProducts().map { it.id }.toSet()
             results = searchHistory(db, all, query).filter { it.item.productId !in ids }
+            receiptHits = searchReceipts(all, query)
+        }
+    }
+    // файлы из папок — по дате и названию (как в окне «Файлы»); список папок читаем один раз на запрос
+    LaunchedEffect(query) {
+        if (query.trim().length < MIN_SEARCH_CHARS) fileHits = emptyList()
+        else withContext(Dispatchers.IO) {
+            val q = query.trim()
+            val qd = parseQueryDate(q)
+            fileHits = try {
+                Folders.load(ctx)
+                Folders.scanAll(ctx, false)
+                    .filter { if (qd != null) matchesDate(it, qd) else it.name.contains(q, ignoreCase = true) }
+                    .sortedByDescending { effMillis(it) }
+                    .take(30)
+            } catch (e: Exception) { emptyList() }
         }
     }
 
@@ -183,6 +203,11 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
         }
         if (Nav.target != null) Nav.target = null
     }
+    val bq = browseQuery
+    if (bq != null) {
+        FileBrowserScreen(onBack = { browseQuery = null }, initialQuery = bq)
+        return
+    }
     val sec = section
     if (sec == "Чат") {
         ChatScreen { section = null }
@@ -214,7 +239,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             query = query,
             onChange = { query = it },
             onScan = { scanning = true },
-            placeholder = "Поиск товара"
+            placeholder = "Товар, заказ EB…, дата"
         )
         Spacer(Modifier.height(8.dp))
         if (query.isEmpty()) {
@@ -238,8 +263,11 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
                 busy = sync.busy,
                 prodHits = prodHits,
                 results = results,
+                receiptHits = receiptHits,
+                fileHits = fileHits,
                 onOpenProduct = { openProductId = it },
-                onOpen = { openReceiptId = it }
+                onOpen = { openReceiptId = it },
+                onOpenFiles = { browseQuery = query.trim() }
             )
         } else {
             Dashboard(
@@ -275,6 +303,38 @@ private fun searchHistory(db: ProductDb, all: List<Receipt>, query: String): Lis
     return out.take(300)
 }
 
+/** Приёмка, найденная по номеру заказа, дате, названию файла или отправителю. */
+private class ReceiptHit(val receipt: Receipt, val why: String)
+
+/** «ЕБ1234567», «еб-1234567», «eb 1234567» → «eb1234567»: русские и латинские буквы номера заказа сравниваются одинаково. */
+private fun orderKey(s: String): String =
+    Ai.latinOrder(s).lowercase().replace(Regex("[\\s\\-–]+"), "").replace(Regex("^[её][бb6]"), "eb")
+
+private fun searchReceipts(all: List<Receipt>, query: String): List<ReceiptHit> {
+    val q = query.trim()
+    if (q.isEmpty()) return emptyList()
+    val qd = parseQueryDate(q)
+    val qo = orderKey(q)
+    val ql = q.lowercase()
+    val out = ArrayList<ReceiptHit>()
+    for (r in all) {
+        val ok = r.orderNo.isNotBlank() && r.orderNo != "none" && qo.length >= MIN_SEARCH_CHARS && orderKey(r.orderNo).contains(qo)
+        var why = ""
+        if (ok) why = "заказ"
+        else if (qd != null) {
+            val days = HashSet<Int>()
+            days.add(dayKey(r.receivedAt))
+            parseTime(r.stamp)?.let { days.add(dayKey(it)) }
+            nameMillis(r.fileName)?.let { days.add(dayKey(it)) }
+            if (days.any { k -> (k / 100) % 100 == qd.m && k % 100 == qd.d && (qd.y == null || k / 10000 == qd.y) }) why = "дата"
+        } else if (r.fileName.isNotBlank() && r.fileName.lowercase().contains(ql)) why = "файл"
+        else if (r.sender.isNotBlank() && r.sender.lowercase().contains(ql)) why = "отправитель"
+        if (why.isNotEmpty()) out.add(ReceiptHit(r, why))
+    }
+    out.sortByDescending { it.receipt.receivedAt }
+    return out.take(100)
+}
+
 /** Подсказка из каталога: товар, когда его принимали в последний раз и сколько раз. */
 private class ProdHit(val product: Product, val last: Receipt?, val count: Int)
 
@@ -298,22 +358,65 @@ private fun SearchResultsList(
     busy: Boolean,
     prodHits: List<ProdHit>,
     results: List<HistoryHit>,
+    receiptHits: List<ReceiptHit>,
+    fileHits: List<FolderFile>,
     onOpenProduct: (String) -> Unit,
-    onOpen: (String) -> Unit
+    onOpen: (String) -> Unit,
+    onOpenFiles: () -> Unit
 ) {
     when {
         !enough -> Text(
-            "Введите минимум $MIN_SEARCH_CHARS символа: название, артикул или штрих-код",
+            "Введите минимум $MIN_SEARCH_CHARS символа: название, артикул, штрих-код, номер заказа (EB…) или дату",
             style = MaterialTheme.typography.bodySmall
         )
-        prodHits.isEmpty() && results.isEmpty() -> Text(
+        prodHits.isEmpty() && results.isEmpty() && receiptHits.isEmpty() && fileHits.isEmpty() -> Text(
             if (busy) "Загрузка…" else "Ничего не найдено",
             style = MaterialTheme.typography.bodySmall
         )
-        else -> Text("Найдено в каталоге: ${prodHits.size}", style = MaterialTheme.typography.bodySmall)
+        else -> Text(
+            "Товаров: ${prodHits.size} · приёмок: ${receiptHits.size} · файлов: ${fileHits.size}",
+            style = MaterialTheme.typography.bodySmall
+        )
     }
     Spacer(Modifier.height(4.dp))
     LazyColumn(Modifier.fillMaxSize()) {
+        if (receiptHits.isNotEmpty()) {
+            item(key = "rhdr") {
+                Text("Приёмки (заказ, дата, файл, отправитель)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
+            }
+            items(receiptHits, key = { "r" + it.receipt.id }) { h ->
+                val r = h.receipt
+                Column(Modifier.fillMaxWidth().clickable { onOpen(r.id) }.padding(vertical = 6.dp)) {
+                    Text(
+                        if (r.orderNo.isNotBlank() && r.orderNo != "none") "Заказ № ${Ai.latinOrder(r.orderNo)}" else r.sender.ifBlank { "Приёмка" },
+                        fontWeight = FontWeight.Medium
+                    )
+                    val sub = listOf(
+                        fmtTime(r.receivedAt),
+                        if (r.orderNo.isNotBlank() && r.orderNo != "none") r.sender else "",
+                        r.fileName,
+                        "позиций ${r.items.size}"
+                    ).filter { it.isNotBlank() }.joinToString(" · ")
+                    Text(sub, style = MaterialTheme.typography.bodySmall)
+                }
+                HorizontalDivider()
+            }
+        }
+        if (fileHits.isNotEmpty()) {
+            item(key = "fhdr") {
+                Text("Файлы", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+            }
+            items(fileHits, key = { "f" + it.id }) { f ->
+                Column(Modifier.fillMaxWidth().clickable { onOpenFiles() }.padding(vertical = 6.dp)) {
+                    Text(f.name, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        listOf(if (f.modified > 0) fmtTime(f.modified) else "", f.folder).filter { it.isNotBlank() }.joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                HorizontalDivider()
+            }
+        }
         items(prodHits, key = { "p" + it.product.id }) { h ->
             Column(Modifier.fillMaxWidth().clickable { onOpenProduct(h.product.id) }.padding(vertical = 6.dp)) {
                 Text(h.product.name, fontWeight = FontWeight.Medium)

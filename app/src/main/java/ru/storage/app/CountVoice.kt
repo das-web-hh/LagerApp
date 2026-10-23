@@ -20,7 +20,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -220,10 +225,27 @@ fun CountOverlay() {
         alpha.animateTo(0f, tween(500))
     }
 
-    if (alpha.value > 0.01f) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // Палец закрывает середину экрана: центр цифры ставим на 25% высоты экрана сверху (на границе между 1-й и 2-й четвертями),
+    // по горизонтали — по центру. Окно, в котором лежит список, может быть ниже верха экрана — считаем по координатам окна.
+    val screenH = LocalView.current.rootView.height
+    var boxTop by remember { mutableIntStateOf(0) }
+    var boxH by remember { mutableIntStateOf(0) }
+    var numH by remember { mutableIntStateOf(0) }
+    Box(
+        Modifier.fillMaxSize().onGloballyPositioned {
+            boxTop = it.positionInWindow().y.roundToInt()
+            boxH = it.size.height
+        }
+    ) {
+        if (alpha.value > 0.01f) {
             Box(
                 Modifier
+                    .align(Alignment.TopCenter)
+                    .offset {
+                        val y = (screenH * 0.25f - boxTop - numH / 2f).roundToInt()
+                        IntOffset(0, y.coerceIn(0, (boxH - numH).coerceAtLeast(0)))
+                    }
+                    .onSizeChanged { numH = it.height }
                     .graphicsLayer {
                         this.alpha = alpha.value
                         val s = 0.85f + 0.15f * alpha.value

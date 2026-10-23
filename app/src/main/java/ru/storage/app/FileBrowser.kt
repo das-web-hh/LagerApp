@@ -105,13 +105,13 @@ fun nameMillis(name: String): Long? {
     return null
 }
 
-private fun dayKey(ms: Long): Int {
+internal fun dayKey(ms: Long): Int {
     val c = Calendar.getInstance().apply { timeInMillis = ms }
     return c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH)
 }
 
 /** Время файла для списка: дата изменения файла, если телефон её отдаёт, иначе дата из имени. */
-private fun effMillis(f: FolderFile): Long = if (f.modified > 0) f.modified else (nameMillis(f.name) ?: 0L)
+internal fun effMillis(f: FolderFile): Long = if (f.modified > 0) f.modified else (nameMillis(f.name) ?: 0L)
 
 /** Дни, на которые «приходится» файл: день изменения файла и день из имени (файл-копия может иметь другую дату изменения). */
 private fun fileDays(f: FolderFile): Set<Int> {
@@ -125,9 +125,9 @@ private val RU_MONTHS = listOf("янв", "фев", "мар", "апр", "мая",
 private val RU_MONTH_NUM = listOf(1, 2, 3, 4, 5, 5, 6, 7, 8, 9, 10, 11, 12)
 
 /** Дата из строки поиска в любом привычном виде: 10.10.2026, 10/10/26, 2026-10-10, 20261010, 101026, «10 окт», «10.10». Год может быть не указан (null). */
-private class QDate(val y: Int?, val m: Int, val d: Int)
+internal class QDate(val y: Int?, val m: Int, val d: Int)
 
-private fun parseQueryDate(raw: String): QDate? {
+internal fun parseQueryDate(raw: String): QDate? {
     val q = raw.trim().lowercase(Locale.ROOT)
     if (q.isEmpty()) return null
     fun ok(y: Int?, m: Int, d: Int): QDate? {
@@ -162,7 +162,7 @@ private fun parseQueryDate(raw: String): QDate? {
     }
 }
 
-private fun matchesDate(f: FolderFile, q: QDate): Boolean = fileDays(f).any { k ->
+internal fun matchesDate(f: FolderFile, q: QDate): Boolean = fileDays(f).any { k ->
     val y = k / 10000
     val m = (k / 100) % 100
     val d = k % 100
@@ -174,7 +174,7 @@ private val STAMP = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.ROOT)
 // ───────────────────────── окно «Файлы» ─────────────────────────
 
 @Composable
-fun FileBrowserScreen(onBack: () -> Unit) {
+fun FileBrowserScreen(onBack: () -> Unit, initialQuery: String = "") {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { Folders.load(ctx) }
@@ -182,7 +182,7 @@ fun FileBrowserScreen(onBack: () -> Unit) {
     var files by remember { mutableStateOf(emptyList<FolderFile>()) }
     var loading by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf(initialQuery) }
     var calendar by remember { mutableStateOf(false) }
     var folderDlg by remember { mutableStateOf(false) }
     var viewIndex by rememberSaveable { mutableStateOf<Int?>(null) }

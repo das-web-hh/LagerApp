@@ -301,6 +301,38 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         }
     }
 
+    /**
+     * Только админ, кнопка «Принят»: распознанное принимается автоматически, даже без галочек и крестиков
+     * (количество — по документу). Если такая партия уже есть в базе — она перезаписывается.
+     * Возвращает текст ошибки или null.
+     */
+    suspend fun adminAccept(): String? {
+        if (!Session.isAdmin) return "Принимать так может только администратор"
+        if (saved || saving || running) return "Партия ещё обрабатывается"
+        if (items.isEmpty()) return "Нет распознанных товаров"
+        if (nameMode) {
+            if (items.any { it.fact.isNotBlank() }) return "В «По наименованию» уже введено количество — завершите приём там"
+            setMode(false)
+        }
+        blocked = ""
+        attachedNote = ""
+        autoError = ""
+        message = "Принимаю…"
+        val err = try {
+            saveJob(app, ProductDb.get(app), this, file, AutoReceiveHolder.receiver, false, forceAccept = true, overwrite = true)
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
+        }
+        if (err == null) {
+            autoState = "saved"
+            message = "Принято администратором"
+        } else {
+            autoState = "error"
+            autoError = err
+        }
+        return err
+    }
+
     /** Товары, которые за день приёма уже принимались с тем же количеством и по которым ещё нет решения. */
     suspend fun pendingSameDay(): List<SameDay> {
         val at = stampMillis(stamp.trim()) ?: System.currentTimeMillis()
@@ -946,7 +978,11 @@ suspend fun saveJob(
     job: AutoJob,
     f: IncomingFile,
     receiver: String,
-    nameMode: Boolean
+    nameMode: Boolean,
+    /** админ жмёт «Принят»: строки без отметок принимаются с количеством по документу */
+    forceAccept: Boolean = false,
+    /** админ: если такая партия (по номеру заказа или файлу) уже есть в базе — она перезаписывается */
+    overwrite: Boolean = false
 ): String? {
     if (job.saved || job.saving) return null
     val rows = ArrayList<ReceiptItem>()
@@ -992,8 +1028,9 @@ suspend fun saveJob(
             val plan = if (r.extra) "0" else normalizeQty(r.qty).ifEmpty { "0" }
             rows.add(ReceiptItem(pid, name, fact, plan, defect, r.expiry.trim(), bc))
         } else {
-            val qty = normalizeQty(r.qty)
+            var qty = normalizeQty(r.qty)
             val printed = normalizeQty(r.printed)
+            if (forceAccept && r.status != "missing" && (qty.isEmpty() || !qtyValid(qty)) && printed.isNotEmpty() && qtyValid(printed)) qty = printed
             // «не пришло» (✕): товар попадает в приём с количеством 0 и планом по документу
             if (r.status == "missing" && (qty.isEmpty() || qty.toDoubleOrNull() == 0.0)) {
                 rows.add(ReceiptItem(pid, name, "0", printed.ifEmpty { "0" }, barcode = bc))
@@ -1014,11 +1051,12 @@ suspend fun saveJob(
         val hash = withContext(Dispatchers.IO) { job.docHash() }
         // Точные признаки — номер заказа, содержимое и имя файла: тот же заказ или документ второй раз не принимаем
         val d2 = try {
-            Cloud.findDuplicate(db, "", "", "", hash)
+            Cloud.findDuplicate(db, if (overwrite) order else "", "", "", hash)
         } catch (e: Exception) {
             null
         }
-        if (d2 != null) {
+        val replaced: Receipt? = if (overwrite && Session.isAdmin) d2?.receipt else null
+        if (d2 != null && replaced == null) {
             if (d2.kind == "order" && d2.receipt.invoices.isEmpty()) {
                 // заказ уже принят, но без накладной — документ привязываем к нему, товары не дублируем
                 val st = job.stamp.trim().let { if (it.length == 16) it else "" }
@@ -1047,14 +1085,14 @@ suspend fun saveJob(
             }
             val inv = f.driveName.ifBlank { null } ?: Media.importFile(ctx, File(f.path), db, "IN")
             val r = Receipt(
-                id = UUID.randomUUID().toString(),
+                id = replaced?.id ?: UUID.randomUUID().toString(),
                 sender = sender,
                 orderNo = if (order == "none") "" else order,
                 receivedAt = at,
                 receiver = receiver,
                 items = rows,
-                photos = job.items.flatMap { listOf(it.photo) + it.defectPhotos }.filter { it.isNotBlank() }.distinct(),
-                invoices = listOfNotNull(inv),
+                photos = (job.items.flatMap { listOf(it.photo) + it.defectPhotos } + (replaced?.photos ?: emptyList())).filter { it.isNotBlank() }.distinct(),
+                invoices = ((replaced?.invoices ?: emptyList()) + listOfNotNull(inv)).distinct(),
                 updatedAt = now,
                 fileName = f.name,
                 stamp = stamp,
