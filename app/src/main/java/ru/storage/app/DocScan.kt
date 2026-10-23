@@ -1,0 +1,83 @@
+package ru.storage.app
+
+import android.app.Activity
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProvider
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.app.PendingIntent
+import android.widget.RemoteViews
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import kotlin.concurrent.thread
+
+private fun Context.activity(): Activity? {
+    var c: Context? = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
+}
+
+/**
+ * Сканер документа (до 30 листов → PDF) для главного поиска и виджета.
+ * После «Далее» скан ставится в очередь на Google Диск и открывается мини-окно: «Автоприём» или «По наименованию».
+ * Дальше всё как у любого файла: распознавание номера заказа и отправителя, автосохранение или список для подсчёта.
+ * Возвращает функцию запуска сканера.
+ */
+@Composable
+fun rememberDocScanner(): () -> Unit {
+    val ctx = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            val pdf = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
+            if (pdf != null) thread {
+                val db = ProductDb.get(ctx)
+                val inv = Media.importUri(ctx, pdf, db, "IN")
+                Media.uploadPending(ctx, db)
+                // startMode = null → файл попадает в очередь выбора, на экране появляется окно с двумя кнопками
+                Incoming.accept(ctx, pdf, null, driveName = inv ?: "")
+            }
+        }
+    }
+    return start@{
+        val act = ctx.activity() ?: return@start
+        val opts = GmsDocumentScannerOptions.Builder()
+            .setGalleryImportAllowed(false)
+            .setPageLimit(30)
+            .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+            .build()
+        GmsDocumentScanning.getClient(opts).getStartScanIntent(act)
+            .addOnSuccessListener { sender -> launcher.launch(IntentSenderRequest.Builder(sender).build()) }
+            .addOnFailureListener {
+                Toast.makeText(ctx, "Сканер недоступен: " + (it.message ?: ""), Toast.LENGTH_LONG).show()
+            }
+    }
+}
+
+/** Виджет на главный экран телефона: одна кнопка, открывает приложение сразу на сканере документа. */
+class ScanWidgetProvider : AppWidgetProvider() {
+    override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
+        for (id in ids) manager.updateAppWidget(id, views(context))
+    }
+
+    private fun views(ctx: Context): RemoteViews {
+        val v = RemoteViews(ctx.packageName, R.layout.widget_scan)
+        val i = Intent(ctx, MainActivity::class.java)
+            .putExtra("open", "scan")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val pi = PendingIntent.getActivity(ctx, 7001, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        v.setOnClickPendingIntent(R.id.widget_root, pi)
+        return v
+    }
+}

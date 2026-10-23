@@ -119,7 +119,7 @@ fun IncomingChoiceDialog(f: IncomingFile) {
                     Text("Автоприём")
                 }
                 OutlinedButton(onClick = { Incoming.start(ctx, f, "name") }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Приём по имени")
+                    Text("По наименованию")
                 }
             }
         },

@@ -113,6 +113,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     var openProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var openReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var section by rememberSaveable { mutableStateOf<String?>(null) }
+    val startDocScan = rememberDocScanner()
     var browseQuery by rememberSaveable { mutableStateOf<String?>(null) }   // «Файлы» с подставленным запросом из главного поиска
     var receiptHits by remember { mutableStateOf(emptyList<ReceiptHit>()) } // приёмки: по номеру заказа, дате, файлу, отправителю
     var fileHits by remember { mutableStateOf(emptyList<FolderFile>()) }    // файлы из папок: по дате и названию
@@ -200,6 +201,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
         when (Nav.target) {
             "chat" -> section = "Чат"
             "tasks" -> section = "Задачи"
+            "scan" -> startDocScan()   // кнопка виджета: сразу открыть сканер документа
         }
         if (Nav.target != null) Nav.target = null
     }
@@ -247,7 +249,8 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             val rv = Live.readVersion
             val unread = if (me != null) remember(Live.msgs, rv) { Live.unreadTotal(ctx, me) } else 0
             val openTasks = if (me != null) Live.openTasksCount(me) else 0
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = startDocScan, modifier = Modifier.weight(1f)) { Text("Скан") }
                 FilledTonalButton(onClick = { section = "Чат" }, modifier = Modifier.weight(1f)) {
                     BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) { Text("Чат") }
                 }

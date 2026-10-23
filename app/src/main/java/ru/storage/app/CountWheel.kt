@@ -282,13 +282,13 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
                     if (compact) {
                         // компактно: название и плановое количество в одной строке — в окне помещается больше подсказок
                         Row(
-                            Modifier.fillMaxWidth().clickable { onPick(r) }
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { onPick(r) }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                r.name, Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 14.sp,
-                                lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
+                                r.name, Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 16.sp,
+                                lineHeight = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
                             )
                             val info = buildList {
                                 if (r.extra) add("нет в плане") else add(fmtQ(parseQ(r.qty)))
@@ -574,7 +574,7 @@ fun CountWheelList(
             if (showSuggestions) {
                 SuggestionsCard(
                     hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter),
-                    maxH = if (nameMode) 240.dp else 280.dp, compact = nameMode
+                    maxH = if (nameMode) 336.dp else 280.dp, compact = nameMode
                 )
             }
             if (scanFab && onScan != null && editable && n > 0 && (!plainNow || nameMode)) {
@@ -845,6 +845,11 @@ private fun WheelRow(
                     fontSize = 13.sp, maxLines = 1, color = scheme.onSurfaceVariant,
                     modifier = Modifier.padding(end = 8.dp)
                 )
+            }
+            // «Приём по имени»: есть ли у товара штрих-код — значок, нет кода — перечёркнутый значок
+            if (onEan != null && !bware) {
+                BarcodeStatusIcon(has = row.barcode.isNotBlank(), size = if (bigText && !emph) 16.dp else 20.dp)
+                Spacer(Modifier.width(8.dp))
             }
             // количество — справа; тап по числу открывает барабан цифр
             Box(

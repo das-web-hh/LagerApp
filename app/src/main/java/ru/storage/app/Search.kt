@@ -49,3 +49,23 @@ fun BarcodeScannerIcon(
         }
     }
 }
+
+/** Значок в строке списка: есть ли у товара штрих-код. Нет кода — тот же значок перечёркнут красной линией. */
+@Composable
+fun BarcodeStatusIcon(
+    has: Boolean,
+    size: Dp = 20.dp,
+    color: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    slash: Color = MaterialTheme.colorScheme.error
+) {
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val c = if (has) color else color.copy(alpha = 0.55f)
+        val bars = listOf(0.08f to 0.07f, 0.20f to 0.04f, 0.29f to 0.10f, 0.45f to 0.04f, 0.54f to 0.08f, 0.68f to 0.04f, 0.77f to 0.07f, 0.89f to 0.04f)
+        bars.forEach { (x, bw) -> drawRect(c, Offset(w * x, h * 0.18f), Size(w * bw, h * 0.64f)) }
+        if (!has) {
+            drawLine(slash, Offset(w * 0.06f, h * 0.94f), Offset(w * 0.94f, h * 0.06f), strokeWidth = w * 0.11f, cap = StrokeCap.Round)
+        }
+    }
+}

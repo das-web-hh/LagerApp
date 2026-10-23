@@ -123,7 +123,8 @@ object Cloud {
         val isNew = existing == null
         // уже записанную в базу приёмку сотрудник изменить не может — только администратор
         if (existing != null && !Session.isAdmin) return existing
-        val nr = r.copy(updatedAt = System.currentTimeMillis())
+        // номер заказа всегда пишется латиницей: «ЕБ1234567» (кириллица) → «EB1234567»
+        val nr = r.copy(orderNo = Ai.latinOrder(r.orderNo), updatedAt = System.currentTimeMillis())
         db.upsertReceipts(listOf(nr))
         fs.collection("receipts").document(nr.id).set(receiptMap(nr))
         SendState.version++ // «Инфо» и другие окна перечитывают данные
@@ -220,7 +221,7 @@ object Cloud {
         return Receipt(
             id = id,
             sender = get("sender")?.toString() ?: "",
-            orderNo = get("orderNo")?.toString() ?: "",
+            orderNo = Ai.latinOrder(get("orderNo")?.toString() ?: ""), // «ЕБ» кириллицей из старых записей читаем как латинское «EB"
             receivedAt = getLong("receivedAt") ?: 0L,
             receiver = get("receiver")?.toString() ?: "",
             items = items,
@@ -317,6 +318,32 @@ object Cloud {
         } finally {
             st.busy = false
         }
+    }
+
+    /**
+     * Старые приёмки могли сохраниться с номером заказа, написанным кириллицей («ЕБ1234567»).
+     * Администратор один раз переписывает их латиницей («EB1234567») — у себя и в Firebase; у остальных они подтянутся при синхронизации.
+     * Возвращает, сколько приёмок исправлено.
+     */
+    suspend fun migrateOrdersToLatin(db: ProductDb): Int {
+        if (!Session.isAdmin) return 0
+        val bad = withContext(Dispatchers.IO) {
+            db.allReceipts().filter { it.orderNo.isNotBlank() && Ai.latinOrder(it.orderNo) != it.orderNo }
+        }
+        var n = 0
+        for (r in bad) {
+            try {
+                val now = System.currentTimeMillis()
+                val fixed = r.copy(orderNo = Ai.latinOrder(r.orderNo), updatedAt = now)
+                fs.collection("receipts").document(r.id).update(mapOf("orderNo" to fixed.orderNo, "updatedAt" to now)).awaitIt()
+                withContext(Dispatchers.IO) { db.upsertReceipts(listOf(fixed)) }
+                n++
+            } catch (e: Exception) {
+                // нет связи или записи нет в Firebase — попробуем при следующем запуске
+            }
+        }
+        if (n > 0) SendState.version++
+        return n
     }
 
     suspend fun runReceipts(db: ProductDb, st: SyncState, force: Boolean) {
