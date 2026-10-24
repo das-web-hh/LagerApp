@@ -183,6 +183,7 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     SideEffect { TabRoot.set(1, mode == null && viewReceipt == null) }
     var pickMode by remember { mutableStateOf("auto") }
     var deleteJob by remember { mutableStateOf<AutoJob?>(null) }
+    var showFiles by rememberSaveable { mutableStateOf(false) }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         val m = pickMode
         // один файл — сразу открываем; несколько — создаём партии, открывать их можно из списка ниже
@@ -268,10 +269,17 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         UnloadScreen { mode = null }
         return
     }
+    if (current == "Автоприём" && showFiles) {
+        // отдельное окно «Файлы / накладные»: все файлы, проблемные сверху
+        FilesScreen(onBack = { showFiles = false }, part = "list")
+        return
+    }
     if (current == "Автоприём") {
         FilesScreen(
             onBack = { mode = null },
             title = "Автоприём",
+            part = "main",
+            onOpenFiles = { showFiles = true },
             onPickFiles = {
                 pickMode = "auto"
                 pdfPicker.launch(

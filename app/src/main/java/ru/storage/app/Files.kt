@@ -320,7 +320,15 @@ private fun sizeText(b: Long): String = when {
  * onPickFiles — кнопка «Выбрать файлы» (разовый выбор файлов без папки).
  */
 @Composable
-fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (() -> Unit)? = null, onScan: (() -> Unit)? = null) {
+fun FilesScreen(
+    onBack: () -> Unit,
+    title: String = "Файлы",
+    onPickFiles: (() -> Unit)? = null,
+    onScan: (() -> Unit)? = null,
+    /** "all" — всё в одном окне; "main" — пауза, добавление, папки (без списка файлов); "list" — только список файлов. */
+    part: String = "all",
+    onOpenFiles: (() -> Unit)? = null
+) {
     BackHandler(onBack = onBack)
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -426,7 +434,8 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
             Row(Modifier.height(48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("← Назад") }
             }
-            Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            Text(if (part == "list") "Файлы / накладные" else title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            if (part != "list") {
             // пауза / продолжить автоприём (хранится в аккаунте: держится после перезапуска и переустановки)
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -458,6 +467,13 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
                     Text("Проверка папок…", style = MaterialTheme.typography.bodySmall)
                 }
             }
+            if (onOpenFiles != null) {
+                val bad = files.count { Folders.mark(it) == "⚠" }
+                OutlinedButton(
+                    onClick = onOpenFiles,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                ) { Text("Файлы / накладные: ${files.size}" + if (bad > 0) " · ⚠ $bad" else "") }
+            }
             if (newCount > 0 && !Folders.auto) {
                 OutlinedButton(
                     enabled = !AutoPause.paused,
@@ -470,8 +486,9 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
             TextButton(onClick = { showSettings = !showSettings }, modifier = Modifier.padding(horizontal = 8.dp)) {
                 Text(if (showSettings) "▾ Папки и настройки" else "▸ Папки и настройки")
             }
+            }
         }
-        if (showSettings) {
+        if (showSettings && part != "list") {
             item {
                 Text(
                     "PDF, картинки и Excel из выбранных папок (можно несколько; папка может быть и на Google Диске). Новые файлы по очереди уходят в автоприём: ИИ читает накладную, приём сохраняется в базу, а файл — на Google Диск. Нажмите на файл — он откроется в «По наименованию».",
@@ -499,6 +516,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
                 }
             }
         }
+        if (part != "main") {
         item {
             HorizontalDivider(Modifier.padding(top = 4.dp))
             val marks = files.map { Folders.mark(it) }
@@ -552,6 +570,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
                 }
             }
             HorizontalDivider()
+        }
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
