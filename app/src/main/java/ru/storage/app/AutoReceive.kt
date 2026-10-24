@@ -310,6 +310,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         if (!Session.isAdmin) return "Принимать так может только администратор"
         if (saved || saving || running) return "Партия ещё обрабатывается"
         if (items.isEmpty()) return "Нет распознанных товаров"
+        if (hasFailed) return "Не все листы распознаны — сначала повторите распознавание, иначе часть товаров потеряется"
         if (nameMode) {
             if (items.any { it.fact.isNotBlank() }) return "В «По наименованию» уже введено количество — завершите приём там"
             setMode(false)
@@ -1753,13 +1754,22 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             text = {
                 Text(
                     "На этой накладной нет галочек и крестиков (или отмечены не все позиции), " +
-                        "поэтому автоприём её не сохранил. Откройте её в «Приём по имени» и посчитайте вручную."
+                        "поэтому автоприём её не сохранил. Откройте её в «Приём по имени» и посчитайте вручную" +
+                        if (Session.isAdmin) " или сохраните как есть: количество возьмётся с накладной, без пересчёта." else "."
                 )
             },
             confirmButton = {
-                Button(onClick = { job.openInNameMode() }) { Text("Открыть в «Приём по имени»") }
-            },
-            dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(modifier = Modifier.fillMaxWidth(), onClick = { job.openInNameMode() }) { Text("Открыть в «Приём по имени»") }
+                    if (Session.isAdmin) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { scope.launch { job.adminAccept() } }
+                        ) { Text("Сохранить как есть (по накладной)") }
+                    }
+                    TextButton(modifier = Modifier.fillMaxWidth(), onClick = onClose) { Text("Закрыть") }
+                }
+            }
         )
     }
 

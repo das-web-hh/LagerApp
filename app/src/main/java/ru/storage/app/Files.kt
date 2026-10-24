@@ -411,7 +411,7 @@ fun FilesScreen(
                                 Toast.makeText(ctx, err ?: "Принят", Toast.LENGTH_LONG).show()
                             }
                         }
-                    ) { Text("Принят (автоматически)") }
+                    ) { Text("Сохранить как есть (по накладной)") }
                     TextButton(modifier = Modifier.fillMaxWidth(), onClick = { choiceFile = null }) { Text("Отмена") }
                 }
             }
