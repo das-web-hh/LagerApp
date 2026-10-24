@@ -281,6 +281,8 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     /** Открыть вкладку из любого места: свёрнутая партия закрывается (остаётся в работе), вкладка открывается с начала. */
     fun go(i: Int) {
         Incoming.openPath = null
+        if (i == 1) TabNav.work = null
+        if (i == 2) TabNav.other = null
         resets[i] = resets[i] + 1
         selected = i
     }

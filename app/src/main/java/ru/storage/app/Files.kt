@@ -188,9 +188,13 @@ object Folders {
     }
 
     /** Файлы всех выбранных папок, новые сверху. Если enqueue и автоприём включён — новые файлы ставятся в очередь. */
+    /** Последний найденный список файлов: окно «Автоприём» показывает его сразу, пока идёт повторная проверка папок. */
+    @Volatile var cache: List<FolderFile> = emptyList()
+
     fun scanAll(ctx: Context, enqueue: Boolean): List<FolderFile> {
         load(ctx)
         val all = folders.toList().flatMap { listTree(ctx, Uri.parse(it)) }.sortedByDescending { it.modified }
+        cache = all
         if (enqueue && auto && !AutoPause.paused) {
             all.filter { !isProcessed(it.id) }.sortedBy { it.modified }.forEach { FolderQueue.enqueue(ctx, it) }
         }
@@ -321,7 +325,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { Folders.load(ctx) }
-    var files by remember { mutableStateOf(emptyList<FolderFile>()) }
+    var files by remember { mutableStateOf(Folders.cache) }
     var loading by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
     var baseline by remember { mutableStateOf<Pair<Uri, List<FolderFile>>?>(null) }
@@ -408,65 +412,50 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
 
     val newCount = files.count { f -> !Folders.isProcessed(f.id) && f.id !in FolderQueue.queued && !FolderQueue.tracked.containsKey(f.id) }
 
+    var showSettings by remember { mutableStateOf(false) }
+    var addMenu by remember { mutableStateOf(false) }
+    // недоделанные сверху (не получилось → проверить → в работе → новые), принятые — в конце; внутри группы новые файлы выше
+    val shown = files.sortedWith(
+        compareBy<FolderFile> {
+            when (Folders.mark(it)) { "⚠" -> 0; "✎" -> 1; "⏳" -> 2; "●" -> 3; else -> 4 }
+        }.thenByDescending { it.modified }
+    )
+
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             Row(Modifier.height(48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("← Назад") }
             }
             Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-            Text(
-                "PDF, картинки и Excel из выбранных папок (можно несколько; папка может быть и на Google Диске). Новые файлы по очереди уходят в автоприём: ИИ читает накладную, приём сохраняется в базу, а файл — на Google Диск. Нажмите на файл — он откроется в «По наименованию».",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
             // пауза / продолжить автоприём (хранится в аккаунте: держится после перезапуска и переустановки)
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(if (AutoPause.paused) "⏸ Автоприём на паузе" else "▶ Автоприём работает", style = MaterialTheme.typography.titleMedium,
-                        color = if (AutoPause.paused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-                    Text(
-                        if (AutoPause.paused) "Новые файлы не проверяются и не отправляются на распознавание, окно только показывает файлы. Пауза сохраняется, пока вы не нажмёте «Продолжить»."
-                        else "Новые файлы из папок идут на распознавание по очереди.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (AutoPause.paused) "⏸ Автоприём на паузе" else "▶ Автоприём работает",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (AutoPause.paused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
                 if (AutoPause.paused) Button(onClick = { AutoPause.set(ctx, false) }) { Text("▶ Продолжить") }
                 else OutlinedButton(onClick = { AutoPause.set(ctx, true) }) { Text("⏸ Пауза") }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Принимать новые файлы автоматически", style = MaterialTheme.typography.bodyLarge)
-                    Text("Проверка папок раз в 2 минуты, пока приложение запущено", style = MaterialTheme.typography.bodySmall)
+            // одна кнопка вместо четырёх: снимок, файлы, папка, проверка
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    Button(onClick = { addMenu = true }) { Text("＋ Добавить") }
+                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                        if (onScan != null) DropdownMenuItem(text = { Text("📷 Снимок документа") }, onClick = { addMenu = false; onScan() })
+                        if (onPickFiles != null) DropdownMenuItem(text = { Text("Выбрать файлы") }, onClick = { addMenu = false; onPickFiles() })
+                        DropdownMenuItem(text = { Text("Добавить папку") }, onClick = { addMenu = false; picker.launch(null) })
+                        DropdownMenuItem(
+                            text = { Text("Проверить папки") },
+                            enabled = !loading && Folders.folders.isNotEmpty(),
+                            onClick = { addMenu = false; reload++ }
+                        )
+                    }
                 }
-                Switch(checked = Folders.auto, onCheckedChange = { Folders.setAuto(ctx, it) })
-            }
-            Text("Папки", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        }
-        if (Folders.folders.isEmpty()) {
-            item { Text("Папки не выбраны", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp)) }
-        }
-        items(Folders.folders.toList()) { s ->
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(Folders.label(s), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f),
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
-                TextButton(onClick = { Folders.remove(ctx, s) }) { Text("✕") }
-            }
-        }
-        item {
-            // «Снимок» — отдельной строкой на всю ширину: в общем ряду кнопка уезжала за край экрана
-            if (onScan != null) {
-                Button(
-                    onClick = onScan,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                ) { Text("📷 Снимок документа") }
-            }
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { picker.launch(null) }) { Text("Добавить папку") }
-                if (onPickFiles != null) OutlinedButton(onClick = onPickFiles) { Text("Выбрать файлы") }
-                OutlinedButton(onClick = { reload++ }, enabled = !loading && Folders.folders.isNotEmpty()) {
-                    Text(if (loading) "Проверка…" else "Проверить")
+                if (loading) {
+                    Spacer(Modifier.width(12.dp))
+                    Text("Проверка папок…", style = MaterialTheme.typography.bodySmall)
                 }
             }
             if (newCount > 0 && !Folders.auto) {
@@ -478,7 +467,40 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
                     modifier = Modifier.padding(horizontal = 16.dp)
                 ) { Text("Отправить новые на распознавание ($newCount)") }
             }
-            HorizontalDivider(Modifier.padding(top = 8.dp))
+            TextButton(onClick = { showSettings = !showSettings }, modifier = Modifier.padding(horizontal = 8.dp)) {
+                Text(if (showSettings) "▾ Папки и настройки" else "▸ Папки и настройки")
+            }
+        }
+        if (showSettings) {
+            item {
+                Text(
+                    "PDF, картинки и Excel из выбранных папок (можно несколько; папка может быть и на Google Диске). Новые файлы по очереди уходят в автоприём: ИИ читает накладную, приём сохраняется в базу, а файл — на Google Диск. Нажмите на файл — он откроется в «По наименованию».",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Принимать новые файлы автоматически", style = MaterialTheme.typography.bodyLarge)
+                        Text("Проверка папок раз в 2 минуты, пока приложение запущено", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = Folders.auto, onCheckedChange = { Folders.setAuto(ctx, it) })
+                }
+                Text("Папки", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
+            if (Folders.folders.isEmpty()) {
+                item { Text("Папки не выбраны", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp)) }
+            }
+            items(Folders.folders.toList()) { f0 ->
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(Folders.label(f0), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f),
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = { Folders.remove(ctx, f0) }) { Text("✕") }
+                }
+            }
+        }
+        item {
+            HorizontalDivider(Modifier.padding(top = 4.dp))
             val marks = files.map { Folders.mark(it) }
             Text("Файлы: ${files.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
@@ -489,7 +511,7 @@ fun FilesScreen(onBack: () -> Unit, title: String = "Файлы", onPickFiles: (
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
             )
         }
-        items(files, key = { it.id }) { f ->
+        items(shown, key = { it.id }) { f ->
             val st = Folders.status(f)
             val mk = Folders.mark(f)
             Row(

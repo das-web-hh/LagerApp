@@ -131,7 +131,7 @@ fun HistoryScreen(onBack: () -> Unit) {
 }
 
 @Composable
-fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
+fun ReceiptEditScreen(id: String, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     // менять приёмку (отправителя, номер заказа, количества, файлы) может только администратор
@@ -173,7 +173,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onClose, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("‹", fontSize = 26.sp) }
-            Text(if (canEdit) "Приём" else "Приём (просмотр)", style = MaterialTheme.typography.titleLarge)
+            Text(if (canEdit) "Изменить приём" else "Приём (просмотр)", style = MaterialTheme.typography.titleLarge)
         }
         Spacer(Modifier.height(8.dp))
         if (!canEdit) {
@@ -308,6 +308,174 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
     }
 }
 
+
+private fun cardNum(s: String): Double = s.trim().replace(',', '.').toDoubleOrNull() ?: 0.0
+
+private fun cardFmt(d: Double): String =
+    if (d == Math.rint(d)) d.toLong().toString() else String.format(java.util.Locale.ROOT, "%.2f", d).trimEnd('0').trimEnd('.')
+
+/**
+ * Окно партии: сверху главные данные (когда, кто принял, номер заказа, отправитель), ниже простой список «товар — количество»
+ * (серым — плановое), под чертой — только товары с расхождениями. Кнопка «Изменить» — только у администратора.
+ */
+@Composable
+fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    val scope = rememberCoroutineScope()
+    var editing by remember { mutableStateOf(false) }
+    var rev by remember { mutableIntStateOf(0) }
+    var rc by remember { mutableStateOf<Receipt?>(null) }
+    var loaded by remember { mutableStateOf(false) }
+    var histId by remember { mutableStateOf<String?>(null) }
+    var notInCatalog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(id, rev) {
+        rc = withContext(Dispatchers.IO) { db.getReceipt(id) }
+        loaded = true
+    }
+    if (editing) {
+        // после правки или удаления возвращаемся в окно партии (удалённую партию окно закроет само)
+        ReceiptEditScreen(id) { editing = false; rev++ }
+        return
+    }
+    val hid = histId
+    if (hid != null) {
+        ProductHistoryScreen(hid) { histId = null }
+        return
+    }
+    BackHandler(onBack = onClose)
+    val r = rc
+    if (r == null) {
+        if (loaded) LaunchedEffect(Unit) { onClose() }
+        Box(Modifier.fillMaxSize())
+        return
+    }
+
+    val onSurfaceVar = MaterialTheme.colorScheme.onSurfaceVariant
+    val diffs = r.items.filter {
+        val d = cardNum(it.defect)
+        (it.plan.isNotBlank() && Math.abs(cardNum(it.qty) - cardNum(it.plan)) > 1e-9) || d > 0.0
+    }
+    val total = r.items.sumOf { cardNum(it.qty) }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onClose, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("‹", fontSize = 26.sp) }
+            Text("Партия", style = MaterialTheme.typography.titleLarge)
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // главные данные
+        @Composable
+        fun info(label: String, value: String) {
+            if (value.isBlank() || value.equals("none", true)) return
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium, color = onSurfaceVar, modifier = Modifier.width(120.dp))
+                Text(value, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+            }
+        }
+        info("Принято", fmtTime(r.receivedAt))
+        info("Кто принял", r.receiver)
+        info("Номер заказа", Ai.latinOrder(r.orderNo))
+        info("Отправитель", r.sender)
+        info("Позиций", "${r.items.size} · всего ${cardFmt(total)} шт")
+
+        Spacer(Modifier.height(12.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        // простой список: слева товар, справа количество, серым — план
+        r.items.forEach { l ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).clickable {
+                    scope.launch {
+                        val pid = l.productId.ifEmpty { withContext(Dispatchers.IO) { db.findByName(l.name)?.id ?: "" } }
+                        if (pid.isEmpty()) notInCatalog = true else histId = pid
+                    }
+                }) {
+                    Text(l.name, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.width(8.dp))
+                if (l.plan.isNotBlank()) {
+                    Text(l.plan, style = MaterialTheme.typography.bodyMedium, color = onSurfaceVar.copy(alpha = 0.7f))
+                    Spacer(Modifier.width(10.dp))
+                }
+                Text(l.qty, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+
+        // черта и расхождения
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.outline)
+        Spacer(Modifier.height(10.dp))
+        if (diffs.isEmpty()) {
+            Text("Расхождений нет", style = MaterialTheme.typography.bodyMedium, color = onSurfaceVar)
+        } else {
+            Text("Расхождения: ${diffs.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+            diffs.forEach { l ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(l.name, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        val d = cardNum(l.defect)
+                        if (d > 0.0) Text("брак ${cardFmt(d)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    if (l.plan.isNotBlank()) {
+                        val diff = cardNum(l.qty) - cardNum(l.plan)
+                        Text(l.plan, style = MaterialTheme.typography.bodyMedium, color = onSurfaceVar.copy(alpha = 0.7f))
+                        Text(" → ", style = MaterialTheme.typography.bodyMedium, color = onSurfaceVar)
+                        Text(l.qty, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        if (Math.abs(diff) > 1e-9) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                (if (diff > 0) "+" else "") + cardFmt(diff),
+                                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    } else {
+                        Text(l.qty, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        }
+
+        // накладные и фото — только если они есть
+        if (r.invoices.isNotEmpty()) {
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(12.dp))
+            Text("Исходный документ", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            r.invoices.forEach { n ->
+                InlineDoc(n)
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+        if (r.photos.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text("Фото", style = MaterialTheme.typography.labelLarge, color = onSurfaceVar)
+            Spacer(Modifier.height(4.dp))
+            MediaStrip(r.photos, null)
+        }
+
+        Spacer(Modifier.height(24.dp))
+        if (Session.isAdmin) {
+            Button(onClick = { editing = true }, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text("Изменить") }
+        }
+    }
+
+    if (notInCatalog) {
+        AlertDialog(
+            onDismissRequest = { notInCatalog = false },
+            title = { Text("Товар не найден") },
+            text = { Text("Этого товара нет в каталоге, истории по нему нет.") },
+            confirmButton = { Button(onClick = { notInCatalog = false }) { Text("Понятно") } }
+        )
+    }
+}
 
 @Composable
 private fun minFieldColors() = TextFieldDefaults.colors(

@@ -48,6 +48,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * Где находится человек внутри вкладок «Работа» и «Прочее». Хранится вне экрана: когда открывается партия (она закрывает вкладку),
+ * экран вкладки уничтожается, и «Назад» раньше падал сразу в корень «Работы». Теперь возврат — в то окно, откуда партию открыли.
+ */
+object TabNav {
+    var work by mutableStateOf<String?>(null)
+    var other by mutableStateOf<String?>(null)
+}
+
+/** Делегат для локальной переменной экрана, которая на самом деле лежит в TabNav. */
+class NavVar(private val read: () -> String?, private val write: (String?) -> Unit) {
+    operator fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): String? = read()
+    operator fun setValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>, value: String?) = write(value)
+}
+
 @Composable
 fun Placeholder(title: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -58,7 +73,7 @@ fun Placeholder(title: String) {
 /** Окно «Прочее»: шаблоны накладных, каталог товаров, инфо. */
 @Composable
 fun OtherScreen(prefs: Prefs) {
-    var section by rememberSaveable { mutableStateOf<String?>(null) }
+    var section by NavVar({ TabNav.other }, { TabNav.other = it })
     val current = section
     val ctx = LocalContext.current
     LaunchedEffect(Unit) { InvoiceProfiles.load(ctx) }
@@ -160,7 +175,7 @@ private fun ProfileRow(label: String, value: String) {
 
 @Composable
 fun ReceiveScreen(prefs: Prefs, receiver: String) {
-    var mode by rememberSaveable { mutableStateOf<String?>(null) }
+    var mode by NavVar({ TabNav.work }, { TabNav.work = it })
     var viewReceipt by rememberSaveable { mutableStateOf<String?>(null) }
     val admin = Session.isAdmin
     val current = mode

@@ -249,14 +249,20 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             val rv = Live.readVersion
             val unread = if (me != null) remember(Live.msgs, rv) { Live.unreadTotal(ctx, me) } else 0
             val openTasks = if (me != null) Live.openTasksCount(me) else 0
+            // фон кнопок — белая поверхность с тенью: отделяется от цветного фона окна
+            val btnColors = ButtonDefaults.elevatedButtonColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary
+            )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = startDocScan, modifier = Modifier.weight(1f)) { Text("Скан") }
-                FilledTonalButton(onClick = { section = "Чат" }, modifier = Modifier.weight(1f)) {
+                ElevatedButton(onClick = startDocScan, colors = btnColors, modifier = Modifier.weight(1f)) { Text("Скан") }
+                ElevatedButton(onClick = { section = "Чат" }, colors = btnColors, modifier = Modifier.weight(1f)) {
                     BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) { Text("Чат") }
                 }
-                FilledTonalButton(onClick = { section = "Задачи" }, modifier = Modifier.weight(1f)) {
-                    BadgedBox(badge = { if (openTasks > 0) Badge { Text(openTasks.toString()) } }) { Text(if (Session.isAdmin) "Управление" else "Задачи") }
-                }
+            }
+            Spacer(Modifier.height(8.dp))
+            ElevatedButton(onClick = { section = "Задачи" }, colors = btnColors, modifier = Modifier.fillMaxWidth()) {
+                BadgedBox(badge = { if (openTasks > 0) Badge { Text(openTasks.toString()) } }) { Text(if (Session.isAdmin) "Управление" else "Задачи") }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -501,6 +507,38 @@ private fun Dashboard(
         Spacer(Modifier.height(12.dp))
 
         PeriodWidget(all, now)
+        val openJobs = AutoReceiveHolder.jobs.filter { !it.saved }
+        if (openJobs.isNotEmpty()) {
+            SectionTitle("В работе: ${openJobs.size}")
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column {
+                    openJobs.forEachIndexed { i, j ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { Incoming.openPath = j.file.path }.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                val title = j.sender.takeIf { !it.equals("none", true) && it.isNotBlank() } ?: j.file.name
+                                Text(title, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    (if (j.nameMode) "По имени · " else "Автоприём · ") + j.statusLine,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                        }
+                        if (i < openJobs.size - 1) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                    }
+                }
+            }
+        }
         SectionTitle("Сегодня")
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -526,7 +564,10 @@ private fun Dashboard(
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             MetricCard(
                 Icons.Default.Refresh, jobsInWork.toString(), "Партий в работе", Modifier.weight(1f),
-                MaterialTheme.colorScheme.primary, onClick = { onOpenTab(1) }
+                MaterialTheme.colorScheme.primary, onClick = {
+                    val open = AutoReceiveHolder.jobs.filter { !it.saved }
+                    if (open.size == 1) Incoming.openPath = open[0].file.path else onOpenTab(1)
+                }
             )
             MetricCard(
                 Icons.Default.Edit, InvoiceProfiles.newCount.toString(), "Новых шаблонов", Modifier.weight(1f),
@@ -620,70 +661,33 @@ private fun spansOf(now: Long): List<Span> {
     )
 }
 
-/** Виджет «Принято»: сам переходит с дня на месяц и на год, цифра плавно набирается. Нажатие — следующий счётчик. */
+/** Виджет «Принято»: три фиксированных счётчика — за сегодня, за месяц и за год. Цифры не крутятся и сами не переключаются. */
 @Composable
 private fun PeriodWidget(all: List<Receipt>, now: Long) {
     val spans = remember(now / 60000L) { spansOf(now) }
-    var idx by remember { mutableIntStateOf(0) }
-    LaunchedEffect(idx) {
-        delay(5000)
-        idx = (idx + 1) % spans.size
-    }
+    val names = listOf("Сегодня", "Месяц", "Год")
     val shape = RoundedCornerShape(28.dp)
     Box(
         Modifier.fillMaxWidth().clip(shape)
             .background(Brush.linearGradient(listOf(BrandBlueDark, BrandBlue)))
-            .clickable { idx = (idx + 1) % spans.size }
             .padding(20.dp)
     ) {
         Column {
-            Crossfade(targetState = idx, animationSpec = tween(600), label = "period") { i ->
-                val sp = spans[i]
-                val cur = all.filter { it.receivedAt >= sp.from && it.receivedAt < sp.to }
-                val prev = all.filter { it.receivedAt >= sp.prevFrom && it.receivedAt < sp.prevTo }
-                val units = cur.sumOf { receiptUnits(it) }
-                val prevUnits = prev.sumOf { receiptUnits(it) }
-                var target by remember { mutableStateOf(0f) }
-                LaunchedEffect(units) { target = units.toFloat() }
-                val shown by animateFloatAsState(target, tween(900), label = "count")
-                val delta = when {
-                    prevUnits <= 0.0 && units <= 0.0 -> "Операций пока нет"
-                    prevUnits <= 0.0 -> "Раньше приёмок не было"
-                    else -> {
-                        val pct = ((units - prevUnits) / prevUnits * 100.0).roundToInt()
-                        when {
-                            pct > 0 -> "▲ $pct% к ${sp.prevName}"
-                            pct < 0 -> "▼ ${abs(pct)}% к ${sp.prevName}"
-                            else -> "Как и раньше"
-                        }
-                    }
-                }
-                Column {
-                    Text("Принято ${sp.title}", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.8f))
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.Bottom) {
+            Text("Принято, шт", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.8f))
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                spans.forEachIndexed { k, sp ->
+                    val cur = all.filter { it.receivedAt >= sp.from && it.receivedAt < sp.to }
+                    val units = cur.sumOf { receiptUnits(it) }
+                    Column(Modifier.weight(1f)) {
+                        Text(names[k], style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.8f))
                         Text(
-                            fmtNum(shown.toDouble()),
-                            style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, color = Color.White
+                            fmtNum(units),
+                            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                            color = Color.White, maxLines = 1, softWrap = false
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "шт", style = MaterialTheme.typography.titleMedium,
-                            color = Color.White.copy(alpha = 0.8f), modifier = Modifier.padding(bottom = 6.dp)
-                        )
+                        Text("приёмок: ${cur.size}", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.85f))
                     }
-                    Spacer(Modifier.height(6.dp))
-                    Text("Приёмок: ${cur.size}", style = MaterialTheme.typography.bodyMedium, color = Color.White)
-                    Text(delta, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.85f))
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                spans.indices.forEach { k ->
-                    Box(
-                        Modifier.height(6.dp).width(if (k == idx) 22.dp else 6.dp).clip(CircleShape)
-                            .background(Color.White.copy(alpha = if (k == idx) 1f else 0.4f))
-                    )
                 }
             }
         }

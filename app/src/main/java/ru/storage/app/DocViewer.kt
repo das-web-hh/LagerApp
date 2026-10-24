@@ -1,6 +1,11 @@
 package ru.storage.app
 
 import android.content.Context
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.border
+import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
@@ -37,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -260,5 +266,123 @@ private fun ZoomPage(bmp: Bitmap, onZoom: (Boolean) -> Unit) {
                 scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y
             )
         )
+    }
+}
+
+
+/** Таблица «товар — количество» из Excel без обращения к ИИ: строгий формат #LAGER или столбцы, найденные приложением. */
+private fun excelPreview(ctx: Context, f: File): Pair<List<Pair<String, String>>, String> {
+    return try {
+        val rows = Xlsx.read(ctx, Uri.fromFile(f))
+        val first = rows.firstOrNull { r -> r.any { it.isNotBlank() } }?.firstOrNull()?.trim().orEmpty()
+        val res = if (first.startsWith(AiImport.MARKER, ignoreCase = true)) ExcelImport.parse(rows)
+        else ExcelColumns.detect(rows)?.let { ExcelColumns.parse(rows, it) }
+        if (res == null || res.items.isEmpty()) emptyList<Pair<String, String>>() to "Не удалось определить столбцы названия и количества — откройте файл в другом приложении"
+        else res.items.map { it.name to it.qty } to ""
+    } catch (e: Exception) {
+        emptyList<Pair<String, String>>() to "Не удалось прочитать таблицу: " + (e.message ?: e.javaClass.simpleName)
+    }
+}
+
+/**
+ * Исходный документ партии прямо в окне: PDF — листами (макет как на бумаге), картинка — целиком,
+ * Excel — таблицей «товар слева, количество справа». Под документом кнопка «Открыть через другое приложение».
+ */
+@Composable
+fun InlineDoc(name: String) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lower = name.lowercase()
+    val isExcel = lower.endsWith(".xlsx") || lower.endsWith(".xlsm")
+    val isPdf = lower.endsWith(".pdf")
+    val file by produceState<File?>(null, name) { value = Media.load(ctx, name) }
+    var loaded by remember(name) { mutableStateOf(false) }
+    LaunchedEffect(file) { if (file != null) loaded = true }
+
+    Column(Modifier.fillMaxWidth()) {
+        Text(Media.shownName(name), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(6.dp))
+        val f = file
+        if (f == null) {
+            Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(28.dp))
+            }
+        } else when {
+            isExcel -> {
+                val table by produceState<Pair<List<Pair<String, String>>, String>?>(null, f) {
+                    value = withContext(Dispatchers.IO) { excelPreview(ctx, f) }
+                }
+                val t = table
+                val line = MaterialTheme.colorScheme.outline
+                if (t == null) {
+                    CircularProgressIndicator(Modifier.size(28.dp))
+                } else if (t.first.isEmpty()) {
+                    Text(t.second, style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                        Box(Modifier.weight(1f).fillMaxHeight().border(0.5.dp, line).padding(8.dp)) {
+                            Text("Товар", fontWeight = FontWeight.Bold)
+                        }
+                        Box(Modifier.width(90.dp).fillMaxHeight().border(0.5.dp, line).padding(8.dp)) {
+                            Text("Кол-во", fontWeight = FontWeight.Bold, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                    t.first.forEach { (n, q) ->
+                        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                            Box(Modifier.weight(1f).fillMaxHeight().border(0.5.dp, line).padding(8.dp)) { Text(n) }
+                            Box(Modifier.width(90.dp).fillMaxHeight().border(0.5.dp, line).padding(8.dp)) {
+                                Text(q, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                }
+            }
+            isPdf -> {
+                val count by produceState(0, f) { value = withContext(Dispatchers.IO) { pdfPageCount(f) } }
+                var showAll by remember(name) { mutableStateOf(false) }
+                if (count <= 0) {
+                    Text("Не удалось показать PDF — откройте его в другом приложении", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    val shown = if (showAll) count else minOf(count, 3)
+                    for (i in 0 until shown) {
+                        val bmp by produceState<Bitmap?>(null, name, i) { value = loadPageBitmap(ctx, ViewPage(name, i, "pdf")) }
+                        val b = bmp
+                        if (b == null) {
+                            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(Modifier.size(28.dp))
+                            }
+                        } else {
+                            Image(
+                                b.asImageBitmap(), null,
+                                Modifier.fillMaxWidth().border(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                                contentScale = ContentScale.FillWidth
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    if (count > shown) {
+                        OutlinedButton(onClick = { showAll = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Показать все листы ($count)")
+                        }
+                    }
+                }
+            }
+            Media.isImage(name) -> {
+                val bmp by produceState<Bitmap?>(null, name) { value = loadPageBitmap(ctx, ViewPage(name, 0, "image")) }
+                val b = bmp
+                if (b == null) CircularProgressIndicator(Modifier.size(28.dp))
+                else Image(
+                    b.asImageBitmap(), null,
+                    Modifier.fillMaxWidth().border(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                    contentScale = ContentScale.FillWidth
+                )
+            }
+            else -> Text("Предпросмотр этого файла недоступен", style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = { scope.launch { if (Media.load(ctx, name) != null) Media.open(ctx, name) } },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Открыть через другое приложение") }
     }
 }

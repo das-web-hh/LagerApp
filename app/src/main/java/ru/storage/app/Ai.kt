@@ -193,7 +193,7 @@ data class PageResult(val sender: String, val order: String, val items: List<AiI
 data class IdResult(val sender: String, val order: String)
 
 object Ai {
-    private val ORDER = Regex("[ЕеEe][БбBb6]\\s*[-–]?\\s*(\\d{7})")
+    private val ORDER = Regex("[ЕеEe][БбВвBb6]\\s*[-–]?\\s*(\\d{7})")
 
     /** «EB» (латиница) + 7 цифр или "none". */
     fun normalizeOrder(s: String): String {
