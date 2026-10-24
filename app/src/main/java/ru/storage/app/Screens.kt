@@ -192,8 +192,10 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     // «Снимок» в Автоприёме: сканер документа (до 30 листов) → PDF → Google Диск (очередь) → распознавание → автосохранение
     val autoScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
-            val pdf = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
-            if (pdf != null) thread {
+            val pdf0 = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
+            if (pdf0 != null) thread {
+                // кривой скан (сшитые листы, угол под степлером) выравнивается; ровный остаётся как есть
+                val pdf = ScanFix.fix(ctx, pdf0)
                 val db = ProductDb.get(ctx)
                 val inv = Media.importUri(ctx, pdf, db, "IN")
                 Media.uploadPending(ctx, db)
@@ -415,8 +417,10 @@ fun NameReceiveHub(onBack: () -> Unit) {
     }
     val scanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
-            val pdf = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
-            if (pdf != null) thread {
+            val pdf0 = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
+            if (pdf0 != null) thread {
+                // кривой скан (сшитые листы, угол под степлером) выравнивается; ровный остаётся как есть
+                val pdf = ScanFix.fix(ctx, pdf0)
                 // скан сразу ставится в очередь на Google Диск (нет сети — уйдёт, как только она появится)
                 val db = ProductDb.get(ctx)
                 val inv = Media.importUri(ctx, pdf, db, "IN")

@@ -34,13 +34,25 @@ private fun Context.activity(): Activity? {
  * Дальше всё как у любого файла: распознавание номера заказа и отправителя, автосохранение или список для подсчёта.
  * Возвращает функцию запуска сканера.
  */
+/** Сканер запущен кнопкой виджета с рабочего стола: если сканирование отменили, приложение сворачивается обратно, а не открывает главное окно. */
+object ScanOrigin {
+    @Volatile var fromWidget = false
+}
+
 @Composable
 fun rememberDocScanner(): () -> Unit {
     val ctx = LocalContext.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
-        if (res.resultCode == Activity.RESULT_OK) {
-            val pdf = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
-            if (pdf != null) thread {
+        val fromWidget = ScanOrigin.fromWidget
+        ScanOrigin.fromWidget = false
+        if (res.resultCode != Activity.RESULT_OK) {
+            // крестик в сканере или «Назад»: из виджета — сразу назад на рабочий стол (приложение остаётся в фоне со своим состоянием)
+            if (fromWidget) ctx.activity()?.moveTaskToBack(true)
+        } else {
+            val pdf0 = GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri
+            if (pdf0 != null) thread {
+                // кривой скан (сшитые листы, угол под степлером) выравнивается; ровный остаётся как есть
+                val pdf = ScanFix.fix(ctx, pdf0)
                 val db = ProductDb.get(ctx)
                 val inv = Media.importUri(ctx, pdf, db, "IN")
                 Media.uploadPending(ctx, db)
@@ -60,6 +72,7 @@ fun rememberDocScanner(): () -> Unit {
         GmsDocumentScanning.getClient(opts).getStartScanIntent(act)
             .addOnSuccessListener { sender -> launcher.launch(IntentSenderRequest.Builder(sender).build()) }
             .addOnFailureListener {
+                ScanOrigin.fromWidget = false
                 Toast.makeText(ctx, "Сканер недоступен: " + (it.message ?: ""), Toast.LENGTH_LONG).show()
             }
     }

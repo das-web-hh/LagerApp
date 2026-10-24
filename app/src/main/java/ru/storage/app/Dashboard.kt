@@ -201,7 +201,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
         when (Nav.target) {
             "chat" -> section = "Чат"
             "tasks" -> section = "Задачи"
-            "scan" -> startDocScan()   // кнопка виджета: сразу открыть сканер документа
+            "scan" -> { ScanOrigin.fromWidget = true; startDocScan() }   // кнопка виджета: сразу открыть сканер документа
         }
         if (Nav.target != null) Nav.target = null
     }
