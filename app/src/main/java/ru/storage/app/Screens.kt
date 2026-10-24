@@ -203,9 +203,20 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
             }
         }
     }
+    val ownAutoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val pdf = if (res.resultCode == Activity.RESULT_OK) OwnScan.pdfFrom(res.data) else null
+        if (pdf != null) thread {
+            val db = ProductDb.get(ctx)
+            val inv = Media.importUri(ctx, pdf, db, "IN")
+            Media.uploadPending(ctx, db)
+            Incoming.accept(ctx, pdf, "auto", open = true, driveName = inv ?: "")
+        }
+    }
     val startAutoScan: () -> Unit = {
         val act = findActivity(ctx)
-        if (act != null) {
+        if (act != null && OwnScan.enabled(ctx)) {
+            ownAutoLauncher.launch(OwnScan.intent(act))
+        } else if (act != null) {
             val opts = GmsDocumentScannerOptions.Builder()
                 .setGalleryImportAllowed(false)
                 .setPageLimit(30)
@@ -430,6 +441,16 @@ fun NameReceiveHub(onBack: () -> Unit) {
         }
     }
 
+    val ownScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val pdf = if (res.resultCode == Activity.RESULT_OK) OwnScan.pdfFrom(res.data) else null
+        if (pdf != null) thread {
+            val db = ProductDb.get(ctx)
+            val inv = Media.importUri(ctx, pdf, db, "IN")
+            Media.uploadPending(ctx, db)
+            Incoming.accept(ctx, pdf, "name", open = true, driveName = inv ?: "")
+        }
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("По наименованию", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
@@ -451,6 +472,10 @@ fun NameReceiveHub(onBack: () -> Unit) {
                 onClick = {
                     val act = findActivity(ctx)
                     if (act == null) return@FilledTonalButton
+                    if (OwnScan.enabled(ctx)) {
+                        ownScanLauncher.launch(OwnScan.intent(act))
+                        return@FilledTonalButton
+                    }
                     val opts = GmsDocumentScannerOptions.Builder()
                         .setGalleryImportAllowed(false)
                         .setPageLimit(30)

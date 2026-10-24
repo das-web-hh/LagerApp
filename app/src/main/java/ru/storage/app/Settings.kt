@@ -132,6 +132,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Печать" -> PrintSettings(prefs) { section = null }
         "Экран" -> ScreenSettings(prefs) { section = null }
         "Сканер" -> ScannerSettings(prefs) { section = null }
+        "Сканер документов" -> DocScanSettings { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
         "Подключения" -> ConnectionSettings { section = null }
         "Чтение Excel" -> ExcelSettings { section = null }
@@ -152,6 +153,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Печать" to "Языки документа, автоподпись, адрес в шапке документов",
         "Экран" to "Не выключать экран при подсчёте: вкл/выкл и сколько минут",
         "Сканер" to "Камера, типы штрих-кодов",
+        "Сканер документов" to "Снимок листов: сканер Google или наш (для сшитых листов)",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
         "Подключения" to "Firebase, EmailJS, сохранить и загрузить все настройки файлом",
@@ -198,6 +200,46 @@ private fun ViewerSettings(onBack: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             RadioButton(selected = !vertical, onClick = { vertical = false; ViewerPrefs.setVertical(ctx, false) })
             Text("Слева направо")
+        }
+    }
+}
+
+@Composable
+private fun DocScanSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var own by remember { mutableStateOf(OwnScan.enabled(ctx)) }
+    var auto by remember { mutableStateOf(OwnScan.auto(ctx)) }
+    var staple by remember { mutableStateOf(OwnScan.staple(ctx)) }
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Сканер документов", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text("Чем снимать листы по кнопкам «Снимок»: сканером Google (как раньше) или нашим. " +
+            "Наш сам находит края листа по прямым линиям, поэтому лучше справляется со сшитыми листами, где у степлера выглядывает стопка.",
+            style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = !own, onClick = { own = false; OwnScan.setEnabled(ctx, false) })
+            Text("Сканер Google")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = own, onClick = { own = true; OwnScan.setEnabled(ctx, true) })
+            Text("Наш сканер")
+        }
+        if (own) {
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = auto, onCheckedChange = { auto = it; OwnScan.setAuto(ctx, it) })
+                Spacer(Modifier.width(8.dp))
+                Text("Снимать само, когда рамка замерла")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = staple, onCheckedChange = { staple = it; OwnScan.setStaple(ctx, it) })
+                Spacer(Modifier.width(8.dp))
+                Text("Степлер в левом верхнем углу")
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Оба переключателя есть и на экране съёмки.", style = MaterialTheme.typography.bodySmall)
         }
     }
 }

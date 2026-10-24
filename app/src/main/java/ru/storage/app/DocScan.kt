@@ -61,8 +61,26 @@ fun rememberDocScanner(): () -> Unit {
             }
         }
     }
+    // Второй режим: наш сканер (включается в настройках «Сканер документов»)
+    val ownLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val fromWidget = ScanOrigin.fromWidget
+        ScanOrigin.fromWidget = false
+        val pdf = if (res.resultCode == Activity.RESULT_OK) OwnScan.pdfFrom(res.data) else null
+        if (pdf == null) {
+            if (fromWidget) ctx.activity()?.moveTaskToBack(true)
+        } else thread {
+            val db = ProductDb.get(ctx)
+            val inv = Media.importUri(ctx, pdf, db, "IN")
+            Media.uploadPending(ctx, db)
+            Incoming.accept(ctx, pdf, null, driveName = inv ?: "")
+        }
+    }
     return start@{
         val act = ctx.activity() ?: return@start
+        if (OwnScan.enabled(ctx)) {
+            ownLauncher.launch(OwnScan.intent(act))
+            return@start
+        }
         val opts = GmsDocumentScannerOptions.Builder()
             .setGalleryImportAllowed(false)
             .setPageLimit(30)

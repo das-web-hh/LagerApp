@@ -79,6 +79,10 @@
                 <data android:mimeType="image/png" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".OwnScanActivity"
+            android:screenOrientation="portrait"
+            android:exported="false" />
         <service
             android:name=".WorkService"
             android:exported="false"
