@@ -1619,6 +1619,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
     var showAdd by remember { mutableStateOf(false) }
     var addPrefill by remember { mutableStateOf<Triple<String, String, String>?>(null) }
     var retryDlg by remember { mutableStateOf(false) }
+    var delJobDlg by remember { mutableStateOf(false) }
     var addTick by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(f.path, nameMode) { job.setMode(nameMode) }
@@ -1785,6 +1786,38 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             }
             Spacer(Modifier.height(8.dp))
         }
+        // Любую несохранённую партию можно довести до конца прямо отсюда (в том числе партии, вернувшиеся из черновика после обновления)
+        if (!job.running && !job.saving && !job.saved) {
+            if (job.items.isNotEmpty() && !job.hasFailed) {
+                if (job.autoState != "error") {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { scope.launch { job.autoFinish() } }
+                    ) { Text("Сохранить") }
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (Session.isAdmin) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            scope.launch {
+                                val err = job.adminAccept()
+                                Toast.makeText(ctx, err ?: "Принято", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    ) { Text("Сохранить как есть (по накладной)") }
+                    Spacer(Modifier.height(8.dp))
+                }
+                OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { job.openInNameMode() }) {
+                    Text("Открыть в «Приём по имени»")
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            TextButton(modifier = Modifier.fillMaxWidth(), onClick = { delJobDlg = true }) {
+                Text("Удалить партию", color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(4.dp))
+        }
         OutlinedButton(onClick = finish, modifier = Modifier.fillMaxWidth()) {
             Text(if (job.saved) "Закрыть" else "Свернуть (партия останется в работе)")
         }
@@ -1792,6 +1825,17 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
 
     if (retryDlg) {
         RetryKeyDialog(onDismiss = { retryDlg = false }, onRetry = { retryDlg = false; job.start(true) })
+    }
+    if (delJobDlg) {
+        AlertDialog(
+            onDismissRequest = { delJobDlg = false },
+            title = { Text("Удалить партию?") },
+            text = { Text("Партия не сохранена: распознанные товары и введённые количества будут потеряны.") },
+            confirmButton = {
+                Button(onClick = { delJobDlg = false; AutoReceiveHolder.remove(job); onClose() }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { delJobDlg = false }) { Text("Отмена") } }
+        )
     }
 
     if (!nameMode && job.autoState == "samedup") {

@@ -421,16 +421,13 @@ private fun findActivity(ctx: Context): Activity? {
     return null
 }
 
-/** «По наименованию»: сверху «Файл» и «Снимок» (сканер документа как в Google Диске), ниже партии, которые считаются. */
+/** «По наименованию»: сверху одна кнопка «Добавить» (импорт таблицы, сканирование документа), ниже партии, которые считаются. */
 @Composable
 fun NameReceiveHub(onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val ctx = LocalContext.current
     var deleteJob by remember { mutableStateOf<AutoJob?>(null) }
 
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
-        if (uris.isNotEmpty()) thread { uris.forEach { Incoming.accept(ctx, it, "name", open = uris.size == 1) } }
-    }
     val excelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (uris.isNotEmpty()) thread { uris.forEach { Incoming.accept(ctx, it, "name", open = uris.size == 1) } }
     }
@@ -462,42 +459,46 @@ fun NameReceiveHub(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("По наименованию", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(
-                onClick = { filePicker.launch(arrayOf("application/pdf", "image/jpeg", "image/png")) },
-                modifier = Modifier.weight(1f)
-            ) { Text("Файл") }
-            FilledTonalButton(
-                onClick = {
-                    excelPicker.launch(arrayOf(
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "application/vnd.ms-excel.sheet.macroEnabled.12"
-                    ))
-                },
-                modifier = Modifier.weight(1f)
-            ) { Text("Excel") }
-            FilledTonalButton(
-                onClick = {
-                    val act = findActivity(ctx)
-                    if (act == null) return@FilledTonalButton
-                    if (OwnScan.enabled(ctx)) {
-                        ownScanLauncher.launch(OwnScan.intent(act))
-                        return@FilledTonalButton
+        var addMenu by remember { mutableStateOf(false) }
+        Box(Modifier.fillMaxWidth()) {
+            Button(
+                onClick = { addMenu = true },
+                modifier = Modifier.fillMaxWidth().height(64.dp)
+            ) { Text("Добавить", style = MaterialTheme.typography.titleLarge) }
+            DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Импорт таблицы") },
+                    onClick = {
+                        addMenu = false
+                        excelPicker.launch(arrayOf(
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "application/vnd.ms-excel.sheet.macroEnabled.12"
+                        ))
                     }
-                    val opts = GmsDocumentScannerOptions.Builder()
-                        .setGalleryImportAllowed(false)
-                        .setPageLimit(30)
-                        .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
-                        .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
-                        .build()
-                    GmsDocumentScanning.getClient(opts).getStartScanIntent(act)
-                        .addOnSuccessListener { sender -> scanLauncher.launch(IntentSenderRequest.Builder(sender).build()) }
-                        .addOnFailureListener {
-                            Toast.makeText(ctx, "Сканер недоступен: " + (it.message ?: ""), Toast.LENGTH_LONG).show()
+                )
+                DropdownMenuItem(
+                    text = { Text("Сканировать документ") },
+                    onClick = {
+                        addMenu = false
+                        val act = findActivity(ctx) ?: return@DropdownMenuItem
+                        if (OwnScan.enabled(ctx)) {
+                            ownScanLauncher.launch(OwnScan.intent(act))
+                            return@DropdownMenuItem
                         }
-                },
-                modifier = Modifier.weight(1f)
-            ) { Text("Снимок") }
+                        val opts = GmsDocumentScannerOptions.Builder()
+                            .setGalleryImportAllowed(false)
+                            .setPageLimit(30)
+                            .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+                            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+                            .build()
+                        GmsDocumentScanning.getClient(opts).getStartScanIntent(act)
+                            .addOnSuccessListener { sender -> scanLauncher.launch(IntentSenderRequest.Builder(sender).build()) }
+                            .addOnFailureListener {
+                                Toast.makeText(ctx, "Сканер недоступен: " + (it.message ?: ""), Toast.LENGTH_LONG).show()
+                            }
+                    }
+                )
+            }
         }
 
         val jobs = AutoReceiveHolder.jobs.filter { it.nameMode }

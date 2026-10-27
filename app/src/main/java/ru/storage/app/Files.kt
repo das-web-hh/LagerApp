@@ -305,6 +305,14 @@ fun openFolderFileByName(ctx: Context, f: FolderFile) {
     }
 }
 
+/** Пометка партии, у которой нет файла в папках автоприёма (добавлена вручную, из сканера или вернулась из черновика). */
+private fun jobMark(j: AutoJob): String = when {
+    j.saved -> "✓"
+    j.running || j.saving -> "⏳"
+    j.failedState || j.blocked.isNotBlank() || j.autoState == "error" || j.autoState == "unmarked" || j.autoState == "samedup" -> "⚠"
+    else -> "✎"
+}
+
 private val dateFmt = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
 
 private fun sizeText(b: Long): String = when {
@@ -418,6 +426,47 @@ fun FilesScreen(
         )
     }
 
+    // партии без файла в папках: нажатие открывает выбор действий
+    var choiceJob by remember { mutableStateOf<AutoJob?>(null) }
+    choiceJob?.let { j ->
+        AlertDialog(
+            onDismissRequest = { choiceJob = null },
+            title = { Text(j.file.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = { Text(j.statusLine) },
+            confirmButton = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { choiceJob = null; Incoming.openPath = j.file.path }
+                    ) { Text("Открыть") }
+                    if (!j.saved && !j.running && !j.saving && j.items.isNotEmpty()) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { choiceJob = null; j.openInNameMode(); Incoming.openPath = j.file.path }
+                        ) { Text("Открыть «По наименованию»") }
+                        if (Session.isAdmin) {
+                            OutlinedButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    choiceJob = null
+                                    scope.launch {
+                                        val err = j.adminAccept()
+                                        Toast.makeText(ctx, err ?: "Принят", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            ) { Text("Сохранить как есть (по накладной)") }
+                        }
+                    }
+                    TextButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { choiceJob = null; AutoReceiveHolder.remove(j) }
+                    ) { Text(if (j.saved) "Убрать из списка" else "Удалить партию", color = MaterialTheme.colorScheme.error) }
+                    TextButton(modifier = Modifier.fillMaxWidth(), onClick = { choiceJob = null }) { Text("Отмена") }
+                }
+            }
+        )
+    }
+
     val newCount = files.count { f -> !Folders.isProcessed(f.id) && f.id !in FolderQueue.queued && !FolderQueue.tracked.containsKey(f.id) }
 
     var showSettings by remember { mutableStateOf(false) }
@@ -468,11 +517,19 @@ fun FilesScreen(
                 }
             }
             if (onOpenFiles != null) {
-                val bad = files.count { Folders.mark(it) == "⚠" }
+                val trackedNow = FolderQueue.tracked.values.toSet()
+                val looseJobs = AutoReceiveHolder.jobs.filter { !it.saved && it.file.path !in trackedNow }
+                val bad = files.count { Folders.mark(it) == "⚠" } + looseJobs.count { jobMark(it) == "⚠" }
                 OutlinedButton(
                     onClick = onOpenFiles,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                ) { Text("Файлы / накладные: ${files.size}" + if (bad > 0) " · ⚠ $bad" else "") }
+                ) {
+                    Text(
+                        "Файлы / накладные: ${files.size}" +
+                            (if (looseJobs.isNotEmpty()) " · в работе ${looseJobs.size}" else "") +
+                            if (bad > 0) " · ⚠ $bad" else ""
+                    )
+                }
             }
             if (newCount > 0 && !Folders.auto) {
                 OutlinedButton(
@@ -517,6 +574,45 @@ fun FilesScreen(
             }
         }
         if (part != "main") {
+        // партии, у которых нет файла в папках (после обновления приложения, из сканера, из «Файл/Excel»): раньше их было видно только на главном окне
+        val trackedPaths = FolderQueue.tracked.values.toSet()
+        val loose = AutoReceiveHolder.jobs.filter { !it.saved && it.file.path !in trackedPaths }
+            .sortedBy { when (jobMark(it)) { "⚠" -> 0; "✎" -> 1; "⏳" -> 2; else -> 3 } }
+        if (loose.isNotEmpty()) {
+            item {
+                Text("Партии в работе: ${loose.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
+                Text(
+                    "Не сохранены. Нажмите на партию: открыть, сохранить как есть (админ), открыть «По наименованию» или удалить.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                )
+            }
+            items(loose, key = { "job:" + it.file.path }) { j ->
+                val mk = jobMark(j)
+                Row(
+                    Modifier.fillMaxWidth().clickable { choiceJob = j }.padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        mk, style = MaterialTheme.typography.titleLarge,
+                        color = if (mk == "⚠") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.width(32.dp)
+                    )
+                    Column(Modifier.weight(1f)) {
+                        val title = j.sender.takeIf { !it.equals("none", true) && it.isNotBlank() } ?: j.file.name
+                        Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(j.file.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            (if (j.nameMode) "По имени · " else "Автоприём · ") + j.statusLine,
+                            style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            color = if (mk == "⚠") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                HorizontalDivider()
+            }
+        }
         item {
             HorizontalDivider(Modifier.padding(top = 4.dp))
             val marks = files.map { Folders.mark(it) }

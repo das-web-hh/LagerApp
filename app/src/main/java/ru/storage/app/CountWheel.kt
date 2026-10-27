@@ -426,7 +426,9 @@ fun CountWheelList(
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
             // «Приём по имени»: если все товары помещаются на экране — обычный список без повторов; барабан — только когда не помещаются
-            val fitsAll = nameMode && n > 0 && 68.dp * n <= maxHeight
+            // (отключено: в «Приёме по имени» строку выбирают только поиском, прокруткой вверх-вниз или сканером,
+            // поэтому барабан нужен всегда — в обычном списке без барабана выбрать строку было бы нечем)
+            val fitsAll = false
             val plainNow = usePlain || fitsAll
             if (n == 0) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -796,19 +798,20 @@ private fun WheelRow(
                         }
                     }
                 )
+                // тап и долгое нажатие работают только у выбранной строки (середина барабана);
+                // на остальных строках они ничего не делают — выбрать строку можно только поиском, прокруткой или сканером
                 .combinedClickable(
-                    enabled = editable,
+                    enabled = editable && active,
                     onClick = {
                         onTap()
-                        if (!active) onSelect()
-                        else if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
+                        if (anim.value < -1f) scope.launch { anim.animateTo(0f) }
                         else {
                             row.fact = fmtQ(parseQ(row.fact) + 1)
                             Haptics.pulse(ctx, Haptics.TAP)
                             CountAnnouncer.tap(ctx, row)
                         }
                     },
-                    onLongClick = { if (!active) onSelect() else if (hasDetails) onDetails?.invoke() else onEdit() }
+                    onLongClick = { if (hasDetails) onDetails?.invoke() else onEdit() }
                 )
                 .padding(start = 12.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically
