@@ -14,7 +14,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -235,14 +240,15 @@ private fun itemPhotosHtml(ctx: Context, job: AutoJob): String {
     val bad = job.items.filter { it.name.isNotBlank() && num(it.defect) > 0 && it.defectPhotos.isNotEmpty() }
     if (list.isEmpty() && bad.isEmpty()) return ""
     val sb = StringBuilder()
-    sb.append("<style>.ip{display:inline-block;width:60mm;vertical-align:top;margin:0 4mm 4mm 0;page-break-inside:avoid}.ip .im{width:60mm;height:80mm;overflow:hidden}.ip img{width:100%;height:100%;object-fit:cover;display:block}.ip .cp{font-size:10px;margin-top:2px}</style>")
+    sb.append("<style>.ip{display:inline-block;width:60mm;vertical-align:top;margin:0 4mm 4mm 0;page-break-inside:avoid}.ip .im{width:60mm;height:80mm;overflow:hidden}.ip img{width:100%;height:100%;object-fit:cover;display:block}.ip .cp{font-size:10px;margin-top:2px}.pgb{break-before:page;page-break-before:always}.pgb.first{break-before:auto;page-break-before:auto}</style>")
+    // фото новых товаров и фото брака — каждое на своём листе
     if (list.isNotEmpty()) {
-        sb.append("<div><h2>").append(esc(trList("photos").joinToString(" / "))).append("</h2>")
+        sb.append("<div class='pgb first'><h2>").append(esc(trList("photos").joinToString(" / "))).append("</h2>")
         for (r in list) photoCardHtml(ctx, r.photo, r.name.trim())?.let { sb.append(it) }
         sb.append("</div>")
     }
     if (bad.isNotEmpty()) {
-        sb.append("<div><h2>").append(esc(trList("defect_photos").joinToString(" / "))).append("</h2>")
+        sb.append(if (list.isNotEmpty()) "<div class='pgb'><h2>" else "<div class='pgb first'><h2>").append(esc(trList("defect_photos").joinToString(" / "))).append("</h2>")
         for (r in bad) {
             val cap = r.name.trim() + " — " + tr("th_defect") + " " + fmtNum(num(r.defect))
             for (p in r.defectPhotos) photoCardHtml(ctx, p, cap)?.let { sb.append(it) }
@@ -303,30 +309,44 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
         }
 
         Spacer(Modifier.height(16.dp))
+        // «Расхождение» — отдельная строка
         Text(
-            "Позиций: ${ls.size} · с расхождениями: $withDiff",
-            style = MaterialTheme.typography.titleSmall
+            if (withDiff == 0) "Расхождений нет" else "Расхождения: $withDiff",
+            style = MaterialTheme.typography.titleMedium,
+            color = if (withDiff == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
         )
-        Spacer(Modifier.height(4.dp))
-        ls.forEach { l ->
-            val st = statusOf(l)
-            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Column(Modifier.padding(12.dp)) {
-                    Text(l.name, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(8.dp))
+        // список товаров свёрнут под кнопкой
+        var listOpen by rememberSaveable { mutableStateOf(false) }
+        OutlinedButton(onClick = { listOpen = !listOpen }, modifier = Modifier.fillMaxWidth()) {
+            Text((if (listOpen) "▲ " else "▼ ") + "Список товаров (${ls.size})")
+        }
+        if (listOpen) {
+            Spacer(Modifier.height(4.dp))
+            val green = Color(0xFF2E7D32)
+            ls.forEach { l ->
+                // справа два числа: план (серый) и факт (зелёный — совпало с планом, красный — нет)
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        "План ${fmtNum(l.plan)} · Факт ${fmtNum(l.fact)} · Брак ${fmtNum(l.defect)}",
-                        style = MaterialTheme.typography.bodySmall
+                        l.name, style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
-                    when (st.kind) {
-                        0 -> Text("✓ Совпало с планом", color = MaterialTheme.colorScheme.primary)
-                        1 -> Text("✗ Недостача: −${fmtNum(st.diff)}", color = MaterialTheme.colorScheme.error)
-                        2 -> Text("▲ Излишек: +${fmtNum(st.diff)}", color = MaterialTheme.colorScheme.tertiary)
-                        else -> Text("＋ Нет в плане: ${fmtNum(st.diff)}", color = MaterialTheme.colorScheme.error)
-                    }
-                    if (l.defect > 0) {
-                        Text("⚠ Брак: ${fmtNum(l.defect)}", color = MaterialTheme.colorScheme.error)
-                    }
+                    Text(
+                        fmtNum(l.plan), style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray, textAlign = TextAlign.End,
+                        modifier = Modifier.width(52.dp)
+                    )
+                    Text(
+                        fmtNum(l.fact), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
+                        color = if (l.fact == l.plan) green else MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.End, modifier = Modifier.width(52.dp)
+                    )
                 }
+                HorizontalDivider(thickness = 0.5.dp)
             }
         }
 

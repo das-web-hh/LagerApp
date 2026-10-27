@@ -14,7 +14,14 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -138,8 +145,8 @@ private class ShutterView(ctx: Context) : View(ctx) {
 
 class OwnScanActivity : ComponentActivity() {
     companion object {
-        private const val CAPTURE_MAX = 3200     // длинная сторона снимка при обработке
-        private const val OUT_LONG = 2200        // длинная сторона страницы в PDF (меньше — не растягиваем)
+        private const val CAPTURE_MAX = 4200     // длинная сторона снимка при обработке (больше — чётче текст)
+        private const val OUT_LONG = 3200        // длинная сторона страницы в PDF (меньше — не растягиваем)
         private const val DETECT_LIVE = 480      // кадр для живой рамки
         private const val DETECT_SHOT = 640      // кадр для рамки на готовом снимке
     }
@@ -149,6 +156,11 @@ class OwnScanActivity : ComponentActivity() {
     private lateinit var status: TextView
     private lateinit var btnDone: Button
     private lateinit var btnUndo: Button
+    private lateinit var host: FrameLayout
+    private lateinit var frameView: AspectFrame
+    private lateinit var flash: View
+    private lateinit var thumbScroll: HorizontalScrollView
+    private lateinit var thumbRow: LinearLayout
 
     private val analysisExec = Executors.newSingleThreadExecutor()
     private val workExec = Executors.newSingleThreadExecutor()
@@ -193,6 +205,13 @@ class OwnScanActivity : ComponentActivity() {
         overlay = QuadOverlay(this)
         frame.addView(previewView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         frame.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // белая вспышка при съёмке, как у сканера Google
+        flash = View(this)
+        flash.setBackgroundColor(Color.WHITE)
+        flash.alpha = 0f
+        flash.isClickable = false
+        frame.addView(flash, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        frameView = frame
         root.addView(frame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val controls = LinearLayout(this)
@@ -206,6 +225,15 @@ class OwnScanActivity : ComponentActivity() {
         status.textSize = 16f
         status.gravity = Gravity.CENTER
         controls.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // лента снятых листов внизу: каждый новый лист «улетает» сюда, номер = порядок в PDF
+        thumbScroll = HorizontalScrollView(this)
+        thumbScroll.isHorizontalScrollBarEnabled = false
+        thumbRow = LinearLayout(this)
+        thumbRow.orientation = LinearLayout.HORIZONTAL
+        thumbRow.gravity = Gravity.CENTER_VERTICAL
+        thumbScroll.addView(thumbRow, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        controls.addView(thumbScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(84)))
 
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
@@ -253,7 +281,9 @@ class OwnScanActivity : ComponentActivity() {
         btnUndo.setOnClickListener { undoLast() }
         controls.addView(btnUndo, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        setContentView(root)
+        host = FrameLayout(this)
+        host.addView(root, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        setContentView(host)
         refreshStatus("Наведите на лист")
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -358,6 +388,11 @@ class OwnScanActivity : ComponentActivity() {
         if (busy || finishing) return
         busy = true
         refreshStatus("снимаю…")
+        // вспышка и вибрация в момент съёмки
+        flash.animate().cancel()
+        flash.alpha = 0.75f
+        flash.animate().alpha(0f).setDuration(240).start()
+        buzz(true)
         ic.takePicture(workExec, object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
                 var bytes: ByteArray? = null
@@ -439,9 +474,93 @@ class OwnScanActivity : ComponentActivity() {
 
         val dir = pagesDir ?: return
         val f = File(dir, "p" + (System.nanoTime()) + ".jpg")
-        FileOutputStream(f).use { page.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        FileOutputStream(f).use { page.compress(Bitmap.CompressFormat.JPEG, 93, it) }
+        val ts = 260f / max(page.width, page.height)
+        val thumb = try {
+            Bitmap.createScaledBitmap(page, (page.width * ts).roundToInt().coerceAtLeast(1), (page.height * ts).roundToInt().coerceAtLeast(1), true)
+        } catch (e: Throwable) { null }
         page.recycle()
         synchronized(pages) { pages.add(f) }
+        runOnUiThread {
+            buzz(false)
+            addThumb(thumb)
+        }
+    }
+
+    /** Короткая вибрация: сильная — в момент съёмки, лёгкая — когда лист добавлен. */
+    private fun buzz(strong: Boolean) {
+        try {
+            val v: Vibrator? = if (Build.VERSION.SDK_INT >= 31) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+            if (v == null || !v.hasVibrator()) return
+            val e = if (Build.VERSION.SDK_INT >= 29)
+                VibrationEffect.createPredefined(if (strong) VibrationEffect.EFFECT_HEAVY_CLICK else VibrationEffect.EFFECT_CLICK)
+            else
+                VibrationEffect.createOneShot(if (strong) 40L else 20L, VibrationEffect.DEFAULT_AMPLITUDE)
+            v.vibrate(e)
+        } catch (e: Throwable) {
+        }
+    }
+
+    /** Новый лист: миниатюра с номером в ленте внизу; снятая страница уменьшается и «улетает» в неё. */
+    private fun addThumb(bmp: Bitmap?) {
+        val tw = dp(54)
+        val th = dp(72)
+        val cell = FrameLayout(this)
+        val iv = ImageView(this)
+        iv.scaleType = ImageView.ScaleType.CENTER_CROP
+        iv.setBackgroundColor(Color.WHITE)
+        iv.setPadding(dp(1), dp(1), dp(1), dp(1))
+        if (bmp != null) iv.setImageBitmap(bmp)
+        cell.addView(iv, FrameLayout.LayoutParams(tw, th))
+        val num = TextView(this)
+        num.text = (thumbRow.childCount + 1).toString()
+        num.setTextColor(Color.WHITE)
+        num.textSize = 11f
+        num.setBackgroundColor(Color.argb(170, 0, 0, 0))
+        num.setPadding(dp(5), dp(1), dp(5), dp(1))
+        cell.addView(num, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.setMargins(dp(3), dp(2), dp(3), dp(2))
+        cell.alpha = 0f
+        thumbRow.addView(cell, lp)
+        thumbScroll.post { thumbScroll.fullScroll(View.FOCUS_RIGHT) }
+        if (bmp == null) { cell.alpha = 1f; return }
+        cell.post {
+            try {
+                val hl = IntArray(2); host.getLocationInWindow(hl)
+                val cl = IntArray(2); cell.getLocationInWindow(cl)
+                val fl = IntArray(2); frameView.getLocationInWindow(fl)
+                val fw = (frameView.width * 0.8f).roundToInt().coerceAtLeast(2)
+                val fh = (frameView.height * 0.8f).roundToInt().coerceAtLeast(2)
+                val fly = ImageView(this)
+                fly.scaleType = ImageView.ScaleType.FIT_CENTER
+                fly.setImageBitmap(bmp)
+                host.addView(fly, FrameLayout.LayoutParams(fw, fh))
+                val sx = fl[0] - hl[0] + frameView.width / 2f
+                val sy = fl[1] - hl[1] + frameView.height / 2f
+                val ex = cl[0] - hl[0] + cell.width / 2f
+                val ey = cl[1] - hl[1] + cell.height / 2f
+                fly.x = sx - fw / 2f
+                fly.y = sy - fh / 2f
+                fly.animate()
+                    .x(ex - fw / 2f).y(ey - fh / 2f)
+                    .scaleX(tw.toFloat() / fw).scaleY(th.toFloat() / fh)
+                    .setDuration(420)
+                    .setInterpolator(AccelerateDecelerateInterpolator())
+                    .withEndAction {
+                        host.removeView(fly)
+                        cell.alpha = 1f
+                    }
+                    .start()
+            } catch (e: Throwable) {
+                cell.alpha = 1f
+            }
+        }
     }
 
     private fun capLong(src: Bitmap, longSide: Int): Bitmap {
@@ -485,6 +604,7 @@ class OwnScanActivity : ComponentActivity() {
                 try { f.delete() } catch (e: Exception) { }
             }
         }
+        if (thumbRow.childCount > 0) thumbRow.removeViewAt(thumbRow.childCount - 1)
         refreshStatus("последний лист удалён")
     }
 
