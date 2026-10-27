@@ -677,6 +677,16 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
                             }
                         }
                     }
+                    // палеты: ИИ иногда берёт число палет вместо штук; сверяем с текстом листа (OCR на телефоне, без токенов)
+                    results[i]?.let { r0 ->
+                        if (st.ok && r0.items.isNotEmpty()) {
+                            try {
+                                val fixed = PalletFix.apply(doc, i, r0.items)
+                                if (fixed !== r0.items) results[i] = r0.copy(items = fixed)
+                            } catch (e: Exception) {
+                            }
+                        }
+                    }
                     rebuild()
                     if (i < n - 1) delay(2000)
                 }
