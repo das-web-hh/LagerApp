@@ -1,0 +1,801 @@
+package ru.storage.app
+
+import android.content.Context
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** Текущий пользователь (логин) — по нему настройки хранятся в Firebase. */
+object Session {
+    /** Ключ аккаунта для настроек и журнала (у администратора — прежний «admin», чтобы настройки не потерялись). */
+    @Volatile var login: String = "admin"
+    /** Вошедший пользователь (имя, должность, роль). */
+    @Volatile var user: AppUser? = null
+    val isAdmin: Boolean get() = user?.isAdmin == true
+    /** Вызывается, когда администратор меняет своё имя: обновляет сохранённого пользователя. */
+    @Volatile var onUserUpdated: ((AppUser) -> Unit)? = null
+    /** Имя для подписей «кто добавил / кто принял». */
+    val displayName: String get() = user?.name?.ifBlank { null } ?: login
+}
+
+/**
+ * Настройки аккаунта в Firestore: коллекция settings, документ = логин.
+ * Поля: driveUrl, driveFolder, driveToken, useFront, formats[], updatedAt.
+ * Побеждает более новая версия (по updatedAt).
+ */
+object CloudSettings {
+    private fun sp(ctx: Context) = ctx.getSharedPreferences("cloud", Context.MODE_PRIVATE)
+
+    private fun docRef() = FirebaseFirestore.getInstance().collection("settings")
+        .document(Session.login.lowercase().ifBlank { "admin" }.replace('/', '_'))
+
+    /** Вызывать после любого изменения настроек: ставит время и отправляет в Firebase (в очередь, работает и без сети). */
+    fun save(ctx: Context, prefs: Prefs) {
+        val now = System.currentTimeMillis()
+        Journal.log("Система", "Изменены настройки")
+        sp(ctx).edit().putLong("updated", now).apply()
+        push(ctx, prefs, now)
+    }
+
+    private fun push(ctx: Context, prefs: Prefs, ts: Long) {
+        val m = hashMapOf<String, Any>(
+            "useFront" to prefs.useFront,
+            "formats" to prefs.formats.toList(),
+            "theme" to Ui.mode,
+            "printLangs" to PrintCfg.codes(),
+            "printSign" to PrintCfg.sign,
+            "docAddress" to PrintCfg.address,
+            "screenOn" to ScreenCfg.enabled,
+            "screenMinutes" to ScreenCfg.minutes,
+            "dateSimple" to DateCfg.simple,
+            "autoPaused" to AutoPause.paused,
+            "fileSwipe" to FileNavCfg.dir.toLong(),
+            "updatedAt" to ts
+        )
+        // Google Диск настраивает только администратор; у остальных этих полей в аккаунте нет
+        if (Session.isAdmin) {
+            m["driveUrl"] = DriveCfg.url(ctx)
+            m["driveFolder"] = DriveCfg.folder(ctx)
+            m["driveToken"] = DriveCfg.token(ctx)
+        }
+        docRef().set(m, SetOptions.merge())
+    }
+
+    /** Сверка с Firebase (1 чтение). Возвращает true, если настройки на телефоне обновились. */
+    suspend fun pull(ctx: Context, prefs: Prefs): Boolean {
+        // Диск у сотрудников такой же, как у администратора: берём его настройки (сами сотрудники их не меняют)
+        if (!Session.isAdmin) {
+            try {
+                val a = FirebaseFirestore.getInstance().collection("settings").document("admin").get().awaitIt()
+                val u = a.getString("driveUrl") ?: ""
+                if (a.exists() && u.isNotBlank()) {
+                    DriveCfg.save(ctx, u, a.getString("driveFolder") ?: "", a.getString("driveToken") ?: "")
+                }
+            } catch (e: Exception) {
+            }
+        }
+        val snap = docRef().get().awaitIt()
+        val local = sp(ctx).getLong("updated", 0L)
+        if (!snap.exists()) {
+            if (local > 0L) push(ctx, prefs, local)
+            return false
+        }
+        val remote = snap.getLong("updatedAt") ?: 0L
+        if (remote > local) {
+            if (Session.isAdmin) {
+                DriveCfg.save(
+                    ctx,
+                    snap.getString("driveUrl") ?: "",
+                    snap.getString("driveFolder") ?: "",
+                    snap.getString("driveToken") ?: ""
+                )
+            }
+            prefs.useFront = snap.getBoolean("useFront") ?: false
+            prefs.formats = (snap.get("formats") as? List<*>)
+                ?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
+            snap.getString("theme")?.let { Ui.set(ctx, it) }
+            PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"), snap.getString("docAddress"))
+            ScreenCfg.applyCloud(ctx, snap.getBoolean("screenOn"), snap.getLong("screenMinutes"))
+            DateCfg.applyCloud(ctx, snap.getBoolean("dateSimple"))
+            AutoPause.applyCloud(ctx, snap.getBoolean("autoPaused"))
+            FileNavCfg.applyCloud(ctx, snap.getLong("fileSwipe"))
+            sp(ctx).edit().putLong("updated", remote).apply()
+            return true
+        }
+        if (remote < local) push(ctx, prefs, local)
+        return false
+    }
+}
+
+@Composable
+fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
+    var section by rememberSaveable { mutableStateOf<String?>(null) }
+    when (section) {
+        "Оформление" -> ThemeSettings(prefs) { section = null }
+        "Печать" -> PrintSettings(prefs) { section = null }
+        "Экран" -> ScreenSettings(prefs) { section = null }
+        "Сканер" -> ScannerSettings(prefs) { section = null }
+        "Сканер документов" -> DocScanSettings { section = null }
+        "Google Диск" -> DriveSettings(prefs) { section = null }
+        "Подключения" -> ConnectionSettings { section = null }
+        "Чтение Excel" -> ExcelSettings { section = null }
+        "Распознавание документов" -> AiSettings { section = null }
+        "Голос и подсчёт" -> VoiceSettings { section = null }
+        "Вибрация" -> VibrationSettings { section = null }
+        "Просмотр накладных" -> ViewerSettings { section = null }
+        "Рабочее время" -> WorkSettingsScreen { section = null }
+        else -> SettingsHome(onBack) { section = it }
+    }
+}
+
+@Composable
+private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
+    BackHandler(onBack = onBack)
+    val sections = listOf(
+        "Оформление" to "Светлая, тёмная или как в системе",
+        "Печать" to "Языки документа, автоподпись, адрес в шапке документов",
+        "Экран" to "Не выключать экран при подсчёте: вкл/выкл и сколько минут",
+        "Сканер" to "Камера, типы штрих-кодов",
+        "Сканер документов" to "Снимок листов: сканер Google или наш (для сшитых листов)",
+        "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
+        "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
+        "Подключения" to "Firebase, EmailJS, сохранить и загрузить все настройки файлом",
+        "Чтение Excel" to "Как находить столбцы названия и количества: приложение само или ИИ",
+        "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
+        "Вибрация" to "Тап и прокрутка: сила и длительность",
+        "Просмотр накладных" to "Листать сверху вниз или слева направо",
+        "Рабочее время" to "Учёт по геолокации, зона подхода, полные и короткие дни"
+    ).filter { Session.isAdmin || it.first != "Google Диск" && it.first != "Распознавание документов" && it.first != "Подключения" }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Настройки", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        sections.forEach { (title, sub) ->
+            Row(
+                Modifier.fillMaxWidth().clickable { onOpen(title) }.padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    Text(sub, style = MaterialTheme.typography.bodySmall)
+                }
+                Text("›", style = MaterialTheme.typography.headlineSmall)
+            }
+            HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun ViewerSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var vertical by remember { mutableStateOf(ViewerPrefs.vertical(ctx)) }
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Просмотр накладных", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text("Как листать страницы накладных и фото в карточке истории товара. Переключить можно и прямо в просмотре (кнопка ↕ / ↔).",
+            style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = vertical, onClick = { vertical = true; ViewerPrefs.setVertical(ctx, true) })
+            Text("Сверху вниз")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = !vertical, onClick = { vertical = false; ViewerPrefs.setVertical(ctx, false) })
+            Text("Слева направо")
+        }
+    }
+}
+
+@Composable
+private fun DocScanSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var own by remember { mutableStateOf(OwnScan.enabled(ctx)) }
+    var auto by remember { mutableStateOf(OwnScan.auto(ctx)) }
+    var staple by remember { mutableStateOf(OwnScan.staple(ctx)) }
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Сканер документов", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text("Чем снимать листы по кнопкам «Снимок»: сканером Google (как раньше) или нашим. " +
+            "Наш сам находит края листа по прямым линиям, поэтому лучше справляется со сшитыми листами, где у степлера выглядывает стопка.",
+            style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = !own, onClick = { own = false; OwnScan.setEnabled(ctx, false) })
+            Text("Сканер Google")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = own, onClick = { own = true; OwnScan.setEnabled(ctx, true) })
+            Text("Наш сканер")
+        }
+        if (own) {
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = auto, onCheckedChange = { auto = it; OwnScan.setAuto(ctx, it) })
+                Spacer(Modifier.width(8.dp))
+                Text("Снимать само, когда рамка замерла")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = staple, onCheckedChange = { staple = it; OwnScan.setStaple(ctx, it) })
+                Spacer(Modifier.width(8.dp))
+                Text("Степлер в левом верхнем углу")
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Оба переключателя есть и на экране съёмки.", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun ScannerSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var front by remember { mutableStateOf(prefs.useFront) }
+    var formats by remember { mutableStateOf(prefs.formats) }
+    BackHandler(onBack = onBack)
+
+    LaunchedEffect(Unit) {
+        try {
+            if (CloudSettings.pull(ctx, prefs)) {
+                front = prefs.useFront
+                formats = prefs.formats
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Сканер", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(16.dp))
+
+        Text("Камера для сканера", style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = !front, onClick = {
+                front = false; prefs.useFront = false; CloudSettings.save(ctx, prefs)
+            })
+            Text("Основная")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = front, onClick = {
+                front = true; prefs.useFront = true; CloudSettings.save(ctx, prefs)
+            })
+            Text("Фронтальная")
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("Типы кодов", style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = formats.isEmpty(),
+                onCheckedChange = {
+                    formats = emptySet(); prefs.formats = emptySet(); CloudSettings.save(ctx, prefs)
+                }
+            )
+            Text("Все типы")
+        }
+        allFormats.forEach { (name, code) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = code in formats,
+                    onCheckedChange = { on ->
+                        val n = if (on) formats + code else formats - code
+                        formats = n
+                        prefs.formats = n
+                        CloudSettings.save(ctx, prefs)
+                    }
+                )
+                Text(name)
+            }
+        }
+    }
+}
+
+@Composable
+fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf(DriveCfg.url(ctx)) }
+    var folder by remember { mutableStateOf(DriveCfg.folder(ctx)) }
+    var token by remember { mutableStateOf(DriveCfg.token(ctx)) }
+    var msg by remember { mutableStateOf("") }
+    BackHandler(onBack = onBack)
+
+    LaunchedEffect(Unit) {
+        try {
+            if (CloudSettings.pull(ctx, prefs)) {
+                url = DriveCfg.url(ctx)
+                folder = DriveCfg.folder(ctx)
+                token = DriveCfg.token(ctx)
+                msg = "Настройки загружены из аккаунта «${Session.login}»"
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Google Диск", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Фото и накладные. Настройки хранятся в аккаунте «${Session.login}» в Firebase.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(url, { url = it }, label = { Text("Адрес скрипта (…/exec)") },
+            modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(folder, { folder = it }, label = { Text("ID папки или ссылка на папку") },
+            modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(token, { token = it }, label = { Text("Токен (если задан в скрипте)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = {
+            DriveCfg.save(ctx, url, folder, token)
+            folder = DriveCfg.folder(ctx)
+            CloudSettings.save(ctx, prefs)
+            msg = "Проверка…"
+            scope.launch {
+                msg = try {
+                    val n = withContext(Dispatchers.IO) { DriveApi.ping(ctx) }
+                    Media.uploadPending(ctx, ProductDb.get(ctx))
+                    DriveSync.start(ctx, true)
+                    "Подключено, папка: $n. Настройки сохранены в аккаунте."
+                } catch (e: Exception) {
+                    "Настройки сохранены, но Диск не отвечает: ${e.message}"
+                }
+            }
+        }) { Text("Сохранить и проверить") }
+        if (msg.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(msg, style = MaterialTheme.typography.bodySmall)
+        }
+        var queued by remember { mutableIntStateOf(0) }
+        LaunchedEffect(Media.version, msg) {
+            queued = withContext(Dispatchers.IO) { ProductDb.get(ctx).pendingUploads().size }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Файлов в очереди на отправку: $queued", style = MaterialTheme.typography.bodySmall)
+        if (Media.lastError.isNotBlank()) {
+            Text(Media.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        if (queued > 0) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { Media.uploadPending(ctx, ProductDb.get(ctx)) }) { Text("Отправить файлы сейчас") }
+        }
+    }
+}
+
+@Composable
+fun AiSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    val keys = remember(tick) { AiKeys.list(ctx) }
+    val activeId = remember(tick) { AiKeys.activeId(ctx) }
+    var editing by remember { mutableStateOf<AiKey?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<AiKey?>(null) }
+    var timeout by remember { mutableStateOf(AiCfg.timeoutSec(ctx).toString()) }
+    var attempts by remember { mutableStateOf(AiCfg.attempts(ctx).toString()) }
+    var msg by remember { mutableStateOf("") }
+    var templateMode by remember { mutableStateOf(AiCfg.templateMode(ctx)) }
+    BackHandler(onBack = onBack)
+
+    fun save() {
+        AiCfg.saveCommon(
+            ctx,
+            timeout.toIntOrNull()?.coerceIn(5, 600) ?: 60,
+            attempts.toIntOrNull()?.coerceIn(1, 8) ?: 3
+        )
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Распознавание документов", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Ключи хранятся только на этом телефоне и в Firebase не отправляются.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("API-ключи", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Отмеченный ключ используется для распознавания. Если на листе ошибка, кнопка «Повторить» предложит другой ключ.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(4.dp))
+        if (keys.isEmpty()) {
+            Text("Ключей пока нет.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 8.dp))
+        }
+        keys.forEach { k ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = k.id == activeId, onClick = { AiKeys.setActive(ctx, k.id); tick++ })
+                Column(Modifier.weight(1f).clickable { AiKeys.setActive(ctx, k.id); tick++ }) {
+                    Text(AiKeys.describe(k), style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        AiKeys.providerName(k.provider) + " · " + k.model.ifBlank { AiCfg.defaultModel(k.provider) },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                TextButton(onClick = { editing = k }) { Text("✎") }
+                TextButton(onClick = { deleting = k }) { Text("✕") }
+            }
+            HorizontalDivider()
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("＋ Добавить ключ") }
+
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                timeout, { timeout = it.filter { c -> c.isDigit() } }, singleLine = true,
+                label = { Text("Ожидание листа, сек") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                attempts, { attempts = it.filter { c -> c.isDigit() } }, singleLine = true,
+                label = { Text("Попыток на лист") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("Режим проверки накладной", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                    if (templateMode) "Проверка с шаблоном" else "Обычная проверка",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    if (templateMode)
+                        "ИИ читает лист с правилами шаблона поставщика и создаёт шаблон для нового поставщика (лишний запрос, больше токенов)."
+                    else
+                        "Каждый лист уходит в ИИ один раз: только название товара и количество. Токены экономятся.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(checked = templateMode, onCheckedChange = { templateMode = it; AiCfg.setTemplateMode(ctx, it) })
+        }
+        Text(
+            "Номер заказа (EB + 7 цифр) и имя отправителя приложение находит само, без ИИ.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { save(); msg = "Сохранено" }) { Text("Сохранить") }
+            OutlinedButton(enabled = keys.isNotEmpty(), onClick = {
+                save()
+                msg = "Проверка…"
+                scope.launch {
+                    msg = try {
+                        val r = withContext(Dispatchers.IO) { Ai.call(ctx, "Reply with the single word OK", null) }
+                        "ИИ отвечает: " + r.trim().take(60)
+                    } catch (e: Exception) {
+                        "Ошибка: " + (e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }) { Text("Проверить активный ключ") }
+        }
+        if (msg.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(msg, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+
+    if (adding) {
+        AiKeyDialog(
+            initial = null, title = "Новый API-ключ", confirmText = "Добавить",
+            onDismiss = { adding = false },
+            onSave = { AiKeys.add(ctx, it, makeActive = keys.isEmpty()); adding = false; tick++ }
+        )
+    }
+    editing?.let { k ->
+        AiKeyDialog(
+            initial = k, title = "Правка ключа", confirmText = "Сохранить",
+            onDismiss = { editing = null },
+            onSave = { AiKeys.update(ctx, it); editing = null; tick++ }
+        )
+    }
+    deleting?.let { k ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Удалить ключ?") },
+            text = { Text(AiKeys.describe(k)) },
+            confirmButton = { Button(onClick = { AiKeys.remove(ctx, k.id); deleting = null; tick++ }) { Text("Удалить") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Отмена") } }
+        )
+    }
+}
+
+@Composable
+private fun ThemeSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    BackHandler(onBack = onBack)
+    val options = listOf("light" to "Светлая", "dark" to "Тёмная", "system" to "Как в системе")
+
+    LaunchedEffect(Unit) {
+        try {
+            CloudSettings.pull(ctx, prefs)
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Оформление", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Тема сохраняется в аккаунте и на других устройствах.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        options.forEach { (key, label) ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    Ui.set(ctx, key)
+                    CloudSettings.save(ctx, prefs)
+                }.padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(selected = Ui.mode == key, onClick = {
+                    Ui.set(ctx, key)
+                    CloudSettings.save(ctx, prefs)
+                })
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScreenSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    BackHandler(onBack = onBack)
+
+    LaunchedEffect(Unit) {
+        try {
+            CloudSettings.pull(ctx, prefs)
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Экран", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "В окнах подсчёта (DHL Postwagen, палеты, количество товара) экран не выключается, пока вы считаете. " +
+                "Каждое нажатие начинает отсчёт заново. Настройки сохраняются в аккаунте.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Не выключать экран при подсчёте", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (ScreenCfg.enabled) "Включено" else "Выключено — экран гаснет как обычно, по времени телефона",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = ScreenCfg.enabled,
+                onCheckedChange = {
+                    ScreenCfg.setEnabled(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        val enabled = ScreenCfg.enabled
+        Text(
+            "Через сколько минут выключить экран",
+            style = MaterialTheme.typography.titleMedium,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                enabled = enabled && ScreenCfg.minutes > 1,
+                onClick = { ScreenCfg.setMinutes(ctx, ScreenCfg.minutes - 1); CloudSettings.save(ctx, prefs) }
+            ) { Text("−", style = MaterialTheme.typography.titleLarge) }
+            Text(
+                "${ScreenCfg.minutes} мин",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            OutlinedButton(
+                enabled = enabled && ScreenCfg.minutes < ScreenCfg.MAX_MINUTES,
+                onClick = { ScreenCfg.setMinutes(ctx, ScreenCfg.minutes + 1); CloudSettings.save(ctx, prefs) }
+            ) { Text("+", style = MaterialTheme.typography.titleLarge) }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(5, 10, 15, 20, 30).forEach { m ->
+                val sel = ScreenCfg.minutes == m
+                val pick = { ScreenCfg.setMinutes(ctx, m); CloudSettings.save(ctx, prefs) }
+                if (sel) Button(onClick = pick, enabled = enabled, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("$m") }
+                else OutlinedButton(onClick = pick, enabled = enabled, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("$m") }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "По умолчанию 10 минут. После этого времени без нажатий экран выключится.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(28.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Упрощённый выбор срока годности", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (DateCfg.simple) "Включено: по умолчанию 2027 год, месяцы цифрами в два столбца (01–06 и 07–12), дни 1–31 всегда с понедельника. Выбрали только месяц и год — дата будет первым числом."
+                    else "Выключено: обычный календарь с названиями месяцев.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = DateCfg.simple,
+                onCheckedChange = {
+                    DateCfg.set(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
+        Spacer(Modifier.height(28.dp))
+        Text("Листание файлов (раздел «Файлы»)", style = MaterialTheme.typography.titleMedium)
+        Text("Какой жест открывает СЛЕДУЮЩИЙ файл. Противоположный жест открывает предыдущий. Кнопки «Назад» и «Вперёд» есть всегда.", style = MaterialTheme.typography.bodySmall)
+        listOf("Свайп влево", "Свайп вправо", "Свайп вверх", "Свайп вниз").forEachIndexed { i, label ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    FileNavCfg.set(ctx, i)
+                    CloudSettings.save(ctx, prefs)
+                },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(selected = FileNavCfg.dir == i, onClick = {
+                    FileNavCfg.set(ctx, i)
+                    CloudSettings.save(ctx, prefs)
+                })
+                Text(label)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrintSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    BackHandler(onBack = onBack)
+    val langs = listOf("de" to "Deutsch (немецкий)", "ru" to "Русский", "en" to "English (английский)")
+    val name = AutoReceiveHolder.receiver.ifBlank { "Admin" }
+
+    LaunchedEffect(Unit) {
+        try {
+            CloudSettings.pull(ctx, prefs)
+        } catch (e: Exception) {
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Печать", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Документ печатается сразу на всех включённых языках. Настройки сохраняются в аккаунте.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("Языки документа", style = MaterialTheme.typography.titleMedium)
+        langs.forEach { (code, label) ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = PrintCfg.isOn(code),
+                    onCheckedChange = {
+                        PrintCfg.setLang(ctx, code, it)
+                        CloudSettings.save(ctx, prefs)
+                    }
+                )
+            }
+        }
+        Text("Хотя бы один язык всегда остаётся включённым.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(20.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Автоподпись", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "В документе ставится рукописная подпись принимающего: имя из профиля и сегодняшняя дата.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = PrintCfg.sign,
+                onCheckedChange = {
+                    PrintCfg.setSign(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
+        Spacer(Modifier.height(24.dp))
+        Text("Адрес в шапке документов", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Печатается справа вверху на каждом листе всех документов (до 4 строк). Например: название склада, улица, индекс и город.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(8.dp))
+        var addr by remember { mutableStateOf(PrintCfg.address) }
+        OutlinedTextField(
+            value = addr,
+            onValueChange = { addr = it },
+            label = { Text("Адрес") },
+            minLines = 3,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        val saved = addr.lines().map { it.trim() }.filter { it.isNotEmpty() }.take(4).joinToString("\n") == PrintCfg.address
+        Button(
+            enabled = !saved,
+            onClick = {
+                PrintCfg.setAddress(ctx, addr)
+                addr = PrintCfg.address
+                CloudSettings.save(ctx, prefs)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (saved) "Сохранено ✓" else "Сохранить адрес") }
+        Spacer(Modifier.height(8.dp))
+        HtmlPreview(
+            "<html><head><meta charset='utf-8'><style>body{margin:10px}" + DocLayout.CSS + "</style></head><body>" +
+                DocLayout.header() + "</body></html>",
+            Modifier.fillMaxWidth().height(150.dp)
+        )
+        if (PrintCfg.sign) {
+            Spacer(Modifier.height(12.dp))
+            val html = "<html><head><meta charset='utf-8'><style>body{margin:8px;font-family:sans-serif}" +
+                Signature.CSS + "</style></head><body>" +
+                Signature.svg(name, System.currentTimeMillis()) + "</body></html>"
+            HtmlPreview(html, Modifier.fillMaxWidth().height(110.dp))
+        }
+    }
+}
+
+@Composable
+fun ExcelSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var mode by remember { mutableStateOf(ExcelCfg.mode(ctx)) }
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Чтение Excel", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Как приложение выбирает столбцы, когда в «Приём по наименованию» загружен Excel-файл. " +
+                "Файл с меткой #LAGER в первой строке всегда читается по строгому формату.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth().clickable { mode = "auto"; ExcelCfg.setMode(ctx, "auto") }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = mode == "auto", onClick = { mode = "auto"; ExcelCfg.setMode(ctx, "auto") })
+            Column {
+                Text("Приложение само")
+                Text("Ищет шапку «Наименование / Количество», иначе смотрит на данные. Без ИИ и без интернета.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().clickable { mode = "ai"; ExcelCfg.setMode(ctx, "ai") }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = mode == "ai", onClick = { mode = "ai"; ExcelCfg.setMode(ctx, "ai") })
+            Column {
+                Text("ИИ")
+                Text("Первые строки таблицы уходят в ИИ, он сам выбирает столбцы названия и планового количества. Нужен ключ ИИ; если ИИ не ответит, столбцы выберет приложение.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
