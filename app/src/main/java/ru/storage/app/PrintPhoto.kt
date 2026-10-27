@@ -28,15 +28,35 @@ object PrintPhoto {
         val px = IntArray(w * h)
         bmp.getPixels(px, 0, w, 0, 0, w, h)
 
-        // яркость каждого пикселя и гистограмма
+        // яркость каждого пикселя
         val lum = IntArray(px.size)
-        val hist = IntArray(256)
         for (i in px.indices) {
             val c = px[i]
-            val y = (0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)).toInt().coerceIn(0, 255)
-            lum[i] = y
-            hist[y]++
+            lum[i] = (0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)).toInt().coerceIn(0, 255)
         }
+        // выравнивание освещения: тёмные участки снимка (тень, глубокая часть) осветляются, светлые остаются —
+        // иначе на чёрно-белой печати тень превращается в сплошное чёрное пятно. Фон освещения — сильно размытая копия фото.
+        try {
+            val gray = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            gray.setPixels(IntArray(px.size) { Color.rgb(lum[it], lum[it], lum[it]) }, 0, w, 0, 0, w, h)
+            val small = Bitmap.createScaledBitmap(gray, (w / 24).coerceAtLeast(4), (h / 24).coerceAtLeast(4), true)
+            val back = Bitmap.createScaledBitmap(small, w, h, true)
+            val bg = IntArray(px.size)
+            back.getPixels(bg, 0, w, 0, 0, w, h)
+            gray.recycle(); small.recycle(); back.recycle()
+            var mean = 0.0
+            for (i in lum.indices) mean += lum[i]
+            mean = (mean / lum.size).coerceIn(60.0, 190.0)
+            for (i in lum.indices) {
+                val b = Color.red(bg[i]).coerceAtLeast(30)
+                // тёмный район (b мал) усиливается сильнее, светлый почти не меняется; усиление ограничено
+                val k = (mean / b).pow(0.85).coerceIn(0.7, 3.2)
+                lum[i] = (lum[i] * k).toInt().coerceIn(0, 255)
+            }
+        } catch (e: Throwable) {
+        }
+        val hist = IntArray(256)
+        for (v in lum) hist[v]++
         // обрезаем 1% самых тёмных и 1% самых светлых — растягиваем остальное на весь диапазон
         val cut = (px.size * 0.01).toInt()
         var lo = 0
@@ -69,7 +89,7 @@ object PrintPhoto {
 
     /** Файл фото → серый JPEG в base64 для вставки в HTML документа; null — файла нет или он не читается. */
     fun base64(f: File): String? {
-        val bmp = Media.thumb(f, 600) ?: return null
+        val bmp = Media.thumb(f, 900) ?: return null
         val gray = prepare(bmp)
         val bos = ByteArrayOutputStream()
         gray.compress(Bitmap.CompressFormat.JPEG, 88, bos)

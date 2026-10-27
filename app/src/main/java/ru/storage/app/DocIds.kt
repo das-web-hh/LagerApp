@@ -21,7 +21,10 @@ import java.text.Normalizer
 object DocIds {
     data class Ids(val sender: String, val order: String)
 
-    private val ORDER = Regex("(?<![A-Za-z0-9])[EeЕе][BbБб6]\\s*[-–]?\\s*(\\d{7})(?!\\d)", RegexOption.IGNORE_CASE)
+    // «B» OCR часто читает как «8» (E82612798) или кириллическую «В»; допускаем и их
+    private val ORDER = Regex("(?<![A-Za-z0-9])[EeЕе][BbБбВв8]\\s*[-–:.]?\\s*(\\d{7})(?!\\d)")
+    // запасной вариант: в цифрах OCR путает O/0, I/l/1, S/5, Z/2, B/8
+    private val ORDER_FUZZY = Regex("(?<![A-Za-z0-9])[EeЕе][BbБбВв8]\\s*[-–:.]?\\s*([0-9OoIl|SsZzBb]{7})(?![0-9A-Za-z])")
     private val EMAIL = Regex("[A-Za-z0-9._%+\\-]+@([A-Za-z0-9\\-]+(?:\\.[A-Za-z0-9\\-]+)+)")
     private val HOST = Regex("(?<![@A-Za-z0-9.\\-])((?:[A-Za-z0-9\\-]+\\.)+[A-Za-z]{2,})(?![A-Za-z0-9\\-])")
 
@@ -115,9 +118,26 @@ object DocIds {
         return companyFromText(text)
     }
 
+    private fun fixDigits(s: String): String = buildString {
+        for (c in s) append(
+            when (c) {
+                'O', 'o' -> '0'
+                'I', 'l', '|' -> '1'
+                'S', 's' -> '5'
+                'Z', 'z' -> '2'
+                'B', 'b' -> '8'
+                else -> c
+            }
+        )
+    }
+
     fun orderFromText(text: String): String {
-        val m = ORDER.find(text) ?: return "none"
-        return Ai.normalizeOrder("EB" + m.groupValues[1])
+        ORDER.find(text)?.let { return Ai.normalizeOrder("EB" + it.groupValues[1]) }
+        for (m in ORDER_FUZZY.findAll(text)) {
+            val d = m.groupValues[1]
+            if (d.count { it.isDigit() } >= 4) return Ai.normalizeOrder("EB" + fixDigits(d))
+        }
+        return "none"
     }
 
     /** Читает листы по очереди (OCR на телефоне). Заказ ищется на всех листах, отправитель — с первого, при неудаче с последующих. */
@@ -126,20 +146,24 @@ object DocIds {
         var order = "none"
         val rec = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         try {
-            for (i in 0 until doc.count) {
-                onPage(i)
-                val jpg = try { doc.renderBw(i, 2000, false) } catch (e: Exception) { continue }
-                val bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.size) ?: continue
-                var text = ""
-                try {
-                    text = rec.process(InputImage.fromBitmap(bmp, 0)).awaitIt().text
-                } catch (e: Exception) {
-                } finally {
-                    bmp.recycle()
+            // 1-й проход: серая картинка 2000 px; если чего-то не нашли — 2-й проход: чёрно-белая покрупнее (токены не тратятся, OCR на телефоне)
+            for ((side, bw) in listOf(2000 to false, 2800 to true)) {
+                for (i in 0 until doc.count) {
+                    onPage(i)
+                    val jpg = try { doc.renderBw(i, side, bw) } catch (e: Exception) { continue }
+                    val bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.size) ?: continue
+                    var text = ""
+                    try {
+                        text = rec.process(InputImage.fromBitmap(bmp, 0)).awaitIt().text
+                    } catch (e: Exception) {
+                    } finally {
+                        bmp.recycle()
+                    }
+                    if (text.isBlank()) continue
+                    if (sender.isEmpty()) sender = senderFromText(text)
+                    if (order == "none") order = orderFromText(text)
+                    if (sender.isNotEmpty() && order != "none") break
                 }
-                if (text.isBlank()) continue
-                if (sender.isEmpty()) sender = senderFromText(text)
-                if (order == "none") order = orderFromText(text)
                 if (sender.isNotEmpty() && order != "none") break
             }
         } finally {

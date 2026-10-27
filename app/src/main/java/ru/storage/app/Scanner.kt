@@ -71,6 +71,8 @@ fun sameBarcode(a: String, b: String): Boolean =
 /** Сколько раз подряд (с паузой между кадрами) код должен прочитаться одинаково, чтобы считаться верным. */
 private const val CONFIRM_GAP_MS = 400L
 private const val CONFIRM_WINDOW_MS = 3000L
+/** Непрерывный режим: тот же код считается снова, только если он пропал из кадра на это время. */
+private const val REARM_MS = 600L
 
 /** Из результатов кадра берём только код, у которого сходится контрольная цифра (EAN/UPC), — ошибочные чтения отбрасываются. */
 private fun validValue(list: List<Barcode>): String? = list.firstOrNull { b ->
@@ -90,7 +92,16 @@ private fun ownerOf(ctx: android.content.Context): LifecycleOwner? {
 }
 
 @Composable
-fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit, onlyQr: Boolean = false) {
+fun ScannerScreen(
+    prefs: Prefs,
+    onResult: (String) -> Unit,
+    onClose: () -> Unit,
+    onlyQr: Boolean = false,
+    /** true — сканер не закрывается после кода: каждый код уходит в onResult, пока не нажмут «Закрыть» */
+    continuous: Boolean = false,
+    /** подпись сверху (для непрерывного режима: что добавилось) */
+    status: String = ""
+) {
     val context = LocalContext.current
     var hasPermission by remember {
         mutableStateOf(
@@ -127,6 +138,8 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit,
     val cand = remember { arrayOf<String?>(null) }
     val candAt = remember { longArrayOf(0L) }
     var hint by remember { mutableStateOf("") }
+    val lastOk = remember { arrayOf<String?>(null) }
+    val lastSeen = remember { longArrayOf(0L) }
     val scannerRef = remember { arrayOfNulls<com.google.mlkit.vision.barcode.BarcodeScanner>(1) }
     // Порядок важен: сначала отвязать камеру, потом гасить поток, иначе кадр уходит в закрытый executor и приложение падает.
     DisposableEffect(Unit) {
@@ -173,15 +186,30 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit,
                                 scanner.process(image)
                                     .addOnSuccessListener { result ->
                                         val value = validValue(result)
-                                        if (value != null && alive.get() && !done.get()) {
+                                        if (alive.get() && !done.get()) {
                                             val now = SystemClock.elapsedRealtime()
-                                            if (cand[0] != value || now - candAt[0] > CONFIRM_WINDOW_MS) {
-                                                // первое чтение (или другое значение) — запоминаем и ждём подтверждения
-                                                cand[0] = value
-                                                candAt[0] = now
-                                                hint = "Проверяю код…"
-                                            } else if (now - candAt[0] >= CONFIRM_GAP_MS && done.compareAndSet(false, true)) {
-                                                onResult(value)
+                                            if (value == null) {
+                                                // код пропал из кадра — следующий такой же код снова считается
+                                                if (continuous && now - lastSeen[0] > REARM_MS) lastOk[0] = null
+                                            } else {
+                                                lastSeen[0] = now
+                                                if (continuous && value == lastOk[0]) {
+                                                    // тот же код всё ещё в кадре — второй раз не считаем
+                                                } else if (cand[0] != value || now - candAt[0] > CONFIRM_WINDOW_MS) {
+                                                    // первое чтение (или другое значение) — запоминаем и ждём подтверждения
+                                                    cand[0] = value
+                                                    candAt[0] = now
+                                                    hint = "Проверяю код…"
+                                                } else if (now - candAt[0] >= CONFIRM_GAP_MS) {
+                                                    if (continuous) {
+                                                        cand[0] = null
+                                                        lastOk[0] = value
+                                                        hint = ""
+                                                        onResult(value)
+                                                    } else if (done.compareAndSet(false, true)) {
+                                                        onResult(value)
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -217,9 +245,18 @@ fun ScannerScreen(prefs: Prefs, onResult: (String) -> Unit, onClose: () -> Unit,
                 Text(hint, color = Color.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
         }
+        if (status.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 20.dp, end = 120.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                color = Color.Black.copy(alpha = 0.6f)
+            ) {
+                Text(status, color = Color.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), maxLines = 3)
+            }
+        }
         Button(
             onClick = onClose,
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
-        ) { Text("Закрыть") }
+        ) { Text(if (continuous) "Готово" else "Закрыть") }
     }
 }

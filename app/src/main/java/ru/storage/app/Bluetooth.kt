@@ -55,6 +55,9 @@ object BtScan {
     /** Открыто окно Bluetooth: коды показываются в нём и не уходят в поиск. */
     @Volatile var testing = false
 
+    /** Окно, которое само принимает коды сканера (например «Приём по имени»); вызывается в главном потоке. null — код идёт в поиск на Главной. */
+    @Volatile var handler: ((String) -> Unit)? = null
+
     private var scannerKey = ""
     private var loaded = false
     private val buf = StringBuilder()
@@ -77,7 +80,10 @@ object BtScan {
         last = c
         log.add(0, fmt.format(Date()) + "  " + c)
         while (log.size > 30) log.removeAt(log.size - 1)
-        if (!testing) pending = c
+        val h = handler
+        if (!testing && h != null) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post { try { h(c) } catch (e: Exception) { } }
+        } else if (!testing) pending = c
         version++
     }
 

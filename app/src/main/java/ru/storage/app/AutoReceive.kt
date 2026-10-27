@@ -1282,6 +1282,47 @@ private fun ColumnScope.NameModeMain(
     }
 
     val editable = !job.running && !job.saved && !job.saving
+    var scanStatus by remember { mutableStateOf("") }
+
+    // Круглая кнопка и внешний сканер: код → строка с этим штрих-кодом, количество +1 (как нажатие на строку)
+    fun countByCode(raw: String) {
+        val code = raw.trim()
+        if (code.isEmpty()) return
+        if (!editable) {
+            scanStatus = "Сейчас считать нельзя"
+            return
+        }
+        scope.launch {
+            var row = job.items.firstOrNull { sameBarcode(it.barcode, code) }
+            if (row == null) {
+                val p = withContext(Dispatchers.IO) { db.findByBarcode(code) }
+                if (p != null) {
+                    row = job.items.firstOrNull { it.productId.isNotEmpty() && it.productId == p.id }
+                        ?: job.items.firstOrNull { it.name.trim().equals(p.name.trim(), true) }
+                    if (row != null && row.barcode.isBlank()) row.barcode = code
+                }
+            }
+            if (row == null) {
+                scanStatus = "Нет в списке: $code"
+                return@launch
+            }
+            row.fact = fmtQ(parseQ(row.fact) + 1)
+            Haptics.pulse(ctx, Haptics.TAP)
+            CountAnnouncer.tap(ctx, row)
+            scanStatus = "${row.name}: ${row.fact}"
+            jump(row)
+        }
+    }
+    val countRef = rememberUpdatedState<(String) -> Unit> { c -> countByCode(c) }
+    val scanForRef = rememberUpdatedState(scanFor)
+    DisposableEffect(Unit) {
+        val h: (String) -> Unit = { c ->
+            val m = scanForRef.value
+            if (m == null || m == "count") countRef.value(c)
+        }
+        BtScan.handler = h
+        onDispose { if (BtScan.handler === h) BtScan.handler = null }
+    }
     var editDoc by remember { mutableStateOf(false) }
     var retryDlg by remember { mutableStateOf(false) }
     val senderText = job.sender.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
@@ -1345,6 +1386,7 @@ private fun ColumnScope.NameModeMain(
         nameMode = true,
         onScan = { scanFor = "search" },
         scanFab = true,
+        onScanFab = { scanStatus = ""; scanFor = "count" },
         onScanBind = { r -> bindIdx = job.items.indexOf(r); scanFor = "bind" },
         jumpTo = jumpTo, jumpTick = jumpTick,
         searchText = searchText, searchTick = searchTick
@@ -1358,11 +1400,18 @@ private fun ColumnScope.NameModeMain(
             Surface(Modifier.fillMaxSize()) {
                 ScannerScreen(
                     prefs = remember { Prefs(ctx) },
+                    continuous = mode == "count",
+                    status = if (mode == "count") scanStatus else "",
                     onResult = { raw ->
                         val code = raw.trim()
-                        scanFor = null
-                        if (code.isNotEmpty()) {
-                            if (mode == "bind") job.items.getOrNull(bindIdx)?.let { bindCode(it, code) } else findByCode(code)
+                        if (mode == "count") {
+                            // круглая кнопка: сканер остаётся открытым, каждый код = +1 к строке
+                            countRef.value(code)
+                        } else {
+                            scanFor = null
+                            if (code.isNotEmpty()) {
+                                if (mode == "bind") job.items.getOrNull(bindIdx)?.let { bindCode(it, code) } else findByCode(code)
+                            }
                         }
                     },
                     onClose = { scanFor = null }

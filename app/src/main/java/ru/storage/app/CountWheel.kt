@@ -89,9 +89,9 @@ private const val CYCLE_BASE = 1_000_000
 /** Наклон строк у краёв «колеса», градусы. Если наклон выглядит «наоборот» — поменять знак. */
 private const val WHEEL_TILT = 12f
 
-private fun parseQ(s: String): Double = normalizeQty(s).toDoubleOrNull() ?: 0.0
+internal fun parseQ(s: String): Double = normalizeQty(s).toDoubleOrNull() ?: 0.0
 
-private fun fmtQ(d: Double): String =
+internal fun fmtQ(d: Double): String =
     if (d == Math.floor(d) && d < 1e9) d.toLong().toString() else d.toString()
 
 /** Строки, подходящие под запрос (все слова запроса есть в названии); сначала те, что начинаются с запроса. */
@@ -351,6 +351,8 @@ fun CountWheelList(
     onScanBind: ((ItemRow) -> Unit)? = null,
     /** true — круглая плавающая кнопка сканера; работает так же, как сканер в поле поиска (onScan) */
     scanFab: Boolean = false,
+    /** действие круглой кнопки; null — то же, что onScan */
+    onScanFab: (() -> Unit)? = null,
     /** поставить эту строку на середину при росте jumpTick */
     jumpTo: ItemRow? = null,
     jumpTick: Int = 0,
@@ -577,8 +579,8 @@ fun CountWheelList(
                     maxH = if (nameMode) 336.dp else 280.dp, compact = nameMode
                 )
             }
-            if (scanFab && onScan != null && editable && n > 0 && (!plainNow || nameMode)) {
-                ScanFab { onScan() }
+            if (scanFab && (onScanFab ?: onScan) != null && editable && n > 0 && (!plainNow || nameMode)) {
+                ScanFab { (onScanFab ?: onScan)?.invoke() }
             }
             CountOverlay()
         }
