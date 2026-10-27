@@ -42,6 +42,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.SolidColor
@@ -365,6 +366,22 @@ fun CountWheelList(
     var editing by remember { mutableStateOf<ItemRow?>(null) }
     var expiryRow by remember { mutableStateOf<ItemRow?>(null) }
     var focusRow by remember { mutableStateOf<ItemRow?>(null) }
+    var qtyRow by remember { mutableStateOf<ItemRow?>(null) }     // «Кол-во»: ввод итогового количества с клавиатуры
+    var photoRow by remember { mutableStateOf<ItemRow?>(null) }   // «Фото»: строка, для которой снимаем товар
+    var drumSession by remember { mutableStateOf<DrumSession?>(null) } // барабан «Приёма по имени»: прибавляет к количеству, 30 с
+    val photoCtx = LocalContext.current
+    val photoDb = remember { ProductDb.get(photoCtx) }
+    val takePhoto = rememberPhotoCapture("RC") { n ->
+        val r = photoRow
+        photoRow = null
+        if (r == null) {
+            Media.discard(photoCtx, photoDb, listOf(n))
+        } else {
+            if (r.photo.isNotBlank()) Media.discard(photoCtx, photoDb, listOf(r.photo)) // старое фото заменяется
+            r.photo = n
+            Media.uploadPending(photoCtx, photoDb)
+        }
+    }
     var blinkRow by remember { mutableStateOf<ItemRow?>(null) }
     var selectedRow by remember { mutableStateOf<ItemRow?>(null) } // выбранная в поиске строка — выделена постоянно
     var focusBlink by remember { mutableStateOf(true) }      // мигнуть два раза, когда строка встала на середину
@@ -475,7 +492,9 @@ fun CountWheelList(
                             onPickDefect = { picking = row to false },
                             onEdit = { editing = row },
                             onDelete = { rows.remove(row) },
-                            onEan = onScanBind?.let { cb -> { cb(row) } }
+                            onEan = onScanBind?.let { cb -> { cb(row) } },
+                            onPickQty = if (nameMode && !bware) ({ qtyRow = row }) else null,
+                            onPhoto = if (nameMode && !bware) ({ photoRow = row; takePhoto() }) else null
                         )
                     }
                 }
@@ -565,7 +584,9 @@ fun CountWheelList(
                                     onPickDefect = { picking = row to false },
                                     onEdit = { editing = row },
                                     onDelete = { rows.remove(row) },
-                                    onEan = onScanBind?.let { cb -> { cb(row) } }
+                                    onEan = onScanBind?.let { cb -> { cb(row) } },
+                                    onPickQty = if (nameMode && !bware) ({ qtyRow = row }) else null,
+                                    onPhoto = if (nameMode && !bware) ({ photoRow = row; takePhoto() }) else null
                                 )
                             }
                         }
@@ -589,20 +610,50 @@ fun CountWheelList(
     }
 
     picking?.let { (row, isFact) ->
+        // «Приём по имени», факт: барабан прибавляет к количеству. Выбранное на барабане можно менять 30 секунд,
+        // потом барабан снова на нуле, а количество остаётся в строке (ещё 10 на барабане = +10).
+        val drumAdd = nameMode && !bware && isFact
+        val drumInfo = remember(row) {
+            val ds = drumSession
+            val live = drumAdd && ds != null && ds.row === row &&
+                System.currentTimeMillis() - ds.at < DRUM_RESET_MS && parseQ(row.fact) == ds.last
+            val base = if (!drumAdd) 0.0 else if (live) ds!!.base else parseQ(row.fact)
+            base to (if (live) (parseQ(row.fact) - base).roundToInt().coerceIn(0, 9999) else 0)
+        }
+        val drumBase = drumInfo.first
         CountPickerDialog(
-            title = (if (isFact) (if (bware) "Количество: " else "Факт: ") else "Брак: ") + row.name,
-            initial = parseQ(if (isFact) row.fact else row.defect).roundToInt().coerceIn(0, 9999),
+            title = (if (isFact) (if (bware) "Количество: " else if (drumAdd && drumBase > 0) "Факт ${fmtQ(drumBase)} + " else "Факт: ") else "Брак: ") + row.name,
+            initial = if (drumAdd) drumInfo.second else parseQ(if (isFact) row.fact else row.defect).roundToInt().coerceIn(0, 9999),
             onApply = { v ->
-                if (isFact) row.fact = v.toString() else row.defect = v.toString()
+                if (drumAdd) {
+                    val total = drumBase + v
+                    row.fact = fmtQ(total)
+                    drumSession = DrumSession(row, drumBase, total, System.currentTimeMillis())
+                    CountAnnouncer.picked(appCtx, fmtQ(total), fmtQ(total))
+                } else {
+                    if (isFact) row.fact = v.toString() else row.defect = v.toString()
+                    if (isFact) CountAnnouncer.picked(appCtx, v.toString(), v.toString())
+                    else CountAnnouncer.picked(appCtx, "Брак $v", "брак $v")
+                }
                 picking = null
-                if (isFact) CountAnnouncer.picked(appCtx, v.toString(), v.toString())
-                else CountAnnouncer.picked(appCtx, "Брак $v", "брак $v")
             },
             onDismiss = { picking = null },
             photos = if (!isFact && !bware) row.defectPhotos else null
         )
     }
     editing?.let { row -> RowEditDialog(row) { editing = null } }
+    qtyRow?.let { row ->
+        QtyInputDialog(
+            row = row,
+            onApply = { v ->
+                row.fact = fmtQ(v)
+                drumSession = null // итоговое количество задано вручную: барабан начинается с нуля
+                CountAnnouncer.picked(appCtx, fmtQ(v), fmtQ(v))
+                qtyRow = null
+            },
+            onDismiss = { qtyRow = null }
+        )
+    }
     expiryRow?.let { row ->
         ExpiryPickerDialog(
             initial = row.expiry,
@@ -637,12 +688,16 @@ private fun WheelRow(
     onPickDefect: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onEan: (() -> Unit)? = null
+    onEan: (() -> Unit)? = null,
+    /** «Приём по имени»: кнопка «Кол-во» — ввод итогового количества с клавиатуры */
+    onPickQty: (() -> Unit)? = null,
+    /** «Приём по имени»: кнопка «Фото» — снимок товара, печатается в документе и уходит на Google Диск */
+    onPhoto: (() -> Unit)? = null
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
-    val btnW = 76.dp
-    val btnCount = if (onEan != null) 3 else 2
+    val btnCount = 2 + (if (onEan != null) 1 else 0) + (if (onPickQty != null) 1 else 0) + (if (onPhoto != null) 1 else 0)
+    val btnW = if (btnCount >= 5) 62.dp else 76.dp
     val maxPx = with(density) { (btnW * btnCount).toPx() }
     val rightPx = with(density) { 96.dp.toPx() }
     val anim = remember(row) { Animatable(0f) }
@@ -743,6 +798,44 @@ private fun WheelRow(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = scheme.onTertiaryContainer
+                    )
+                }
+            }
+            if (onPickQty != null) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight()
+                        .background(scheme.primaryContainer)
+                        .clickable(enabled = canEdit) {
+                            scope.launch { anim.animateTo(0f) }
+                            onPickQty()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Кол-во",
+                        textAlign = TextAlign.Center,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onPrimaryContainer
+                    )
+                }
+            }
+            if (onPhoto != null) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight()
+                        .background(scheme.secondaryContainer)
+                        .clickable(enabled = canEdit) {
+                            scope.launch { anim.animateTo(0f) }
+                            onPhoto()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        if (row.photo.isBlank()) "Фото" else "Фото\n✓",
+                        textAlign = TextAlign.Center,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onSecondaryContainer
                     )
                 }
             }
@@ -993,6 +1086,42 @@ fun CountPickerDialog(
             }
         }
     }
+}
+
+/** Барабан «Приёма по имени»: количество до первого выбора на барабане (base), итог (last) и время последнего выбора. */
+private class DrumSession(val row: ItemRow, val base: Double, val last: Double, val at: Long)
+
+private const val DRUM_RESET_MS = 30_000L
+
+/** Мини-окно «Кол-во»: итоговое фактическое количество набирается на цифровой клавиатуре (например 7000). */
+@Composable
+private fun QtyInputDialog(row: ItemRow, onApply: (Double) -> Unit, onDismiss: () -> Unit) {
+    val start = fmtQ(parseQ(row.fact))
+    var tf by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(start, androidx.compose.ui.text.TextRange(0, start.length))) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val ok = tf.text.isNotBlank() && normalizeQty(tf.text).toDoubleOrNull() != null
+    fun apply() { if (ok) onApply(parseQ(tf.text)) }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Количество", style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(row.name, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = tf,
+                    onValueChange = { v -> tf = v.copy(text = v.text.filter { it.isDigit() || it == '.' || it == ',' }.take(9)) },
+                    label = { Text("Фактическое количество (итог)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { apply() }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus)
+                )
+            }
+        },
+        confirmButton = { Button(enabled = ok, onClick = { apply() }) { Text("ОК") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 /** Правка названия и плана (долгое нажатие на строку): ошибки распознавания можно исправить. */

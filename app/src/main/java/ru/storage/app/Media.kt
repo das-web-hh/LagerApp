@@ -349,3 +349,35 @@ fun MediaButtons(kind: String, allowFile: Boolean, onAdded: (String) -> Unit) {
         if (allowFile) OutlinedButton(onClick = { pickLauncher.launch("*/*") }) { Text("📄 Файл") }
     }
 }
+
+/** Камера без кнопки: возвращает функцию «снять». Снимок сохраняется как фото вида kind, имя файла приходит в onAdded. */
+@Composable
+fun rememberPhotoCapture(kind: String, onAdded: (String) -> Unit): () -> Unit {
+    val ctx = LocalContext.current
+    val db = remember { ProductDb.get(ctx) }
+    val scope = rememberCoroutineScope()
+    val cb by rememberUpdatedState(onAdded)
+    var pendingCam by remember { mutableStateOf<String?>(null) }
+    val camLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val name = pendingCam
+        pendingCam = null
+        if (name != null) {
+            if (ok) scope.launch {
+                withContext(Dispatchers.IO) { Media.finishCamera(ctx, name, db) }
+                cb(name)
+            } else Media.file(ctx, name).delete()
+        }
+    }
+    fun startCamera() {
+        val (name, uri) = Media.cameraTarget(ctx, kind)
+        pendingCam = name
+        camLauncher.launch(uri)
+    }
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startCamera()
+    }
+    return {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startCamera()
+        else permLauncher.launch(Manifest.permission.CAMERA)
+    }
+}
