@@ -242,7 +242,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             blocked.isNotBlank() -> "Не принято: $blocked"
             attachedNote.isNotBlank() -> "Накладная привязана к приёму"
             !nameMode && autoState == "samedup" -> "Такие товары уже принимались сегодня — откройте и решите"
-            !nameMode && autoState == "unmarked" -> "Нет галочек/крестиков — откройте в «Приём по имени»"
+            !nameMode && autoState == "unmarked" -> "Отмечены не все позиции — откройте в «Приём по имени»"
             !nameMode && autoState == "error" -> "Не сохранено: $autoError"
             else -> if (nameMode) "Идёт подсчёт · позиций: ${items.size}" else "Проверьте и сохраните · позиций: ${items.size}"
         }
@@ -275,7 +275,9 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
     /** Автоприём: если все позиции отмечены — сохраняем сразу (история, Firebase, локальная база, накладная); иначе не сохраняем. */
     suspend fun autoFinish() {
         if (nameMode || saved || saving || items.isEmpty()) return
-        if (!markedComplete()) {
+        // на накладной нет ни одной галочки и ни одного крестика — сохраняем всё как есть (количество по документу, ноль тоже ноль)
+        val noMarksAtAll = items.all { it.status == "nomark" }
+        if (!noMarksAtAll && !markedComplete()) {
             autoState = "unmarked"
             return
         }
@@ -1043,12 +1045,14 @@ suspend fun saveJob(
         } else {
             var qty = normalizeQty(r.qty)
             val printed = normalizeQty(r.printed)
-            if (forceAccept && r.status != "missing" && (qty.isEmpty() || !qtyValid(qty)) && printed.isNotEmpty() && qtyValid(printed)) qty = printed
+            // количество 0 допустимо (принимается как ноль); недопустимо только пустое или не число
+            fun numOk(q: String) = q.isNotEmpty() && (q.toDoubleOrNull() ?: -1.0) >= 0.0
+            if (forceAccept && r.status != "missing" && !numOk(qty) && numOk(printed)) qty = printed
             // «не пришло» (✕): товар попадает в приём с количеством 0 и планом по документу
             if (r.status == "missing" && (qty.isEmpty() || qty.toDoubleOrNull() == 0.0)) {
                 rows.add(ReceiptItem(pid, name, "0", printed.ifEmpty { "0" }, barcode = bc))
             } else {
-                if (qty.isEmpty() || !qtyValid(qty)) return "Укажите количество (число больше нуля) у товара: $name"
+                if (!numOk(qty)) return "Укажите количество у товара: $name"
                 val plan = if (r.status == "changed" || r.status == "missing") printed else ""
                 rows.add(ReceiptItem(pid, name, qty, plan, barcode = bc))
             }
@@ -1178,7 +1182,7 @@ private fun AutoRowView(row: ItemRow) {
         val doc = if (row.printed.isNotEmpty()) row.printed else "—"
         when (row.status) {
             "ok" -> Text("✓ ПРИШЛО · ${row.qty} · по документу $doc", style = bold, color = MaterialTheme.colorScheme.primary)
-            "missing" -> Text("✕ НЕ ПРИШЛО · по документу $doc · принято 0", style = bold, color = MaterialTheme.colorScheme.error)
+            "missing" -> Text("✕ НЕ ПРИШЛО · по документу $doc · в приём не попадёт", style = bold, color = MaterialTheme.colorScheme.error)
             "changed" -> Text(
                 if (row.qty.isBlank()) "✎ количество перечёркнуто, число не вписано · по документу $doc"
                 else "✎ ДРУГОЕ КОЛИЧЕСТВО · по документу $doc · принято ${row.qty}",
@@ -1856,7 +1860,7 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             title = { Text("Накладная без отметок") },
             text = {
                 Text(
-                    "На этой накладной нет галочек и крестиков (или отмечены не все позиции), " +
+                    "На этой накладной отмечены не все позиции (есть и отмеченные, и без галочки/крестика), " +
                         "поэтому автоприём её не сохранил. Откройте её в «Приём по имени» и посчитайте вручную" +
                         if (Session.isAdmin) " или сохраните как есть: количество возьмётся с накладной, без пересчёта." else "."
                 )
