@@ -1403,7 +1403,9 @@ private fun ColumnScope.NameModeMain(
         onScanFab = { scanStatus = ""; scanFor = "count" },
         onScanBind = { r -> bindIdx = job.items.indexOf(r); scanFor = "bind" },
         jumpTo = jumpTo, jumpTick = jumpTick,
-        searchText = searchText, searchTick = searchTick
+        searchText = searchText, searchTick = searchTick,
+        idleKeyboard = true,
+        idleBlock = scanFor != null || conflict != null || editDoc || retryDlg
     )
 
     scanFor?.let { mode ->

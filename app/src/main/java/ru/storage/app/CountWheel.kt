@@ -42,6 +42,15 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
+import kotlin.math.abs
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.GraphicsLayerScope
@@ -216,6 +225,8 @@ private fun ListSearchField(
     onChange: (String) -> Unit,
     onAdd: (() -> Unit)?,
     onScan: (() -> Unit)?,
+    focusRequester: FocusRequester,
+    onFocusChange: (Boolean) -> Unit,
     onSubmit: () -> Unit
 ) {
     Row(
@@ -245,7 +256,7 @@ private fun ListSearchField(
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester).onFocusChanged { onFocusChange(it.isFocused) }
             )
         }
         if (query.isNotEmpty()) {
@@ -359,9 +370,16 @@ fun CountWheelList(
     jumpTick: Int = 0,
     /** вставить текст в строку поиска при росте searchTick */
     searchText: String = "",
-    searchTick: Int = 0
+    searchTick: Int = 0,
+    /** true — через 10 секунд без касаний фокус сам встаёт в поле поиска и открывается клавиатура */
+    idleKeyboard: Boolean = false,
+    /** true — пока открыто другое окно (сканер, диалог), клавиатуру не вызываем */
+    idleBlock: Boolean = false
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    val searchFocus = remember { FocusRequester() }
+    var searchFocused by remember { mutableStateOf(false) }
+    val lastTouch = remember { longArrayOf(System.currentTimeMillis()) }
     var picking by remember { mutableStateOf<Pair<ItemRow, Boolean>?>(null) } // true — факт, false — брак
     var editing by remember { mutableStateOf<ItemRow?>(null) }
     var expiryRow by remember { mutableStateOf<ItemRow?>(null) }
@@ -436,9 +454,38 @@ fun CountWheelList(
         keyboard?.hide()
     }
 
-    Column(modifier) {
+    // 10 секунд без касаний: экран готов к набору названия товара (фокус в поле поиска, клавиатура открыта)
+    LaunchedEffect(idleKeyboard, showSearch) {
+        if (!idleKeyboard || !showSearch) return@LaunchedEffect
+        while (true) {
+            delay(1000)
+            val now = System.currentTimeMillis()
+            val busy = idleBlock || picking != null || qtyRow != null || editing != null || expiryRow != null || !editable
+            if (busy) { lastTouch[0] = now; continue }
+            if (!searchFocused && now - lastTouch[0] >= 10_000L) {
+                try {
+                    searchFocus.requestFocus()
+                    keyboard?.show()
+                } catch (e: Exception) {
+                }
+                lastTouch[0] = now
+            }
+        }
+    }
+
+    Column(
+        modifier.pointerInput(Unit) {
+            // любое касание экрана сбрасывает 10-секундный отсчёт (событие не потребляем)
+            awaitPointerEventScope {
+                while (true) {
+                    awaitPointerEvent(PointerEventPass.Initial)
+                    lastTouch[0] = System.currentTimeMillis()
+                }
+            }
+        }
+    ) {
         if (showSearch) {
-            ListSearchField(query, { query = it }, onAdd, onScan) { hits.firstOrNull()?.let { pick(it) } }
+            ListSearchField(query, { query = it }, onAdd, onScan, searchFocus, { searchFocused = it }) { hits.firstOrNull()?.let { pick(it) } }
             Spacer(Modifier.height(8.dp))
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
@@ -712,6 +759,15 @@ private fun WheelRow(
     }
     val scope = rememberCoroutineScope()
     val scheme = MaterialTheme.colorScheme
+    // кнопки свайпа сами закрываются через 5 секунд, если их не трогали
+    var dragging by remember { mutableStateOf(false) }
+    val swipeOpen by remember { derivedStateOf { anim.value < -1f } }
+    LaunchedEffect(swipeOpen, dragging) {
+        if (swipeOpen && !dragging) {
+            delay(5000)
+            anim.animateTo(0f)
+        }
+    }
     val factD = parseQ(row.fact)
     val planD = if (row.extra) 0.0 else parseQ(row.qty)
     val defD = parseQ(row.defect)
@@ -856,6 +912,10 @@ private fun WheelRow(
         }
 
         // сама строка: свайп вправо — срок годности, влево — кнопки; тап = +1; долгое нажатие — причины (B-Ware) или правка
+        // «Приём по имени»: порог движения пальца выше обычного — лёгкое смещение при тапе не считается свайпом
+        val baseVc = LocalViewConfiguration.current
+        val vc = remember(baseVc, centerOnly) { if (centerOnly && !plain) WideSlopConfig(baseVc, baseVc.touchSlop * 2.5f) else baseVc }
+        CompositionLocalProvider(LocalViewConfiguration provides vc) {
         Row(
             Modifier.offset { IntOffset(anim.value.roundToInt(), 0) }
                 .fillMaxSize()
@@ -873,13 +933,36 @@ private fun WheelRow(
                 }
                 .background(scheme.primary.copy(alpha = 0.55f * blink.value))
                 .then(if (selected) Modifier.border(2.5.dp, scheme.tertiary, RoundedCornerShape(14.dp)) else Modifier)
+                // выбранная строка (середина барабана) вверх-вниз не листается: список двигают только за невыбранные строки
+                .then(
+                    if (centerOnly && !plain && active) Modifier.pointerInput(Unit) {
+                        val slop = viewConfiguration.touchSlop
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            var dx = 0f
+                            var dy = 0f
+                            var down = true
+                            while (down) {
+                                val ev = awaitPointerEvent()
+                                ev.changes.forEach { c ->
+                                    val d = c.positionChange()
+                                    dx += d.x; dy += d.y
+                                    if (abs(dy) > slop && abs(dy) > abs(dx)) c.consume()
+                                }
+                                down = ev.changes.any { it.pressed }
+                            }
+                        }
+                    } else Modifier
+                )
                 .draggable(
                     orientation = Orientation.Horizontal,
                     enabled = canEdit,
                     state = rememberDraggableState { delta ->
                         scope.launch { anim.snapTo((anim.value + delta).coerceIn(-maxPx, rightPx)) }
                     },
+                    onDragStarted = { dragging = true },
                     onDragStopped = { velocity ->
+                        dragging = false
                         scope.launch {
                             if (anim.value > rightPx * 0.6f) {
                                 // протянули вправо — открыть выбор срока годности
@@ -971,7 +1054,13 @@ private fun WheelRow(
                 )
             }
         }
+        }
     }
+}
+
+/** Конфигурация касаний с увеличенным порогом движения (touchSlop). */
+private class WideSlopConfig(private val base: ViewConfiguration, private val slop: Float) : ViewConfiguration by base {
+    override val touchSlop: Float get() = slop
 }
 
 private const val MAX_COUNT = 9999

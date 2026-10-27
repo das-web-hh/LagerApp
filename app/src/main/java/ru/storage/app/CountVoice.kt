@@ -164,9 +164,12 @@ class CountEvent(val id: Long, val text: String, val cfg: VoiceCfg, val time: Lo
  * Крупная цифра и голос после подсчёта.
  *  - тап по строке: на экране сразу 1, 2, 3 … (счёт тапов подряд по одной строке);
  *  - выбор барабаном: на экране выбранное количество;
- *  - голос произносит последнее число через паузу (по умолчанию 1 с) после того, как оно появилось на экране;
+ *  - голос произносит последнее число после того, как цифра задержалась на экране и плавно исчезла;
  *    новый тап в эту паузу сбрасывает ожидание, счёт продолжается.
  */
+const val FADE_MS = 1000L // плавное исчезновение крупной цифры
+const val SHOW_MS = 110L  // появление крупной цифры
+
 object CountAnnouncer {
     var event by mutableStateOf<CountEvent?>(null)
         private set
@@ -198,7 +201,9 @@ object CountAnnouncer {
         job?.cancel()
         Speaker.stop()
         job = scope.launch {
-            delay(cfg.delayMs.toLong().coerceAtLeast(0L))
+            // цифра на экране: появление (0,11 с) + держится holdMs + плавно гаснет FADE_MS; голос — только после полного исчезновения.
+            // Новый тап до этого момента сбрасывает отсчёт, цифра возвращается и счёт продолжается.
+            delay(if (cfg.showBig) SHOW_MS + cfg.holdMs.toLong() + FADE_MS else cfg.delayMs.toLong().coerceAtLeast(0L))
             series = 0
             seriesKey = null
             if (cfg.voiceOn && (if (tap) cfg.onTap else cfg.onPicker)) Speaker.say(app, speech, cfg)
@@ -220,9 +225,10 @@ fun CountOverlay() {
         if (System.currentTimeMillis() - e.time > 600) return@LaunchedEffect
         text = e.text
         size = e.cfg.sizeSp
-        alpha.animateTo(1f, tween(110))
+        // если прошлая цифра ещё гасла — она возвращается на место (alpha идёт от текущего значения к 1)
+        alpha.animateTo(1f, tween(SHOW_MS.toInt()))
         delay(e.cfg.holdMs.toLong())
-        alpha.animateTo(0f, tween(500))
+        alpha.animateTo(0f, tween(FADE_MS.toInt()))
     }
 
     // Палец закрывает середину экрана: центр цифры ставим на 25% высоты экрана сверху (на границе между 1-й и 2-й четвертями),
