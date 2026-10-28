@@ -106,18 +106,18 @@ internal fun fmtQ(d: Double): String =
 
 /** Строки, подходящие под запрос (все слова запроса есть в названии); сначала те, что начинаются с запроса. */
 private fun findRows(rows: List<ItemRow>, q: String): List<ItemRow> {
-    val words = q.trim().lowercase().split(' ').filter { it.isNotEmpty() }
+    val words = foldDe(q.trim()).split(' ').filter { it.isNotEmpty() }
     if (words.isEmpty()) return emptyList()
     val w0 = words[0]
     return rows
         .filter { r ->
-            val n = r.name.lowercase()
+            val n = foldDe(r.name)
             val bc = r.barcode.lowercase()
             // слово запроса есть в названии или в штрих-коде строки
             words.all { n.contains(it) || (bc.isNotEmpty() && bc.contains(it)) }
         }
         .sortedBy { r ->
-            val n = r.name.lowercase()
+            val n = foldDe(r.name)
             when {
                 r.barcode.isNotEmpty() && r.barcode.lowercase().startsWith(w0) -> 0
                 n.startsWith(w0) -> 0
@@ -250,7 +250,7 @@ private fun ListSearchField(
             }
             BasicTextField(
                 value = query,
-                onValueChange = onChange,
+                onValueChange = { onChange(germanKeys(it)) },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -1223,7 +1223,7 @@ private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
         title = { Text("Правка строки") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(name, { name = germanKeys(it) }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
                 if (!row.extra) {
                     OutlinedTextField(
                         plan, { plan = it }, label = { Text("План (по документу)") }, singleLine = true,

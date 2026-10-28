@@ -234,24 +234,32 @@ class ProductDb private constructor(context: Context) :
     fun allProducts(): List<Product> =
         readProducts("SELECT $pcols FROM products ORDER BY name_lc", emptyArray())
 
-    /** Поиск по названию, артикулу и штрих-коду; каждое слово запроса должно встретиться. */
+    /**
+     * Поиск по названию, артикулу и штрих-коду; каждое слово запроса должно встретиться.
+     * Немецкие буквы ищутся обычными латинскими: Kase / Kaese находят Käse, Strasse находит Straße.
+     */
     fun search(query: String, limit: Int, newestFirst: Boolean = false): List<Product> {
-        val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val words = foldDe(query.trim()).split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (words.isEmpty()) return emptyList()
-        fun esc(s: String) = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        val where = words.joinToString(" AND ") { "search_lc LIKE ? ESCAPE '\\'" }
-        val args = ArrayList<String>()
-        words.forEach { args.add("%" + esc(it) + "%") }
-        val order = if (newestFirst) {
-            "updated_at DESC, name_lc"
-        } else {
-            args.add(esc(words.first()) + "%")
-            "(name_lc LIKE ? ESCAPE '\\') DESC, name_lc"
+        class Hit(val id: String, val nameFold: String, val nameLc: String, val updated: Long)
+        val hits = ArrayList<Hit>()
+        readableDatabase.rawQuery("SELECT id, name_lc, search_lc, updated_at FROM products", null).use { c ->
+            while (c.moveToNext()) {
+                val sf = foldDe(c.getString(2))
+                if (words.all { sf.contains(it) }) hits.add(Hit(c.getString(0), foldDe(c.getString(1)), c.getString(1), c.getLong(3)))
+            }
         }
-        return readProducts(
-            "SELECT $pcols FROM products WHERE $where ORDER BY $order LIMIT $limit",
-            args.toTypedArray()
-        )
+        val first = words.first()
+        val sorted = if (newestFirst) hits.sortedWith(compareByDescending<Hit> { it.updated }.thenBy { it.nameLc })
+        else hits.sortedWith(compareByDescending<Hit> { it.nameFold.startsWith(first) }.thenBy { it.nameLc })
+        val ids = sorted.take(limit).map { it.id }
+        if (ids.isEmpty()) return emptyList()
+        val byId = HashMap<String, Product>()
+        ids.chunked(500).forEach { chunk ->
+            val ph = chunk.joinToString(",") { "?" }
+            readProducts("SELECT $pcols FROM products WHERE id IN ($ph)", chunk.toTypedArray()).forEach { byId[it.id] = it }
+        }
+        return ids.mapNotNull { byId[it] }
     }
 
     // ---------- приёмки ----------

@@ -874,14 +874,39 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         restoredMode = true
     }
 
-    /** Подсказка из каталога: у строк без штрих-кода берём код найденного по названию (или id) товара. Не в главном потоке. */
+    /**
+     * Подсказка из каталога: у строк без штрих-кода берём код товара — по id или точному названию, а если такого нет, то у
+     * «того же» товара: совпали вес/объём упаковки, вид упаковки и название (производитель не важен). Не в главном потоке.
+     */
     fun fillBarcodesFromCatalog() {
         val db = ProductDb.get(app)
+        var catalog: List<Pair<Product, ProductMatch.Sig>>? = null
         for (r in items.toList()) {
             if (r.barcode.isNotBlank() || r.name.isBlank()) continue
             val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null) ?: db.findByName(r.name.trim())
-            if (p != null && p.barcode.isNotBlank()) r.barcode = p.barcode
+            if (p != null) {
+                if (p.barcode.isNotBlank()) r.barcode = p.barcode
+                continue // карточка этого товара есть: чужой код ей не подставляем
+            }
+            val cat = catalog ?: db.allProducts().filter { it.barcode.isNotBlank() }
+                .map { it to ProductMatch.sigOfProduct(it) }.also { catalog = it }
+            val m = ProductMatch.best(ProductMatch.sigOf(r.name, r.parts), cat) ?: continue
+            r.barcode = m.barcode
+            if (r.productId.isEmpty()) r.productId = m.id // сохранится на ту же карточку, а не заведёт дубль
         }
+        // одинаковые строки одной накладной (например, 30 + ещё 30) получают общий код
+        for (r in items.toList()) {
+            if (r.barcode.isNotBlank()) continue
+            twinsOf(r).firstOrNull { it.barcode.isNotBlank() }?.let { r.barcode = it.barcode }
+        }
+    }
+
+    /** Другие строки этой же накладной с тем же товаром (тот же вес, упаковка и название, возможно с мелкими отличиями). */
+    fun twinsOf(row: ItemRow): List<ItemRow> {
+        if (row.name.isBlank()) return emptyList()
+        val sig = ProductMatch.sigOf(row.name, row.parts)
+        return items.filter { it !== row && it.name.isNotBlank() &&
+            (it.name.trim().equals(row.name.trim(), true) || ProductMatch.same(sig, ProductMatch.sigOf(it.name, it.parts))) }
     }
 
     init {
@@ -1014,12 +1039,17 @@ suspend fun saveJob(
         val bcRaw = r.barcode.trim()
         if (pid.isEmpty() && bcRaw.isNotEmpty() && (nameMode || r.extra)) {
             // товара нет в каталоге, но у строки есть штрих-код: заводим карточку (имя и код), строка остаётся в списке
-            pid = newProducts.getOrPut(name.lowercase()) {
-                Product(
-                    id = UUID.randomUUID().toString(), name = name, article = "", barcode = bcRaw,
-                    weight = "", unit = "", pack = "", manufacturer = "", photos = emptyList(), updatedAt = 0L
-                )
-            }.id
+            val local = r.parts ?: ProductParse.parseLocal(listOf(name)).firstOrNull()
+            // тот же код уже у карточки каталога или у карточки, заведённой в этом приёме, — берём её, дубль не создаём
+            pid = newProducts.values.firstOrNull { sameBarcode(it.barcode, bcRaw) }?.id
+                ?: withContext(Dispatchers.IO) { db.findByBarcode(bcRaw)?.id }
+                ?: newProducts.getOrPut(name.lowercase()) {
+                    Product(
+                        id = UUID.randomUUID().toString(), name = name, article = "", barcode = bcRaw,
+                        weight = local?.size ?: "", unit = local?.unit ?: "", pack = local?.pack ?: "",
+                        manufacturer = local?.manufacturer ?: "", photos = emptyList(), updatedAt = 0L
+                    )
+                }.id
         } else if (pid.isNotEmpty() && bcRaw.isNotEmpty()) {
             bind.add(pid to bcRaw)
         }
@@ -1093,7 +1123,7 @@ suspend fun saveJob(
         withContext(Dispatchers.IO) {
             newProducts.values.forEach { Cloud.saveProduct(db, it) }
             // штрих-коды, привязанные сканером к товарам каталога; если код числился за другим товаром — снимаем его с того
-            bind.distinctBy { it.first }.forEach { (pid, code) ->
+            bind.distinctBy { it.second }.forEach { (pid, code) ->
                 if (newProducts.values.any { it.id == pid }) return@forEach
                 val p = db.getProduct(pid) ?: return@forEach
                 if (p.barcode == code) return@forEach
@@ -1283,14 +1313,20 @@ private fun ColumnScope.NameModeMain(
     fun bindCode(row: ItemRow, code: String) {
         scope.launch {
             val owner = withContext(Dispatchers.IO) { db.findByBarcode(code) }
-            val ownerIsRow = owner != null && (owner.id == row.productId || owner.name.trim().equals(row.name.trim(), true))
-            val otherRow = job.items.firstOrNull { it !== row && sameBarcode(it.barcode, code) }
+            val twins = job.twinsOf(row)
+            val rowSig = ProductMatch.sigOf(row.name, row.parts)
+            val ownerIsRow = owner != null && (owner.id == row.productId || owner.name.trim().equals(row.name.trim(), true) ||
+                ProductMatch.same(rowSig, ProductMatch.sigOfProduct(owner)))
+            // чужая строка с этим кодом; такие же строки этой накладной (30 + ещё 30) конфликтом не считаются
+            val otherRow = job.items.firstOrNull { it !== row && it !in twins && sameBarcode(it.barcode, code) }
             if ((owner != null && !ownerIsRow) || otherRow != null) {
                 conflict = Triple(row, code, otherRow?.name ?: owner?.name ?: "")
             } else {
                 row.barcode = code
+                twins.forEach { if (it.barcode.isBlank() || sameBarcode(it.barcode, code)) it.barcode = code }
                 Haptics.pulse(ctx, Haptics.TAP)
-                Toast.makeText(ctx, "Штрих-код привязан: ${row.name}", Toast.LENGTH_SHORT).show()
+                val n = 1 + twins.count { sameBarcode(it.barcode, code) }
+                Toast.makeText(ctx, if (n > 1) "Штрих-код привязан к $n строкам: ${row.name}" else "Штрих-код привязан: ${row.name}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1307,7 +1343,9 @@ private fun ColumnScope.NameModeMain(
             return
         }
         scope.launch {
-            var row = job.items.firstOrNull { sameBarcode(it.barcode, code) }
+            val withCode = job.items.filter { sameBarcode(it.barcode, code) }
+            // одинаковые строки (30 + ещё 30): считаем в первую, где факт ещё не дошёл до плана
+            var row = withCode.firstOrNull { parseQ(it.fact) < parseQ(it.qty) } ?: withCode.firstOrNull()
             if (row == null) {
                 val p = withContext(Dispatchers.IO) { db.findByBarcode(code) }
                 if (p != null) {
@@ -1442,8 +1480,10 @@ private fun ColumnScope.NameModeMain(
             text = { Text("Код $code уже числится за «$who». Привязать его к «${row.name}»? У «$who» он будет снят при сохранении приёма.") },
             confirmButton = {
                 Button(onClick = {
-                    job.items.filter { it !== row && it.barcode == code }.forEach { it.barcode = "" }
+                    val twins = job.twinsOf(row)
+                    job.items.filter { it !== row && it !in twins && it.barcode == code }.forEach { it.barcode = "" }
                     row.barcode = code
+                    twins.forEach { it.barcode = code }
                     conflict = null
                 }) { Text("Привязать") }
             },
@@ -1470,7 +1510,7 @@ private fun EditDocDialog(job: AutoJob, onDismiss: () -> Unit) {
         title = { Text("Отправитель, заказ, машина") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(sender, { sender = it }, label = { Text("Отправитель") },
+                OutlinedTextField(sender, { sender = germanKeys(it) }, label = { Text("Отправитель") },
                     singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(order, { order = it }, label = { Text("Номер заказа") },
                     singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -1528,7 +1568,7 @@ private fun AddItemDialog(
                     )
                 }
                 OutlinedTextField(
-                    name, { name = it; pid = "" }, label = { Text("Название товара") },
+                    name, { name = germanKeys(it); pid = "" }, label = { Text("Название товара") },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
                 Text(
