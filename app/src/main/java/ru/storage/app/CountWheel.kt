@@ -761,6 +761,7 @@ private fun WheelRow(
     val scheme = MaterialTheme.colorScheme
     // кнопки свайпа сами закрываются через 5 секунд, если их не трогали
     var dragging by remember { mutableStateOf(false) }
+    var dragStartX by remember { mutableFloatStateOf(0f) }
     val swipeOpen by remember { derivedStateOf { anim.value < -1f } }
     LaunchedEffect(swipeOpen, dragging) {
         if (swipeOpen && !dragging) {
@@ -914,7 +915,7 @@ private fun WheelRow(
         // сама строка: свайп вправо — срок годности, влево — кнопки; тап = +1; долгое нажатие — причины (B-Ware) или правка
         // «Приём по имени»: порог движения пальца выше обычного — лёгкое смещение при тапе не считается свайпом
         val baseVc = LocalViewConfiguration.current
-        val vc = remember(baseVc, centerOnly) { if (centerOnly && !plain) WideSlopConfig(baseVc, baseVc.touchSlop * 2.5f) else baseVc }
+        val vc = remember(baseVc, centerOnly) { if (centerOnly && !plain) WideSlopConfig(baseVc, baseVc.touchSlop * SWIPE_SLOP_MULT) else baseVc }
         CompositionLocalProvider(LocalViewConfiguration provides vc) {
         Row(
             Modifier.offset { IntOffset(anim.value.roundToInt(), 0) }
@@ -960,7 +961,7 @@ private fun WheelRow(
                     state = rememberDraggableState { delta ->
                         scope.launch { anim.snapTo((anim.value + delta).coerceIn(-maxPx, rightPx)) }
                     },
-                    onDragStarted = { dragging = true },
+                    onDragStarted = { dragging = true; dragStartX = anim.value },
                     onDragStopped = { velocity ->
                         dragging = false
                         scope.launch {
@@ -969,7 +970,12 @@ private fun WheelRow(
                                 onPickExpiry()
                                 anim.animateTo(0f)
                             } else {
-                                anim.animateTo(if (anim.value < -maxPx / 2f || velocity < -1200f) -maxPx else 0f)
+                                // решает не «половина всех кнопок», а то, куда и насколько двинули палец (кнопок до 5 — полпути было слишком далеко)
+                                val moved = anim.value - dragStartX
+                                val need = with(density) { SWIPE_OPEN_DP.dp.toPx() }
+                                val wasOpen = dragStartX < -1f
+                                val open = if (wasOpen) !(moved > need || velocity > 600f) else (moved < -need || velocity < -500f)
+                                anim.animateTo(if (open) -maxPx else 0f)
                             }
                         }
                     }
@@ -1062,6 +1068,11 @@ private fun WheelRow(
 private class WideSlopConfig(private val base: ViewConfiguration, private val slop: Float) : ViewConfiguration by base {
     override val touchSlop: Float get() = slop
 }
+
+/** Во сколько раз порог «это уже свайп» больше стандартного (тап с лёгким смещением остаётся тапом). */
+private const val SWIPE_SLOP_MULT = 1.5f
+/** Сколько dp надо протянуть строку, чтобы кнопки открылись (или закрылись). */
+private const val SWIPE_OPEN_DP = 44f
 
 private const val MAX_COUNT = 9999
 private const val PAD_ITEMS = 2 // пустые строки сверху и снизу, чтобы 0 и 9999 тоже вставали в середину
