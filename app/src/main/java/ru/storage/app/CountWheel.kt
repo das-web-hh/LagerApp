@@ -965,7 +965,7 @@ private fun WheelRow(
                     onDragStopped = { velocity ->
                         dragging = false
                         scope.launch {
-                            if (anim.value > rightPx * 0.6f) {
+                            if (anim.value > rightPx * 0.3f) {
                                 // протянули вправо — открыть выбор срока годности
                                 onPickExpiry()
                                 anim.animateTo(0f)
@@ -974,7 +974,7 @@ private fun WheelRow(
                                 val moved = anim.value - dragStartX
                                 val need = with(density) { SWIPE_OPEN_DP.dp.toPx() }
                                 val wasOpen = dragStartX < -1f
-                                val open = if (wasOpen) !(moved > need || velocity > 600f) else (moved < -need || velocity < -500f)
+                                val open = if (wasOpen) !(moved > need || velocity > 250f) else (moved < -need || velocity < -250f)
                                 anim.animateTo(if (open) -maxPx else 0f)
                             }
                         }
@@ -1070,9 +1070,9 @@ private class WideSlopConfig(private val base: ViewConfiguration, private val sl
 }
 
 /** Во сколько раз порог «это уже свайп» больше стандартного (тап с лёгким смещением остаётся тапом). */
-private const val SWIPE_SLOP_MULT = 1.5f
+private const val SWIPE_SLOP_MULT = 1.0f
 /** Сколько dp надо протянуть строку, чтобы кнопки открылись (или закрылись). */
-private const val SWIPE_OPEN_DP = 44f
+private const val SWIPE_OPEN_DP = 18f
 
 private const val MAX_COUNT = 9999
 private const val PAD_ITEMS = 2 // пустые строки сверху и снизу, чтобы 0 и 9999 тоже вставали в середину
