@@ -106,18 +106,18 @@ internal fun fmtQ(d: Double): String =
 
 /** Строки, подходящие под запрос (все слова запроса есть в названии); сначала те, что начинаются с запроса. */
 private fun findRows(rows: List<ItemRow>, q: String): List<ItemRow> {
-    val words = foldDe(q.trim()).split(' ').filter { it.isNotEmpty() }
+    val words = q.trim().lowercase().split(' ').filter { it.isNotEmpty() }
     if (words.isEmpty()) return emptyList()
     val w0 = words[0]
     return rows
         .filter { r ->
-            val n = foldDe(r.name)
+            val n = r.name.lowercase()
             val bc = r.barcode.lowercase()
             // слово запроса есть в названии или в штрих-коде строки
             words.all { n.contains(it) || (bc.isNotEmpty() && bc.contains(it)) }
         }
         .sortedBy { r ->
-            val n = foldDe(r.name)
+            val n = r.name.lowercase()
             when {
                 r.barcode.isNotEmpty() && r.barcode.lowercase().startsWith(w0) -> 0
                 n.startsWith(w0) -> 0
@@ -250,7 +250,7 @@ private fun ListSearchField(
             }
             BasicTextField(
                 value = query,
-                onValueChange = { onChange(germanKeys(it)) },
+                onValueChange = onChange,
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -761,7 +761,6 @@ private fun WheelRow(
     val scheme = MaterialTheme.colorScheme
     // кнопки свайпа сами закрываются через 5 секунд, если их не трогали
     var dragging by remember { mutableStateOf(false) }
-    var dragStartX by remember { mutableFloatStateOf(0f) }
     val swipeOpen by remember { derivedStateOf { anim.value < -1f } }
     LaunchedEffect(swipeOpen, dragging) {
         if (swipeOpen && !dragging) {
@@ -915,7 +914,7 @@ private fun WheelRow(
         // сама строка: свайп вправо — срок годности, влево — кнопки; тап = +1; долгое нажатие — причины (B-Ware) или правка
         // «Приём по имени»: порог движения пальца выше обычного — лёгкое смещение при тапе не считается свайпом
         val baseVc = LocalViewConfiguration.current
-        val vc = remember(baseVc, centerOnly) { if (centerOnly && !plain) WideSlopConfig(baseVc, baseVc.touchSlop * SWIPE_SLOP_MULT) else baseVc }
+        val vc = remember(baseVc, centerOnly) { if (centerOnly && !plain) WideSlopConfig(baseVc, baseVc.touchSlop * 2.5f) else baseVc }
         CompositionLocalProvider(LocalViewConfiguration provides vc) {
         Row(
             Modifier.offset { IntOffset(anim.value.roundToInt(), 0) }
@@ -961,21 +960,16 @@ private fun WheelRow(
                     state = rememberDraggableState { delta ->
                         scope.launch { anim.snapTo((anim.value + delta).coerceIn(-maxPx, rightPx)) }
                     },
-                    onDragStarted = { dragging = true; dragStartX = anim.value },
+                    onDragStarted = { dragging = true },
                     onDragStopped = { velocity ->
                         dragging = false
                         scope.launch {
-                            if (anim.value > rightPx * 0.3f) {
+                            if (anim.value > rightPx * 0.6f) {
                                 // протянули вправо — открыть выбор срока годности
                                 onPickExpiry()
                                 anim.animateTo(0f)
                             } else {
-                                // решает не «половина всех кнопок», а то, куда и насколько двинули палец (кнопок до 5 — полпути было слишком далеко)
-                                val moved = anim.value - dragStartX
-                                val need = with(density) { SWIPE_OPEN_DP.dp.toPx() }
-                                val wasOpen = dragStartX < -1f
-                                val open = if (wasOpen) !(moved > need || velocity > 250f) else (moved < -need || velocity < -250f)
-                                anim.animateTo(if (open) -maxPx else 0f)
+                                anim.animateTo(if (anim.value < -maxPx / 2f || velocity < -1200f) -maxPx else 0f)
                             }
                         }
                     }
@@ -1068,11 +1062,6 @@ private fun WheelRow(
 private class WideSlopConfig(private val base: ViewConfiguration, private val slop: Float) : ViewConfiguration by base {
     override val touchSlop: Float get() = slop
 }
-
-/** Во сколько раз порог «это уже свайп» больше стандартного (тап с лёгким смещением остаётся тапом). */
-private const val SWIPE_SLOP_MULT = 1.0f
-/** Сколько dp надо протянуть строку, чтобы кнопки открылись (или закрылись). */
-private const val SWIPE_OPEN_DP = 18f
 
 private const val MAX_COUNT = 9999
 private const val PAD_ITEMS = 2 // пустые строки сверху и снизу, чтобы 0 и 9999 тоже вставали в середину
@@ -1234,7 +1223,7 @@ private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
         title = { Text("Правка строки") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = germanKeys(it) }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
                 if (!row.extra) {
                     OutlinedTextField(
                         plan, { plan = it }, label = { Text("План (по документу)") }, singleLine = true,
