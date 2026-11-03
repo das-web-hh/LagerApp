@@ -58,7 +58,7 @@ object BWareDraft {
     }
 
     private fun isEmpty(kind: String): Boolean =
-        if (kind == "inv") BWareInvHolder.rows.isEmpty()
+        if (kind == "inv") BWareInvHolder.rows.isEmpty() && BWareInvHolder.warehouse.isBlank()
         else BWareHolder.let {
             it.rows.isEmpty() && it.sender.isBlank() && it.order.isBlank() && it.truck.isBlank() &&
                 it.trailer.isBlank() && it.photos.isEmpty()
@@ -68,7 +68,7 @@ object BWareDraft {
     fun snapshot(kind: String): String {
         val j = JSONObject().put("v", 1).put("kind", kind)
         if (kind == "inv") {
-            j.put("rows", rowsJson(BWareInvHolder.rows)).put("step", BWareInvHolder.step)
+            j.put("rows", rowsJson(BWareInvHolder.rows)).put("step", BWareInvHolder.step).put("wh", BWareInvHolder.warehouse)
         } else {
             val h = BWareHolder
             j.put("rows", rowsJson(h.rows)).put("step", h.step)
@@ -83,6 +83,7 @@ object BWareDraft {
         if (kind == "inv") {
             fillRows(BWareInvHolder.rows, j.optJSONArray("rows"))
             BWareInvHolder.step = j.optInt("step", 0)
+            BWareInvHolder.warehouse = j.optString("wh")
         } else {
             val h = BWareHolder
             fillRows(h.rows, j.optJSONArray("rows"))

@@ -321,7 +321,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(name, { name = it }, label = { Text("Название") }, readOnly = !canEdit, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(name, { name = germanKeys(it) }, label = { Text("Название") }, readOnly = !canEdit, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(4.dp))
         if (canEdit) OutlinedButton(
             enabled = !parsing && name.isNotBlank(),
@@ -365,7 +365,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         if (canEdit) Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             PACKS.forEach { p -> TextButton(onClick = { pack = p }) { Text(p) } }
         }
-        OutlinedTextField(manufacturer, { manufacturer = it }, label = { Text("Производитель") }, readOnly = !canEdit,
+        OutlinedTextField(manufacturer, { manufacturer = germanKeys(it) }, label = { Text("Производитель") }, readOnly = !canEdit,
             singleLine = true, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(article, { article = it }, label = { Text("Артикул") }, readOnly = !canEdit,

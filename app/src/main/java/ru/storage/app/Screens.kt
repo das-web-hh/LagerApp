@@ -88,6 +88,8 @@ fun OtherScreen(prefs: Prefs) {
         current == "Bluetooth" -> BluetoothScreen { section = null }
         current == "Файлы" -> FileBrowserScreen(onBack = { section = null })
         current == "Рабочее время" -> WorkTimeScreen { section = null }
+        current == "Фото по QR" -> BWarePhotoLookupScreen(prefs) { section = null }
+        current == "Итог приёма" -> ReceiveTotalScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Прочее", style = MaterialTheme.typography.headlineMedium)
@@ -102,7 +104,9 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Документы", Icons.Default.Create) { section = "Документы" },
                     TileSpec("Файлы", Icons.Default.Share) { section = "Файлы" },
                     TileSpec("Bluetooth", Icons.Default.Settings) { section = "Bluetooth" },
-                    TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" }
+                    TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" },
+                    TileSpec("Фото по QR", Icons.Default.Info) { section = "Фото по QR" },
+                    TileSpec("Итог приёма", Icons.Default.Check) { section = "Итог приёма" }
                 )
             )
         }
@@ -253,12 +257,8 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         BWareInventoryScreen(receiver) { mode = null }
         return
     }
-    if (current == "Фото по QR") {
-        BWarePhotoLookupScreen(prefs) { mode = null }
-        return
-    }
-    if (current == "Итог приёма") {
-        ReceiveTotalScreen { mode = null }
+    if (current == "Инвентаризация") {
+        InventoryScreen(receiver) { mode = null }
         return
     }
     if (current == "Отправка") {
@@ -310,11 +310,9 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
                 TileSpec("Ручной", Icons.Default.Edit) { mode = "Ручной" },
                 TileSpec("По наименованию", Icons.Default.Search, nameCount) { mode = "По наименованию" },
                 TileSpec("Автоприём", Icons.Default.Refresh, autoCount) { mode = "Автоприём" },
-                TileSpec("Итог приёма", Icons.Default.Check) { mode = "Итог приёма" },
                 TileSpec("Приём B-Ware", Icons.Default.Add) { mode = "Приём B-Ware" },
                 TileSpec("Инвентаризация", Icons.Default.Done) { mode = "Инвентаризация" },
                 TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
-                TileSpec("Фото по QR", Icons.Default.Info) { mode = "Фото по QR" },
                 TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" },
                 TileSpec("Выгрузка", Icons.Default.ShoppingCart) { mode = "Выгрузка" }
             )

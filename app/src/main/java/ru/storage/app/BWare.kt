@@ -265,7 +265,7 @@ fun CompactField(
 
 /** Поиск товара: лупа, надпись «Товар», «+» справа. */
 @Composable
-private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit) {
+private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit, onScan: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth()
             .height(44.dp)
@@ -295,6 +295,9 @@ private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: (
         if (query.isNotEmpty()) {
             TextButton(onClick = { onChange("") }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
         }
+        if (onScan != null) {
+            IconButton(onClick = onScan) { BarcodeScannerIcon(color = MaterialTheme.colorScheme.primary) }
+        }
         IconButton(onClick = onAdd) {
             Icon(Icons.Default.Add, contentDescription = "Добавить товар", tint = MaterialTheme.colorScheme.primary)
         }
@@ -312,11 +315,19 @@ fun CatalogWheel(
     modifier: Modifier = Modifier,
     errorText: String = "",
     emptyText: String = "Введите товар и нажмите «+»",
-    onAdded: () -> Unit = {}
+    onAdded: () -> Unit = {},
+    /** true — сканер штрих-кодов в поиске, кнопки «Штрих-код» и «Фото» в свайпе влево (инвентарь) */
+    scanner: Boolean = false,
+    /** true — «Инвентаризация»: обычный счёт (факт и брак барабаном, количество с клавиатуры), неизвестный штрих-код — окно с названием */
+    inventory: Boolean = false
 ) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     val sync = remember { SyncState() }
+    val scope = rememberCoroutineScope()
+    var unknownCode by remember { mutableStateOf<String?>(null) }
+    var scanMode by remember { mutableStateOf<String?>(null) } // "add" — добавить товар по коду, "bind" — привязать код к строке
+    var bindRow by remember { mutableStateOf<ItemRow?>(null) }
     var query by remember { mutableStateOf("") }
     var suggestions by remember { mutableStateOf(emptyList<Product>()) }
     var addTick by remember { mutableIntStateOf(0) }
@@ -329,7 +340,7 @@ fun CatalogWheel(
         else withContext(Dispatchers.IO) { db.search(query, 8) }
     }
 
-    fun addRow(name: String, productId: String) {
+    fun addRow(name: String, productId: String, fact: String = "", barcode: String = "") {
         val n = name.trim()
         if (n.isEmpty()) return
         val existing = rows.firstOrNull {
@@ -337,10 +348,17 @@ fun CatalogWheel(
         }
         if (existing != null) {
             focusTarget = existing
-            Toast.makeText(ctx, "Этот товар уже в списке", Toast.LENGTH_SHORT).show()
+            if (fact.isNotBlank()) {
+                // сканером: товар уже в списке — +1
+                existing.fact = fmtQ(bwQty(existing.fact) + 1)
+                Haptics.pulse(ctx, Haptics.TAP)
+                CountAnnouncer.tap(ctx, existing)
+            } else Toast.makeText(ctx, "Этот товар уже в списке", Toast.LENGTH_SHORT).show()
         } else {
             // новый товар — на самый верх списка
             val fresh = ItemRow(n, "", extra = true, productId = productId)
+            if (fact.isNotBlank()) fresh.fact = fact
+            if (barcode.isNotBlank()) fresh.barcode = barcode
             rows.add(0, fresh)
             focusTarget = fresh
         }
@@ -349,15 +367,88 @@ fun CatalogWheel(
         onAdded()
     }
 
+    // штрих-код (камера или внешний сканер): строка с этим кодом +1, иначе товар из каталога добавляется со счётом 1
+    fun onCode(raw: String, mode: String?) {
+        val code = raw.trim()
+        if (code.isEmpty()) return
+        val br = bindRow
+        if (mode == "bind" && br != null) {
+            br.barcode = code
+            Haptics.pulse(ctx, Haptics.TAP)
+            Toast.makeText(ctx, "Штрих-код привязан: ${br.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
+        scope.launch {
+            val row = rows.firstOrNull { sameBarcode(it.barcode, code) }
+            if (row != null) {
+                row.fact = fmtQ(bwQty(row.fact) + 1)
+                focusTarget = row; addTick++
+                Haptics.pulse(ctx, Haptics.TAP)
+                CountAnnouncer.tap(ctx, row)
+                return@launch
+            }
+            val p = withContext(Dispatchers.IO) { db.findByBarcode(code) }
+            if (p != null) addRow(p.name, p.id, fact = "1", barcode = code)
+            else if (inventory) unknownCode = code
+            else Toast.makeText(ctx, "Штрих-код не найден в каталоге: $code", Toast.LENGTH_LONG).show()
+        }
+    }
+    val onCodeRef = rememberUpdatedState<(String, String?) -> Unit> { c, m -> onCode(c, m) }
+    val scanModeRef = rememberUpdatedState(scanMode)
+    if (scanner) {
+        DisposableEffect(Unit) {
+            val h: (String) -> Unit = { c -> if (scanModeRef.value == null) onCodeRef.value(c, "add") }
+            BtScan.handler = h
+            onDispose { if (BtScan.handler === h) BtScan.handler = null }
+        }
+    }
+    unknownCode?.let { code ->
+        var nm by remember(code) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { unknownCode = null },
+            title = { Text("Товара нет в базе") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Штрих-код $code. Наберите название — вес и упаковку пишите прямо в названии.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = nm, onValueChange = { nm = germanKeys(it) },
+                        label = { Text("Название товара") }, singleLine = false, modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(enabled = nm.isNotBlank(), onClick = { addRow(nm, "", fact = "1", barcode = code); unknownCode = null }) { Text("Добавить") }
+            },
+            dismissButton = { TextButton(onClick = { unknownCode = null }) { Text("Отмена") } }
+        )
+    }
+    scanMode?.let { mode ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { scanMode = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
+        ) {
+            Surface(Modifier.fillMaxSize()) {
+                ScannerScreen(
+                    prefs = remember { Prefs(ctx) },
+                    continuous = false,
+                    status = "",
+                    onResult = { raw -> scanMode = null; onCodeRef.value(raw, mode) },
+                    onClose = { scanMode = null }
+                )
+            }
+        }
+    }
+
     Column(modifier) {
         BWareSearchField(
             query = query,
-            onChange = { query = it },
+            onChange = { query = germanKeys(it) },
             onAdd = {
                 val typed = query.trim()
                 val pid = suggestions.firstOrNull { it.name.trim().equals(typed, true) }?.id.orEmpty()
                 addRow(typed, pid)
-            }
+            },
+            onScan = if (scanner) ({ scanMode = "add" }) else null
         )
         if (errorText.isNotBlank()) {
             Text(errorText, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
@@ -371,10 +462,12 @@ fun CatalogWheel(
                 addTick = addTick,
                 emptyText = emptyText,
                 showSearch = false,
-                bware = true,
+                bware = !inventory,
                 plain = true,
                 focusTarget = focusTarget,
-                onDetails = { r -> detailsRow = r }
+                onDetails = { r -> detailsRow = r },
+                onScanBind = if (scanner) ({ r -> bindRow = r; scanMode = "bind" }) else null,
+                photoButton = scanner
             )
             val typed = query.trim()
             if (typed.length >= MIN_SEARCH_CHARS) {

@@ -42,6 +42,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import android.widget.Toast
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -106,18 +107,18 @@ internal fun fmtQ(d: Double): String =
 
 /** Строки, подходящие под запрос (все слова запроса есть в названии); сначала те, что начинаются с запроса. */
 private fun findRows(rows: List<ItemRow>, q: String): List<ItemRow> {
-    val words = q.trim().lowercase().split(' ').filter { it.isNotEmpty() }
+    val words = foldDe(q.trim()).split(' ').filter { it.isNotEmpty() }
     if (words.isEmpty()) return emptyList()
     val w0 = words[0]
     return rows
         .filter { r ->
-            val n = r.name.lowercase()
+            val n = foldDe(r.name)
             val bc = r.barcode.lowercase()
             // слово запроса есть в названии или в штрих-коде строки
             words.all { n.contains(it) || (bc.isNotEmpty() && bc.contains(it)) }
         }
         .sortedBy { r ->
-            val n = r.name.lowercase()
+            val n = foldDe(r.name)
             when {
                 r.barcode.isNotEmpty() && r.barcode.lowercase().startsWith(w0) -> 0
                 n.startsWith(w0) -> 0
@@ -250,7 +251,7 @@ private fun ListSearchField(
             }
             BasicTextField(
                 value = query,
-                onValueChange = onChange,
+                onValueChange = { onChange(germanKeys(it)) },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -374,9 +375,14 @@ fun CountWheelList(
     /** true — через 10 секунд без касаний фокус сам встаёт в поле поиска и открывается клавиатура */
     idleKeyboard: Boolean = false,
     /** true — пока открыто другое окно (сканер, диалог), клавиатуру не вызываем */
-    idleBlock: Boolean = false
+    idleBlock: Boolean = false,
+    /** Код, пришедший от внешнего сканера через поле поиска (быстрый набор): строка +1. Другие данные (QR, адреса) в поиск не попадают. */
+    onScanCode: ((String) -> Unit)? = null,
+    /** кнопка «Фото» в свайпе влево (в «Инвентаре B-Ware»; в «Приёме по имени» есть всегда) */
+    photoButton: Boolean = false
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    val scanBurst = remember { longArrayOf(0L, 0L) } // [время последнего символа, символов подряд «быстро»]
     val searchFocus = remember { FocusRequester() }
     var searchFocused by remember { mutableStateOf(false) }
     val lastTouch = remember { longArrayOf(System.currentTimeMillis()) }
@@ -445,6 +451,33 @@ fun CountWheelList(
     val cycle = n + 1
     val hits = if (query.isBlank()) emptyList() else findRows(rows, query)
 
+    // ---- внешний сканер, который «печатает» в поле поиска: быстрые символы подряд ----
+    fun looksLikeBarcode(c: String) = c.length in 6..24 && c.all { it.isLetterOrDigit() || it in "-._" } && c.count { it.isDigit() } >= 5
+    fun looksLikeJunk(c: String) = c.length > 40 || c.any { it in ":/{}[]<>=&?@;|\\\n\t" } || c.startsWith("http", true) || c.startsWith("www.", true)
+    fun onSearchTyped(raw: String) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val added = raw.length - query.length
+        if (onScanCode != null && added > 0) {
+            scanBurst[1] = if (added >= 4 || now - scanBurst[0] < 40L) scanBurst[1] + added else added.toLong()
+            scanBurst[0] = now
+        } else if (added <= 0) scanBurst[1] = 0L
+        query = germanKeys(raw)
+    }
+    fun finishScanBurst() {
+        val burst = scanBurst[1] >= 4L
+        scanBurst[1] = 0L
+        if (!burst || onScanCode == null) return
+        val code = query.trim()
+        when {
+            code.isEmpty() -> {}
+            looksLikeJunk(code) -> { query = ""; Toast.makeText(appCtx, "Это не штрих-код — в поиск не вставлено", Toast.LENGTH_SHORT).show() }
+            looksLikeBarcode(code) -> { query = ""; onScanCode(code) }
+        }
+    }
+    LaunchedEffect(query) {
+        if (scanBurst[1] >= 4L) { delay(150); finishScanBurst() }
+    }
+
     fun pick(row: ItemRow) {
         focusBlink = true
         focusAfterIme = true
@@ -485,7 +518,35 @@ fun CountWheelList(
         }
     ) {
         if (showSearch) {
-            ListSearchField(query, { query = it }, onAdd, onScan, searchFocus, { searchFocused = it }) { hits.firstOrNull()?.let { pick(it) } }
+            ListSearchField(query, { onSearchTyped(it) }, onAdd, onScan, searchFocus, { searchFocused = it }) {
+                if (scanBurst[1] >= 4L && onScanCode != null) finishScanBurst() else hits.firstOrNull()?.let { pick(it) }
+            }
+            // вторая строка под поиском: выбранный товар (посередине барабана) — всегда, с клавиатурой и без неё
+            if (bigRows) {
+                val sel = selectedRow
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp).border(2.dp, MaterialTheme.colorScheme.tertiary, RoundedCornerShape(10.dp))
+                ) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            sel?.name ?: "Выбранный товар — посередине списка",
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (sel != null) {
+                            Spacer(Modifier.width(8.dp))
+                            val plan = parseQ(sel.qty)
+                            Text(
+                                if (sel.extra || plan <= 0.0) fmtQ(parseQ(sel.fact)) else fmtQ(parseQ(sel.fact)) + " / " + fmtQ(plan),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
@@ -540,8 +601,8 @@ fun CountWheelList(
                             onEdit = { editing = row },
                             onDelete = { rows.remove(row) },
                             onEan = onScanBind?.let { cb -> { cb(row) } },
-                            onPickQty = if (nameMode && !bware) ({ qtyRow = row }) else null,
-                            onPhoto = if (nameMode && !bware) ({ photoRow = row; takePhoto() }) else null
+                            onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
+                            onPhoto = if ((nameMode && !bware) || photoButton) ({ photoRow = row; takePhoto() }) else null
                         )
                     }
                 }
@@ -567,8 +628,8 @@ fun CountWheelList(
                                 scrollToRow(listState, k, cycle, rowPx, true)
                                 memo[0] = fr
                                 // строка встала на середину — мигнуть два раза
+                                selectedRow = fr
                                 if (focusBlink) {
-                                    selectedRow = fr
                                     blinkRow = fr
                                     blinkTick++
                                 }
@@ -598,6 +659,8 @@ fun CountWheelList(
                                 // импульс, когда на середину пришла другая строка (первое значение — просто запоминаем)
                                 if (memo[0] != null && memo[0] !== it) Haptics.pulse(appCtx, Haptics.LIST)
                                 memo[0] = it
+                                // выбранная строка = та, что на середине: поиск, сканер или прокрутка — цвет один и тот же
+                                selectedRow = it
                             }
                         }
                     }
@@ -632,8 +695,8 @@ fun CountWheelList(
                                     onEdit = { editing = row },
                                     onDelete = { rows.remove(row) },
                                     onEan = onScanBind?.let { cb -> { cb(row) } },
-                                    onPickQty = if (nameMode && !bware) ({ qtyRow = row }) else null,
-                                    onPhoto = if (nameMode && !bware) ({ photoRow = row; takePhoto() }) else null
+                                    onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
+                                    onPhoto = if ((nameMode && !bware) || photoButton) ({ photoRow = row; takePhoto() }) else null
                                 )
                             }
                         }
@@ -761,6 +824,7 @@ private fun WheelRow(
     val scheme = MaterialTheme.colorScheme
     // кнопки свайпа сами закрываются через 5 секунд, если их не трогали
     var dragging by remember { mutableStateOf(false) }
+    var dragStartX by remember { mutableFloatStateOf(0f) }
     val swipeOpen by remember { derivedStateOf { anim.value < -1f } }
     LaunchedEffect(swipeOpen, dragging) {
         if (swipeOpen && !dragging) {
@@ -914,7 +978,7 @@ private fun WheelRow(
         // сама строка: свайп вправо — срок годности, влево — кнопки; тап = +1; долгое нажатие — причины (B-Ware) или правка
         // «Приём по имени»: порог движения пальца выше обычного — лёгкое смещение при тапе не считается свайпом
         val baseVc = LocalViewConfiguration.current
-        val vc = remember(baseVc, centerOnly) { if (centerOnly && !plain) WideSlopConfig(baseVc, baseVc.touchSlop * 2.5f) else baseVc }
+        val vc = remember(baseVc, centerOnly) { if (centerOnly && !plain) WideSlopConfig(baseVc, baseVc.touchSlop * SWIPE_SLOP_MULT) else baseVc }
         CompositionLocalProvider(LocalViewConfiguration provides vc) {
         Row(
             Modifier.offset { IntOffset(anim.value.roundToInt(), 0) }
@@ -960,16 +1024,21 @@ private fun WheelRow(
                     state = rememberDraggableState { delta ->
                         scope.launch { anim.snapTo((anim.value + delta).coerceIn(-maxPx, rightPx)) }
                     },
-                    onDragStarted = { dragging = true },
+                    onDragStarted = { dragging = true; dragStartX = anim.value },
                     onDragStopped = { velocity ->
                         dragging = false
                         scope.launch {
-                            if (anim.value > rightPx * 0.6f) {
+                            if (anim.value > rightPx * 0.3f) {
                                 // протянули вправо — открыть выбор срока годности
                                 onPickExpiry()
                                 anim.animateTo(0f)
                             } else {
-                                anim.animateTo(if (anim.value < -maxPx / 2f || velocity < -1200f) -maxPx else 0f)
+                                // решает не «половина всех кнопок», а то, куда и насколько двинули палец (кнопок до 5 — полпути было слишком далеко)
+                                val moved = anim.value - dragStartX
+                                val need = with(density) { SWIPE_OPEN_DP.dp.toPx() }
+                                val wasOpen = dragStartX < -1f
+                                val open = if (wasOpen) !(moved > need || velocity > 250f) else (moved < -need || velocity < -250f)
+                                anim.animateTo(if (open) -maxPx else 0f)
                             }
                         }
                     }
@@ -1062,6 +1131,11 @@ private fun WheelRow(
 private class WideSlopConfig(private val base: ViewConfiguration, private val slop: Float) : ViewConfiguration by base {
     override val touchSlop: Float get() = slop
 }
+
+/** Во сколько раз порог «это уже свайп» больше стандартного (тап с лёгким смещением остаётся тапом). */
+private const val SWIPE_SLOP_MULT = 1.0f
+/** Сколько dp надо протянуть строку, чтобы кнопки открылись (или закрылись). */
+private const val SWIPE_OPEN_DP = 18f
 
 private const val MAX_COUNT = 9999
 private const val PAD_ITEMS = 2 // пустые строки сверху и снизу, чтобы 0 и 9999 тоже вставали в середину
@@ -1223,7 +1297,7 @@ private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
         title = { Text("Правка строки") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(name, { name = germanKeys(it) }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
                 if (!row.extra) {
                     OutlinedTextField(
                         plan, { plan = it }, label = { Text("План (по документу)") }, singleLine = true,

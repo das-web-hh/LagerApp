@@ -160,7 +160,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
             fileHits = try {
                 Folders.load(ctx)
                 Folders.scanAll(ctx, false)
-                    .filter { if (qd != null) matchesDate(it, qd) else it.name.contains(q, ignoreCase = true) }
+                    .filter { if (qd != null) matchesDate(it, qd) else foldDe(it.name).contains(foldDe(q)) }
                     .sortedByDescending { effMillis(it) }
                     .take(30)
             } catch (e: Exception) { emptyList() }
