@@ -137,7 +137,7 @@ private fun statusOf(l: Line): Status = when {
 private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
 /** full = общий акт (все позиции); иначе только расхождения. null — расхождений нет. Язык(и) — по настройкам печати. */
-private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: String, full: Boolean): String? {
+private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: String, full: Boolean, qrHtml: String = ""): String? {
     val ls = lines(job)
     val short = ls.filter { statusOf(it).kind == 1 }
     val excess = ls.filter { statusOf(it).kind == 2 }
@@ -218,7 +218,17 @@ private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: S
             sb.append("</table>")
         }
     }
-    return DocLayout.page(top, sb.toString(), "<div></div>" + DocLayout.signBlock(receiver, now), after = itemPhotosHtml(ctx, job))
+    return DocLayout.page(top, sb.toString(), (if (qrHtml.isNotBlank()) "<div>$qrHtml</div>" else "<div></div>") + DocLayout.signBlock(receiver, now), after = itemPhotosHtml(ctx, job))
+}
+
+/** Фото документа: новых товаров и брака (они же печатаются на последних листах). */
+private fun photosOf(job: AutoJob): List<String> =
+    job.items.flatMap { listOf(it.photo) + (if (num(it.defect) > 0) it.defectPhotos.toList() else emptyList()) }.filter { it.isNotBlank() }
+
+/** Номер документа для QR: из штампа времени накладной, а без него короткий код по имени файла. */
+private fun qrNumberOf(job: AutoJob): String {
+    val st = job.stamp.filter { it.isLetterOrDigit() }
+    return if (st.length >= 8) "R$st" else "R" + Integer.toHexString(job.file.name.hashCode()).uppercase().padStart(8, '0')
 }
 
 /** Одна фото-карточка 6×8 см с подписью; null — файла нет. */
@@ -370,6 +380,7 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
         )
     }
 
+    val printScope = rememberCoroutineScope()
     if (printOpen) {
         AlertDialog(
             onDismissRequest = { printOpen = false },
@@ -379,11 +390,14 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
                     OutlinedButton(
                         onClick = {
                             printOpen = false
-                            val html = buildReport(ctx, job, f, receiver, false)
-                            if (html == null) {
-                                Toast.makeText(ctx, "Расхождений нет", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Printer.print(ctx, jobName + "_расхождения", html)
+                            printScope.launch {
+                                val qr = PhotoQr.html(ctx, qrNumberOf(job), photosOf(job))
+                                val html = buildReport(ctx, job, f, receiver, false, qr)
+                                if (html == null) {
+                                    Toast.makeText(ctx, "Расхождений нет", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Printer.print(ctx, jobName + "_расхождения", html)
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
@@ -392,7 +406,10 @@ fun NameSummaryScreen(job: AutoJob, f: IncomingFile, receiver: String, onBack: (
                     OutlinedButton(
                         onClick = {
                             printOpen = false
-                            buildReport(ctx, job, f, receiver, true)?.let { Printer.print(ctx, jobName, it) }
+                            printScope.launch {
+                                val qr = PhotoQr.html(ctx, qrNumberOf(job), photosOf(job))
+                                buildReport(ctx, job, f, receiver, true, qr)?.let { Printer.print(ctx, jobName, it) }
+                            }
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Всё") }

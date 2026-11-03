@@ -725,6 +725,35 @@ private fun PrintSettings(prefs: Prefs, onBack: () -> Unit) {
                 }
             )
         }
+        Spacer(Modifier.height(20.dp))
+        var photoQr by remember { mutableStateOf(PhotoQr.enabled(ctx)) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("QR-код с фото на документе", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Если в документе есть фото, внизу листа печатается QR-код со ссылкой на цветные фото именно этого документа. " +
+                        "Кто отсканирует код, скачает только эти фото; остальное на Диске не открывается. " +
+                        "Нужны настроенный Google Диск и обновлённый скрипт Диска.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(checked = photoQr, onCheckedChange = { photoQr = it; PhotoQr.setEnabled(ctx, it) })
+        }
+        Spacer(Modifier.height(20.dp))
+        var docCam by remember { mutableStateOf(DocCam.enabled(ctx)) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Съёмка фото с чёрно-белым просмотром", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Фото товара и брака снимаются нашей камерой: сразу видно, каким получится чёрно-белый лист, " +
+                        "яркость и контраст настраиваются ползунками (против бликов и тёмных кадров). " +
+                        "В печать идёт чёрно-белая версия, а цветной оригинал сохраняется как есть. " +
+                        "Выключено — обычная камера телефона.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(checked = docCam, onCheckedChange = { docCam = it; DocCam.setEnabled(ctx, it) })
+        }
         Spacer(Modifier.height(24.dp))
         Text("Адрес в шапке документов", style = MaterialTheme.typography.titleMedium)
         Text(

@@ -114,7 +114,7 @@ object InventoryStore {
 private fun invTotal(j: InvJob) = j.rows.sumOf { parseQ(it.fact) }
 
 /** Документ для печати и PDF: таблица с количеством, браком и сроком, фото — отдельным листом. */
-private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: String): String {
+private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: String, qrHtml: String = ""): String {
     val info = DocLayout.info(
         listOf(
             tr("compiled_by") to bwDash(receiver),
@@ -136,7 +136,7 @@ private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Strin
     sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th></th><th class='n'>${bwFmt(total)}</th><th class='n'>${if (totalDef > 0.0) bwFmt(totalDef) else ""}</th><th></th></tr></table>")
     val bottom = "<div class='sg'>${Signature.cell("sig_compiled", receiver, now)}</div>" +
         "<div class='sg'>${Signature.cell("sig_checked", "", now, auto = false)}</div>"
-    return DocLayout.page(top, sb.toString(), bottom, after = photosHtml)
+    return DocLayout.page(top, sb.toString(), (if (qrHtml.isNotBlank()) "<div>$qrHtml</div>" else "") + bottom, after = photosHtml)
 }
 
 /** Таблица для Excel (CSV с «;», UTF-8 с BOM). */
@@ -272,7 +272,8 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
         val stamp = remember { System.currentTimeMillis() }
         val photoNames = job.rows.map { it.photo }.filter { it.isNotBlank() }
         val photosHtml by produceState("", photoNames) { value = bwPhotosHtml(ctx, photoNames) }
-        val html = invDocHtml(job, receiver, stamp, photosHtml)
+        val qrHtml by produceState("", photoNames) { value = PhotoQr.html(ctx, "INV" + job.id.replace("-", "").take(8).uppercase(), photoNames) }
+        val html = invDocHtml(job, receiver, stamp, photosHtml, qrHtml)
         val fileBase = "Инвентаризация_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.ROOT).format(Date(stamp))
         var busy by remember { mutableStateOf(false) }
         var sendDlg by remember { mutableStateOf(false) }

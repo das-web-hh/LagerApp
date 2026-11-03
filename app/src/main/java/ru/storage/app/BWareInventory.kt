@@ -93,7 +93,7 @@ object InvOptions {
 private fun bullets(list: List<String>) =
     if (list.isEmpty()) "—" else list.joinToString("<br>") { "• " + bwEsc(trOpt(it)) }
 
-private fun invHtml(receiver: String, now: Long, photosHtml: String = ""): String {
+private fun invHtml(receiver: String, now: Long, photosHtml: String = "", qrHtml: String = ""): String {
     val info = DocLayout.info(
         listOf(
             tr("compiled_by") to bwDash(receiver),
@@ -121,7 +121,7 @@ private fun invHtml(receiver: String, now: Long, photosHtml: String = ""): Strin
     if (anyDisposed) sb.append("<div class='sub' style='margin-top:10px;font-size:12px'>${bwEsc(tr("disposed_note"))}</div>")
     val bottom = "<div class='sg'>${Signature.cell("sig_compiled", receiver, now)}</div>" +
         "<div class='sg'>${Signature.cell("sig_checked", "", now, auto = false)}</div>"
-    return DocLayout.page(top, sb.toString(), bottom, after = photosHtml)
+    return DocLayout.page(top, sb.toString(), (if (qrHtml.isNotBlank()) "<div>$qrHtml</div>" else "") + bottom, after = photosHtml)
 }
 
 /** CSV для Excel: разделитель «;», UTF-8 с BOM. */
@@ -158,7 +158,9 @@ fun BWareInventoryScreen(receiver: String, onBack: () -> Unit) {
         val stamp = remember { System.currentTimeMillis() }
         val photoNames = h.rows.map { it.photo }.filter { it.isNotBlank() }
         val photosHtml by produceState("", photoNames) { value = bwPhotosHtml(ctx, photoNames) }
-        val html = invHtml(receiver, stamp, photosHtml)
+        val qrNumber = remember { "INV" + SimpleDateFormat("yyMMddHHmm", Locale.ROOT).format(Date(stamp)) }
+        val qrHtml by produceState("", photoNames) { value = PhotoQr.html(ctx, qrNumber, photoNames) }
+        val html = invHtml(receiver, stamp, photosHtml, qrHtml)
         val scope = rememberCoroutineScope()
         var busy by remember { mutableStateOf(false) }
         val fileBase = "Инвентарь_BWare_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.ROOT).format(Date(stamp))

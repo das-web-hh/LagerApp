@@ -250,10 +250,10 @@ object DriveApi {
     }
 
     /** Загрузка готового массива байт (используется для частей APK). Файл с таким именем повторно не создаётся. */
-    fun uploadBytes(ctx: Context, name: String, mime: String, data: ByteArray) {
+    fun uploadBytes(ctx: Context, name: String, mime: String, data: ByteArray, folderId: String? = null) {
         val o = JSONObject()
             .put("action", "upload")
-            .put("folderId", DriveCfg.folder(ctx))
+            .put("folderId", folderId ?: DriveCfg.folder(ctx))
             .put("token", DriveCfg.token(ctx))
             .put("fileName", name)
             .put("mimeType", mime)
@@ -261,6 +261,21 @@ object DriveApi {
             .put("makePublic", false)
             .put("contentBase64", Base64.encodeToString(data, Base64.NO_WRAP))
         check(http(DriveCfg.url(ctx), o.toString()))
+    }
+
+    /**
+     * Отдельная папка «QR-<name>» внутри рабочей папки Диска, открытая по ссылке (только просмотр и скачивание).
+     * Повторный вызов с тем же именем возвращает ту же папку. Нужен обновлённый скрипт Диска (действие mkshare).
+     * Возвращает (id папки, ссылка).
+     */
+    fun makeShare(ctx: Context, name: String): Pair<String, String> {
+        val o = JSONObject()
+            .put("action", "mkshare")
+            .put("folderId", DriveCfg.folder(ctx))
+            .put("token", DriveCfg.token(ctx))
+            .put("name", name)
+        val r = check(http(DriveCfg.url(ctx), o.toString()))
+        return r.getString("folderId") to r.getString("url")
     }
 
     /** Содержимое файла по имени; null, если файла на Диске нет. */

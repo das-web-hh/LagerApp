@@ -154,7 +154,7 @@ internal const val BW_CSS =
         Signature.CSS
 
 /** HTML документа приёма для предпросмотра и печати. Язык(и) и автоподпись — по настройкам печати. */
-private fun bwareHtml(receiver: String, now: Long, photosHtml: String = ""): String {
+private fun bwareHtml(receiver: String, now: Long, photosHtml: String = "", qrHtml: String = ""): String {
     val h = BWareHolder
     // слева — только значения, как в образце; пустое значение — «–»
     val info = DocLayout.info(
@@ -185,8 +185,8 @@ private fun bwareHtml(receiver: String, now: Long, photosHtml: String = ""): Str
         trList("driver_signed").forEach { sb.append(Signature.handwritten(it, 900.0)) }
         sb.append("</div>")
     }
-    // внизу листа — только подпись (QR-кода нет)
-    val bottom = "<div></div>" + DocLayout.signBlock(receiver, now)
+    // внизу листа: слева QR со ссылкой на цветные фото (если включено в настройках и фото есть), справа подпись
+    val bottom = (if (qrHtml.isNotBlank()) "<div>$qrHtml</div>" else "<div></div>") + DocLayout.signBlock(receiver, now)
     return DocLayout.page(top, sb.toString(), bottom, after = photosHtml)
 }
 
@@ -207,7 +207,8 @@ private suspend fun bwPrintAndSave(ctx: Context, jobName: String, receiver: Stri
     val code = h.ensureCode()
     val driveOn = DriveCfg.ready(app)
     // документ с фото на втором листе (6×8 см): один и тот же и для печати, и для PDF на Диске
-    val html = bwareHtml(receiver, stamp, bwPhotosHtml(app, h.photos.toList()))
+    val qr = PhotoQr.html(app, code, h.photos.toList())
+    val html = bwareHtml(receiver, stamp, bwPhotosHtml(app, h.photos.toList()), qr)
 
     Printer.print(ctx, jobName, html)
 

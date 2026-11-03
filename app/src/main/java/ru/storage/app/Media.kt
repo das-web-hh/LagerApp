@@ -148,6 +148,8 @@ object Media {
     fun finishCamera(ctx: Context, name: String, db: ProductDb) {
         shrink(file(ctx, name))
         db.addUpload(name)
+        // режим «Съёмка для документов»: чёрно-белая версия для печати (цветной оригинал остаётся как есть и уходит на Диск)
+        if (DocCam.enabled(ctx)) DocCam.makePrint(ctx, name)
     }
 
     /** Отправка ожидающих файлов на Google Диск в фоне; при ошибке повторится при следующем вызове. */
@@ -204,6 +206,7 @@ object Media {
         val pending = db.pendingUploads().toSet()
         for (n in names) {
             file(app, n).delete()
+            DocCam.drop(app, n)
             db.removeUpload(n)
             if (n !in pending && DriveCfg.ready(app) && Session.isAdmin) {
                 bg.launch {
@@ -322,10 +325,24 @@ fun MediaButtons(kind: String, allowFile: Boolean, onAdded: (String) -> Unit) {
             } else Media.file(ctx, name).delete()
         }
     }
+    var liveName by remember { mutableStateOf<String?>(null) }
     fun startCamera() {
         val (name, uri) = Media.cameraTarget(ctx, kind)
         pendingCam = name
-        camLauncher.launch(uri)
+        if (DocCam.enabled(ctx)) liveName = name else camLauncher.launch(uri)
+    }
+    liveName?.let { n ->
+        LiveCameraDialog(Media.file(ctx, n)) { ok ->
+            liveName = null
+            val name = pendingCam
+            pendingCam = null
+            if (name != null) {
+                if (ok) scope.launch {
+                    withContext(Dispatchers.IO) { Media.finishCamera(ctx, name, db) }
+                    cb(name)
+                } else Media.file(ctx, name).delete()
+            }
+        }
     }
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startCamera()
@@ -368,10 +385,24 @@ fun rememberPhotoCapture(kind: String, onAdded: (String) -> Unit): () -> Unit {
             } else Media.file(ctx, name).delete()
         }
     }
+    var liveName by remember { mutableStateOf<String?>(null) }
     fun startCamera() {
         val (name, uri) = Media.cameraTarget(ctx, kind)
         pendingCam = name
-        camLauncher.launch(uri)
+        if (DocCam.enabled(ctx)) liveName = name else camLauncher.launch(uri)
+    }
+    liveName?.let { n ->
+        LiveCameraDialog(Media.file(ctx, n)) { ok ->
+            liveName = null
+            val name = pendingCam
+            pendingCam = null
+            if (name != null) {
+                if (ok) scope.launch {
+                    withContext(Dispatchers.IO) { Media.finishCamera(ctx, name, db) }
+                    cb(name)
+                } else Media.file(ctx, name).delete()
+            }
+        }
     }
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startCamera()

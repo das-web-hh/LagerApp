@@ -147,6 +147,7 @@ function doPost(e) {
     var action = String(payload.action || 'upload').toLowerCase();
     if (action === 'delete') return deleteByName_(payload);
     if (action === 'init') return initResumable_(payload);
+    if (action === 'mkshare') return makeShare_(payload);
     if (action !== 'upload') {
       return json_({ok: false, error: 'Неизвестное действие: ' + action});
     }
@@ -186,6 +187,19 @@ function doPost(e) {
   } catch (error) {
     return json_({ok: false, error: errorMessage_(error)});
   }
+}
+
+// QR на документе: отдельная папка «QR-<имя>» внутри рабочей папки, открытая по ссылке только на просмотр.
+// Ссылка ведёт только в эту папку (в ней лежат цветные фото одного документа), остальное содержимое Диска не открывается.
+function makeShare_(payload) {
+  var root = getFolder_(payload.folderId);
+  var name = String(payload.name || '').trim();
+  if (!/^[A-Za-z0-9_-]{4,40}$/.test(name)) throw new Error('Некорректное имя папки.');
+  var folderName = 'QR-' + name;
+  var it = root.getFoldersByName(folderName);
+  var folder = it.hasNext() ? it.next() : root.createFolder(folderName);
+  folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return json_({ok: true, folderId: folder.getId(), url: folder.getUrl(), message: 'Папка открыта по ссылке.'});
 }
 
 // Android: большой файл. Скрипт только открывает «возобновляемую» сессию загрузки в Drive и отдаёт её адрес;

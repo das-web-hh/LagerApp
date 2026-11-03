@@ -89,6 +89,15 @@ object PrintPhoto {
 
     /** Файл фото → серый JPEG в base64 для вставки в HTML документа; null — файла нет или он не читается. */
     fun base64(f: File): String? {
+        // снято камерой «для документов»: чёрно-белая версия уже готова по настройкам с экрана камеры
+        val ready = File(File(f.parentFile?.parentFile, "printbw"), f.name)
+        if (ready.exists() && ready.length() > 0L) {
+            Media.thumb(ready, 900)?.let { b ->
+                val bos = ByteArrayOutputStream()
+                b.compress(Bitmap.CompressFormat.JPEG, 88, bos)
+                return android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            }
+        }
         val bmp = Media.thumb(f, 900) ?: return null
         val gray = prepare(bmp)
         val bos = ByteArrayOutputStream()
