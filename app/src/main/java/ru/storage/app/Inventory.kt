@@ -141,7 +141,7 @@ table.inv tr{page-break-inside:avoid}
 table.inv td{height:17.5mm}
 td.n{font-size:12pt;font-weight:bold;word-break:break-all;line-height:1.05}
 td.a{font-size:9pt;font-weight:bold;word-break:break-all}
-td.t{text-align:left;font-size:8.5pt;line-height:1.25;padding-left:5px}
+td.t{text-align:left;font-size:11pt;font-weight:600;line-height:1.25;padding-left:5px}
 td.q{font-size:14pt;font-weight:bold}
 td.q .d{font-size:7.5pt;font-weight:normal;color:#b00}
 td.e{font-size:10pt;font-weight:bold}
@@ -154,16 +154,18 @@ tr.tot td{height:9mm;font-weight:bold;font-size:10pt;background:#f7f7f7}
 /** Документ для печати и PDF: как образец «Коробка №» (№, артикул, название, штрих-код картинкой, штук, срок годности). Фото и QR идут ниже. */
 private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: String, qrHtml: String = "", articles: List<String> = emptyList()): String {
     val sb = StringBuilder()
+    val L = PrintCfg.invLang
+    fun t(ru: String, en: String, de: String) = when (L) { "en" -> en; "de" -> de; else -> ru }
     sb.append("<html><head><meta charset='utf-8'><style>").append(INV_CSS).append("</style></head><body>")
-    sb.append("<div class='ttl'><span class='h'>Коробка №</span><span class='ln'></span></div>")
+    sb.append("<div class='ttl'><span class='h'>${t("Коробка №", "Box No.", "Karton Nr.")}</span><span class='ln'></span></div>")
     val meta = listOfNotNull(
-        j.address.trim().takeIf { it.isNotEmpty() }?.let { "Склад: ${bwEsc(it)}" },
+        j.address.trim().takeIf { it.isNotEmpty() }?.let { "${t("Склад", "Warehouse", "Lager")}: ${bwEsc(it)}" },
         fmtTime(now),
         bwEsc(bwDash(receiver)).takeIf { receiver.isNotBlank() }
     ).joinToString(" · ")
     sb.append("<div class='meta'>$meta</div>")
     sb.append("<table class='inv'><colgroup><col style='width:7%'><col style='width:13%'><col style='width:27%'><col style='width:30%'><col style='width:8%'><col style='width:15%'></colgroup>")
-    sb.append("<thead><tr><th>№</th><th>Артикул</th><th>Название товара</th><th>Штрих-код</th><th>Штук</th><th>Срок годн.<br>(MHD)</th></tr></thead><tbody>")
+    sb.append("<thead><tr><th>№</th><th>${t("Артикул", "Article", "Artikel")}</th><th>${t("Название товара", "Product name", "Produktname")}</th><th>${t("Штрих-код", "Barcode", "Barcode")}</th><th>${t("Штук", "Pcs", "Stück")}</th><th>${t("Срок годн.", "Best before", "Haltbar bis")}<br>(MHD)</th></tr></thead><tbody>")
     var total = 0.0
     j.rows.forEachIndexed { i, r ->
         val q = parseQ(r.fact)
@@ -173,10 +175,10 @@ private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Strin
         sb.append("<td class='a'>${bwEsc(articles.getOrNull(i).orEmpty())}</td>")
         sb.append("<td class='t'>${bwEsc(r.name.trim())}</td>")
         sb.append("<td>${Ean.html(r.barcode)}</td>")
-        sb.append("<td class='q'>${bwFmt(q)}${if (d > 0.0) "<div class='d'>брак ${bwFmt(d)}</div>" else ""}</td>")
+        sb.append("<td class='q'>${bwFmt(q)}${if (d > 0.0) "<div class='d'>${t("брак", "defect", "defekt")} ${bwFmt(d)}</div>" else ""}</td>")
         sb.append("<td class='e'>${bwEsc(r.expiry)}</td></tr>")
     }
-    sb.append("<tr class='tot'><td></td><td></td><td style='text-align:right;padding-right:6px'>Итого</td><td></td><td class='q' style='font-size:12pt'>${bwFmt(total)}</td><td></td></tr>")
+    sb.append("<tr class='tot'><td></td><td></td><td style='text-align:right;padding-right:6px'>${t("Итого", "Total", "Gesamt")}</td><td></td><td class='q' style='font-size:12pt'>${bwFmt(total)}</td><td></td></tr>")
     sb.append("</tbody></table>")
     if (qrHtml.isNotBlank()) sb.append("<div class='sg'>$qrHtml</div>")
     if (photosHtml.isNotBlank()) sb.append(photosHtml)

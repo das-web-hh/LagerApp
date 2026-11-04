@@ -231,8 +231,8 @@ fun CountOverlay() {
         alpha.animateTo(0f, tween(FADE_MS.toInt()))
     }
 
-    // Палец закрывает середину экрана: центр цифры ставим на 25% высоты экрана сверху (на границе между 1-й и 2-й четвертями),
-    // по горизонтали — по центру. Окно, в котором лежит список, может быть ниже верха экрана — считаем по координатам окна.
+    // Палец закрывает середину экрана: центр цифры ставим в самом верху окна (12% высоты экрана — на уровне поиска и строки
+    // отправителя / заказа), по горизонтали — по центру. Окно, в котором лежит список, может быть ниже верха экрана — считаем по координатам окна.
     val screenH = LocalView.current.rootView.height
     var boxTop by remember { mutableIntStateOf(0) }
     var boxH by remember { mutableIntStateOf(0) }
@@ -248,7 +248,7 @@ fun CountOverlay() {
                 Modifier
                     .align(Alignment.TopCenter)
                     .offset {
-                        val y = (screenH * 0.25f - boxTop - numH / 2f).roundToInt()
+                        val y = (screenH * 0.12f - boxTop - numH / 2f).roundToInt()
                         IntOffset(0, y.coerceIn(0, (boxH - numH).coerceAtLeast(0)))
                     }
                     .onSizeChanged { numH = it.height }

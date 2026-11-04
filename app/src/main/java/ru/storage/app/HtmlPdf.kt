@@ -33,8 +33,9 @@ object HtmlPdf {
                         // небольшая пауза: картинки и вёрстка успевают дорисоваться
                         view.postDelayed({
                             val out = File(app.cacheDir, "bw_${System.nanoTime()}.pdf")
+                            val land = html.contains("name=\"x-landscape\"")
                             val attrs = PrintAttributes.Builder()
-                                .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                                .setMediaSize(if (land) PrintAttributes.MediaSize.ISO_A4.asLandscape() else PrintAttributes.MediaSize.ISO_A4)
                                 .setResolution(PrintAttributes.Resolution("pdf", "pdf", 300, 300))
                                 .setMinMargins(margins(12))
                                 .build()

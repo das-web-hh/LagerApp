@@ -62,6 +62,7 @@ object CloudSettings {
             "printLangs" to PrintCfg.codes(),
             "printSign" to PrintCfg.sign,
             "docAddress" to PrintCfg.address,
+            "invLang" to PrintCfg.invLang,
             "screenOn" to ScreenCfg.enabled,
             "screenMinutes" to ScreenCfg.minutes,
             "dateSimple" to DateCfg.simple,
@@ -111,7 +112,7 @@ object CloudSettings {
             prefs.formats = (snap.get("formats") as? List<*>)
                 ?.mapNotNull { (it as? Number)?.toInt() }?.toSet() ?: emptySet()
             snap.getString("theme")?.let { Ui.set(ctx, it) }
-            PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"), snap.getString("docAddress"))
+            PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"), snap.getString("docAddress"), snap.getString("invLang"))
             ScreenCfg.applyCloud(ctx, snap.getBoolean("screenOn"), snap.getLong("screenMinutes"))
             DateCfg.applyCloud(ctx, snap.getBoolean("dateSimple"))
             AutoPause.applyCloud(ctx, snap.getBoolean("autoPaused"))
@@ -708,6 +709,21 @@ private fun PrintSettings(prefs: Prefs, onBack: () -> Unit) {
             }
         }
         Text("Хотя бы один язык всегда остаётся включённым.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(20.dp))
+        Text("Язык документа «Инвентаризация»", style = MaterialTheme.typography.titleMedium)
+        Text("Документ инвентаризации печатается на одном языке.", style = MaterialTheme.typography.bodySmall)
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("ru" to "Русский", "en" to "English", "de" to "Deutsch").forEach { (code, label) ->
+                FilterChip(
+                    selected = PrintCfg.invLang == code,
+                    onClick = {
+                        PrintCfg.setInvLang(ctx, code)
+                        CloudSettings.save(ctx, prefs)
+                    },
+                    label = { Text(label) }
+                )
+            }
+        }
         Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {

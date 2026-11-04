@@ -1388,34 +1388,39 @@ private fun ColumnScope.NameModeMain(
     val senderText = job.sender.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
     val orderText = job.order.let { if (it.equals("none", true)) "" else it }.ifBlank { "—" }
 
-    // линия прогресса на самом верху окна: сколько процентов плана уже посчитано (половина — 50%, всё — 100%)
+    // Box нужен, чтобы круглая кнопка сканера могла стоять в любом месте окна, в том числе над верхней строкой
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
+    // Одна строка сверху: отправитель, сразу за ним проценты (цифры, другим цветом), затем номер заказа (цвет как у отправителя);
+    // «Далее» (или «Повторить») — с другой стороны экрана в этой же строке. Тап по тексту открывает правку.
+    // Процент = сколько плана уже посчитано (половина — 50%, всё — 100%); линии прогресса нет — место отдано списку.
     val planRows = job.items.filter { !it.extra }
     val planned = planRows.sumOf { normalizeQty(it.qty).toDoubleOrNull() ?: 0.0 }
     val counted = planRows.sumOf { minOf(normalizeQty(it.fact).toDoubleOrNull() ?: 0.0, normalizeQty(it.qty).toDoubleOrNull() ?: 0.0) }
     val pct = if (planned > 0) Math.round(counted / planned * 100).toInt().coerceIn(0, 100) else 0
-    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        LinearProgressIndicator(
-            progress = pct / 100f,
-            modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp))
-        )
-        Spacer(Modifier.width(8.dp))
-        Text("$pct%", fontWeight = FontWeight.Bold)
-    }
-    // 1-я строка: отправитель слева, номер заказа справа (над «Далее»); 2-я строка: «Далее» справа. Тап по тексту открывает правку
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            senderText, style = MaterialTheme.typography.titleMedium,
-            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp)
-        )
+        Row(
+            Modifier.weight(1f).clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                senderText, style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "$pct%", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary, maxLines = 1, softWrap = false
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                orderText, style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface, maxLines = 1, softWrap = false
+            )
+        }
         Spacer(Modifier.width(8.dp))
-        Text(
-            orderText, style = MaterialTheme.typography.titleMedium, maxLines = 1,
-            textAlign = androidx.compose.ui.text.style.TextAlign.End,
-            modifier = Modifier.clickable(enabled = editable) { editDoc = true }.padding(vertical = 4.dp)
-        )
-    }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
         if (job.failedState) {
             Button(onClick = { retryDlg = true }) { Text("Повторить") }
         } else {
@@ -1445,8 +1450,6 @@ private fun ColumnScope.NameModeMain(
         if (job.running) "" else "Список пуст",
         nameMode = true,
         onScan = { scanFor = "search" },
-        scanFab = true,
-        onScanFab = { scanStatus = ""; scanFor = "count" },
         onScanBind = { r -> bindIdx = job.items.indexOf(r); scanFor = "bind" },
         jumpTo = jumpTo, jumpTick = jumpTick,
         searchText = searchText, searchTick = searchTick,
@@ -1454,6 +1457,11 @@ private fun ColumnScope.NameModeMain(
         idleBlock = scanFor != null || conflict != null || editDoc || retryDlg,
         onScanCode = { c -> countRef.value(c, true) }
     )
+    }
+    if (editable && job.items.isNotEmpty()) {
+        FreeScanFab { scanStatus = ""; scanFor = "count" }
+    }
+    }
 
     scanFor?.let { mode ->
         Dialog(

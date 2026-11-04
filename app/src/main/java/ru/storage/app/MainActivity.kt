@@ -354,8 +354,10 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
         }
     }
 
-    // «Приём по имени»: при наборе меню остаётся на месте — его закрывает клавиатура, а не поднимает над ней
-    val hideBar = KeyboardState.open && Incoming.openPath != null
+    // Нижнее меню видно только на первых экранах четырёх вкладок (Главная, Работа, Прочее, Еще).
+    // Когда открыто мини-приложение (приём по наименованию, автоприём и т. д.) или любой вложенный экран — меню скрыто;
+    // назад ведёт системная кнопка «Назад».
+    val hideBar = Incoming.openPath != null || !TabRoot.flags[selected]
     Scaffold(
         bottomBar = {
             if (!hideBar) NavigationBar {

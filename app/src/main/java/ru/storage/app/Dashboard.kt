@@ -254,16 +254,17 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
                 containerColor = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.primary
             )
+            // сверху «Управление» (у не-админа «Задачи») и «Чат», под ними на всю ширину «Сканирование документа»
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ElevatedButton(onClick = startDocScan, colors = btnColors, modifier = Modifier.weight(1f)) { Text("Скан") }
+                ElevatedButton(onClick = { section = "Задачи" }, colors = btnColors, modifier = Modifier.weight(1f)) {
+                    BadgedBox(badge = { if (openTasks > 0) Badge { Text(openTasks.toString()) } }) { Text(if (Session.isAdmin) "Управление" else "Задачи") }
+                }
                 ElevatedButton(onClick = { section = "Чат" }, colors = btnColors, modifier = Modifier.weight(1f)) {
                     BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) { Text("Чат") }
                 }
             }
             Spacer(Modifier.height(8.dp))
-            ElevatedButton(onClick = { section = "Задачи" }, colors = btnColors, modifier = Modifier.fillMaxWidth()) {
-                BadgedBox(badge = { if (openTasks > 0) Badge { Text(openTasks.toString()) } }) { Text(if (Session.isAdmin) "Управление" else "Задачи") }
-            }
+            ElevatedButton(onClick = startDocScan, colors = btnColors, modifier = Modifier.fillMaxWidth()) { Text("Сканирование документа") }
             Spacer(Modifier.height(8.dp))
         }
         if (query.isNotEmpty()) {

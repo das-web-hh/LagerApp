@@ -20,9 +20,11 @@ import androidx.compose.ui.unit.Dp
 import android.content.Context
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -42,6 +44,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import android.widget.Toast
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -128,17 +131,24 @@ private fun findRows(rows: List<ItemRow>, q: String): List<ItemRow> {
         }
 }
 
-/** Строка, которая сейчас ближе всего к середине колеса (пустая строка цикла — null). */
-private fun centerRow(state: LazyListState, rows: List<ItemRow>, cycle: Int): ItemRow? {
+/**
+ * Линия выбора внутри списка. anchorPx == null — середина списка (обычное колесо).
+ * «Приём по имени»: линия проходит через вторую сверху строку — над выбранной остаётся ровно одна строка списка.
+ */
+private fun anchorLine(li: LazyListLayoutInfo, anchorPx: Float?): Float =
+    if (anchorPx != null) li.viewportStartOffset + anchorPx else (li.viewportStartOffset + li.viewportEndOffset) / 2f
+
+/** Строка, которая сейчас ближе всего к линии выбора (пустая строка цикла — null). */
+private fun centerRow(state: LazyListState, rows: List<ItemRow>, cycle: Int, anchorPx: Float? = null): ItemRow? {
     val li = state.layoutInfo
     if (li.viewportSize.height == 0) return null
-    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+    val c = anchorLine(li, anchorPx)
     val best = li.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - c) } ?: return null
     return rows.getOrNull(best.index % cycle)
 }
 
 /** Прокрутить колесо так, чтобы строка k оказалась посередине (по кратчайшему пути по циклу). */
-private suspend fun scrollToRow(state: LazyListState, k: Int, cycle: Int, rowPx: Int, animate: Boolean) {
+private suspend fun scrollToRow(state: LazyListState, k: Int, cycle: Int, rowPx: Int, animate: Boolean, anchorPx: Float? = null) {
     var tries = 0
     while (state.layoutInfo.viewportSize.height == 0 && tries < 20) {
         withFrameNanos { }
@@ -146,12 +156,13 @@ private suspend fun scrollToRow(state: LazyListState, k: Int, cycle: Int, rowPx:
     }
     val li = state.layoutInfo
     val h = li.viewportSize.height
-    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+    val c = anchorLine(li, anchorPx)
     val cur = li.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - c) }?.index
         ?: state.firstVisibleItemIndex
     val base = cur - Math.floorMod(cur - k, cycle)
     val t = if (cur - base <= base + cycle - cur) base else base + cycle
-    val off = -(h - rowPx) / 2
+    // с якорем строка встаёт началом на (якорь - половина строки); без якоря — по середине списка
+    val off = if (anchorPx != null) -(anchorPx - rowPx / 2f).roundToInt() else -(h - rowPx) / 2
     if (animate) state.animateScrollToItem(t, off) else state.scrollToItem(t, off)
 }
 
@@ -189,12 +200,12 @@ private fun GraphicsLayerScope.applyWheel(
  * Колесо списка товаров: средняя строка в полном размере, остальные — вдвое меньше (середина в 2 раза крупнее и выше),
  * дальше от середины — бледнее и сильнее наклонены.
  */
-private fun GraphicsLayerScope.applyBigCenter(state: LazyListState, index: Int, tilt: Float) {
+private fun GraphicsLayerScope.applyBigCenter(state: LazyListState, index: Int, tilt: Float, anchorPx: Float? = null) {
     val li = state.layoutInfo
     val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return
     val half = (li.viewportEndOffset - li.viewportStartOffset) / 2f
     if (half <= 0f) return
-    val center = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+    val center = anchorLine(li, anchorPx)
     val dPx = info.offset + info.size / 2f - center
     val ak = abs(dPx / info.size)
     // ширина у всех строк одинаковая (без масштаба); размер выбранной строки задаёт её высота (в 1,5 раза больше)
@@ -204,18 +215,18 @@ private fun GraphicsLayerScope.applyBigCenter(state: LazyListState, index: Int, 
 }
 
 /** Линия середины списка проходит через эту строку: она «выбрана» и становится крупной. */
-private fun containsCenter(state: LazyListState, index: Int): Boolean {
+private fun containsCenter(state: LazyListState, index: Int, anchorPx: Float? = null): Boolean {
     val li = state.layoutInfo
     val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
-    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+    val c = anchorLine(li, anchorPx)
     return c >= info.offset && c < info.offset + info.size
 }
 
 /** 1 — строка ровно посередине, 0 — на расстоянии строки и дальше. */
-private fun centerness(state: LazyListState, index: Int): Float {
+private fun centerness(state: LazyListState, index: Int, anchorPx: Float? = null): Float {
     val li = state.layoutInfo
     val info = li.visibleItemsInfo.firstOrNull { it.index == index } ?: return 0f
-    val c = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+    val c = anchorLine(li, anchorPx)
     val k = abs(info.offset + info.size / 2f - c) / info.size
     return (1f - k).coerceIn(0f, 1f)
 }
@@ -424,6 +435,10 @@ fun CountWheelList(
     val bigRows = nameMode && !usePlain
     val rowH = if (bigRows) ROW_H_BIG else ROW_H
     val rowPx = with(density) { rowH.roundToPx() }
+    // «Приём по имени»: выбранная строка стоит не посередине, а второй сверху — над ней одна обычная строка списка.
+    // Линия выбора проходит через середину этой второй строки (высота обычной строки = rowH / 1.5).
+    val topNormalPx = with(density) { (rowH / 1.5f).toPx() }
+    val anchorPx: Float? = if (bigRows) topNormalPx + rowPx / 2f else null
 
     LaunchedEffect(addTick) {
         if (addTick > 0) {
@@ -521,32 +536,6 @@ fun CountWheelList(
             ListSearchField(query, { onSearchTyped(it) }, onAdd, onScan, searchFocus, { searchFocused = it }) {
                 if (scanBurst[1] >= 4L && onScanCode != null) finishScanBurst() else hits.firstOrNull()?.let { pick(it) }
             }
-            // вторая строка под поиском: выбранный товар (посередине барабана) — всегда, с клавиатурой и без неё
-            if (bigRows) {
-                val sel = selectedRow
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp).border(2.dp, MaterialTheme.colorScheme.tertiary, RoundedCornerShape(10.dp))
-                ) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            sel?.name ?: "Выбранный товар — посередине списка",
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (sel != null) {
-                            Spacer(Modifier.width(8.dp))
-                            val plan = parseQ(sel.qty)
-                            Text(
-                                if (sel.extra || plan <= 0.0) fmtQ(parseQ(sel.fact)) else fmtQ(parseQ(sel.fact)) + " / " + fmtQ(plan),
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
             Spacer(Modifier.height(8.dp))
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
@@ -610,14 +599,14 @@ fun CountWheelList(
                 key(n) {
                     // старт: первая строка близко к середине, выше неё — пустая и последняя
                     val listState = rememberLazyListState(
-                        initialFirstVisibleItemIndex = (CYCLE_BASE / cycle) * cycle - 3
+                        initialFirstVisibleItemIndex = (CYCLE_BASE / cycle) * cycle - (if (bigRows) 1 else 3)
                     )
                     val restored = remember { booleanArrayOf(false) }
                     LaunchedEffect(focusRow) {
                         if (!restored[0]) {
                             restored[0] = true
                             val k = memo[0]?.let { rows.indexOf(it) } ?: -1
-                            if (k >= 0) scrollToRow(listState, k, cycle, rowPx, false)
+                            if (k >= 0) scrollToRow(listState, k, cycle, rowPx, false, anchorPx)
                         }
                         val fr = focusRow
                         if (fr != null) {
@@ -625,7 +614,7 @@ fun CountWheelList(
                             if (k >= 0) {
                                 // выбрали в подсказках: клавиатура закрывается и меняет высоту списка — ждём, потом прокручиваем
                                 if (focusAfterIme) awaitStableViewport(listState)
-                                scrollToRow(listState, k, cycle, rowPx, true)
+                                scrollToRow(listState, k, cycle, rowPx, true, anchorPx)
                                 memo[0] = fr
                                 // строка встала на середину — мигнуть два раза
                                 selectedRow = fr
@@ -645,14 +634,14 @@ fun CountWheelList(
                                 if (lastH[0] != 0 && lastH[0] != h) {
                                     val k = memo[0]?.let { rows.indexOf(it) } ?: -1
                                     // пока ждёт выбранная строка (focusRow), старое место не возвращаем — иначе она «откатывается» назад
-                                    if (k >= 0 && focusRow == null) scrollToRow(listState, k, cycle, rowPx, false)
+                                    if (k >= 0 && focusRow == null) scrollToRow(listState, k, cycle, rowPx, false, anchorPx)
                                 }
                                 lastH[0] = h
                             }
                         }
                     }
                     LaunchedEffect(Unit) {
-                        snapshotFlow { centerRow(listState, rows, cycle) }.collect {
+                        snapshotFlow { centerRow(listState, rows, cycle, anchorPx) }.collect {
                             val hNow = listState.layoutInfo.viewportSize.height
                             if (lastH[0] != 0 && hNow != lastH[0]) return@collect // высота меняется — середину вернёт эффект выше
                             if (it != null) {
@@ -666,7 +655,18 @@ fun CountWheelList(
                     }
                     LazyColumn(
                         state = listState,
-                        flingBehavior = rememberSnapFlingBehavior(listState),
+                        flingBehavior = if (anchorPx != null) {
+                            // выбранная строка после остановки встаёт началом на второе место сверху
+                            val topSnap = remember(topNormalPx) {
+                                object : SnapPosition {
+                                    override fun position(
+                                        layoutSize: Int, itemSize: Int, beforeContentPadding: Int,
+                                        afterContentPadding: Int, itemIndex: Int, itemCount: Int
+                                    ): Int = topNormalPx.roundToInt()
+                                }
+                            }
+                            rememberSnapFlingBehavior(listState, topSnap)
+                        } else rememberSnapFlingBehavior(listState),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(count = Int.MAX_VALUE) { index ->
@@ -683,6 +683,7 @@ fun CountWheelList(
                                     selected = row === selectedRow,
                                     index = index,
                                     listState = listState,
+                                    anchorPx = anchorPx,
                                     editable = editable,
                                     plain = false,
                                     bware = bware,
@@ -712,7 +713,8 @@ fun CountWheelList(
                     maxH = if (nameMode) 336.dp else 280.dp, compact = nameMode
                 )
             }
-            if (scanFab && (onScanFab ?: onScan) != null && editable && n > 0 && (!plainNow || nameMode)) {
+            // в «Приёме по имени» круглую кнопку рисует сам экран (поверх всего окна), здесь — только для других окон
+            if (scanFab && !nameMode && (onScanFab ?: onScan) != null && editable && n > 0 && !plainNow) {
                 ScanFab { (onScanFab ?: onScan)?.invoke() }
             }
             CountOverlay()
@@ -784,6 +786,8 @@ private fun WheelRow(
     plain: Boolean,
     bware: Boolean,
     extraLabel: String,
+    /** линия выбора в пикселях от верха списка; null — середина списка */
+    anchorPx: Float? = null,
     rowH: Dp,
     centerOnly: Boolean,
     bigText: Boolean,
@@ -837,13 +841,13 @@ private fun WheelRow(
     val defD = parseQ(row.defect)
     val hasDetails = bware && onDetails != null
     // в «Приёме по имени» менять можно только строку посередине; остальные — только выбрать (тап или прокрутка)
-    val active by remember(listState, index, centerOnly, plain) {
-        derivedStateOf { !centerOnly || plain || centerness(listState, index) > 0.5f }
+    val active by remember(listState, index, centerOnly, plain, anchorPx) {
+        derivedStateOf { !centerOnly || plain || centerness(listState, index, anchorPx) > 0.5f }
     }
     val canEdit = editable && active
     // барабан «Приёма по имени»: выбранная (на середине) строка в 1,5 раза выше остальных, ширина одинаковая
-    val isCenterRow by remember(listState, index, centerOnly, plain) {
-        derivedStateOf { centerOnly && !plain && containsCenter(listState, index) }
+    val isCenterRow by remember(listState, index, centerOnly, plain, anchorPx) {
+        derivedStateOf { centerOnly && !plain && containsCenter(listState, index, anchorPx) }
     }
     val animH by animateDpAsState(if (isCenterRow) rowH else rowH / 1.5f, tween(120), label = "rowH")
     val emph = !bigText || isCenterRow  // крупные шрифты только у выбранной строки
@@ -852,7 +856,7 @@ private fun WheelRow(
         Modifier.fillMaxWidth()
             .height(if (plain) 68.dp else if (centerOnly) animH else rowH)
             .padding(horizontal = if (plain) 0.dp else 12.dp, vertical = 3.dp)
-            .then(if (plain) Modifier else Modifier.graphicsLayer { applyBigCenter(listState, index, WHEEL_TILT) })
+            .then(if (plain) Modifier else Modifier.graphicsLayer { applyBigCenter(listState, index, WHEEL_TILT, anchorPx) })
     ) {
         // слева (открывается свайпом вправо): срок годности
         Box(
@@ -991,7 +995,7 @@ private fun WheelRow(
                         // выбранная строка: свой цвет, всегда
                         drawRect(scheme.tertiaryContainer)
                     } else if (!plain) {
-                        val t = centerness(listState, index)
+                        val t = centerness(listState, index, anchorPx)
                         if (t > 0f) drawRect(scheme.primaryContainer.copy(alpha = t))
                     }
                 }
@@ -1356,6 +1360,56 @@ private fun BoxScope.ScanFab(onClick: () -> Unit) {
                         change.consume()
                         px = ((if (px < 0f) maxX - gap else px) + drag.x).coerceIn(0f, maxX)
                         py = ((if (py < 0f) maxY - gap else py) + drag.y).coerceIn(0f, maxY)
+                    }
+                }
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            BarcodeScannerIcon(28.dp, MaterialTheme.colorScheme.onPrimary)
+        }
+    }
+}
+
+/**
+ * Круглая кнопка сканера «Приёма по имени» поверх всего окна (в том числе над строкой отправителя / заказа / процентов).
+ * Её можно оставить где угодно; положение хранится на телефоне. Если оставить кнопку у нижнего края, при открытии
+ * клавиатуры она остаётся под клавиатурой (не поднимается над ней) — сканер в поиске тогда ничем не мешает.
+ */
+@Composable
+fun FreeScanFab(onClick: () -> Unit) {
+    val ctx = LocalContext.current
+    val sp = remember { ctx.getSharedPreferences("scan_fab", Context.MODE_PRIVATE) }
+    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
+        val d = LocalDensity.current
+        val sizePx = with(d) { 56.dp.toPx() }
+        val gap = with(d) { 12.dp.toPx() }
+        val w = with(d) { maxWidth.toPx() }
+        val h = with(d) { maxHeight.toPx() }
+        // полная высота окна запоминается: когда клавиатура уменьшает окно, положение не сжимается вместе с ним
+        var fullH by remember { mutableFloatStateOf(h) }
+        if (h > fullH) fullH = h
+        val maxX = (w - sizePx).coerceAtLeast(0f)
+        val maxY = (fullH - sizePx).coerceAtLeast(0f)
+        // -1 — положение ещё не задано: правый нижний угол
+        var px by remember { mutableFloatStateOf(sp.getFloat("fx", -1f)) }
+        var py by remember { mutableFloatStateOf(sp.getFloat("fy", -1f)) }
+        val defX = maxX - gap
+        val defY = maxY - gap - with(d) { 64.dp.toPx() }
+        val x = (if (px < 0f) defX else px).coerceIn(0f, maxX)
+        val y = (if (py < 0f) defY else py).coerceIn(0f, maxY)
+        Box(
+            Modifier.offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                .size(56.dp)
+                .shadow(6.dp, CircleShape)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary)
+                .pointerInput(maxX, maxY) {
+                    detectDragGestures(
+                        onDragEnd = { sp.edit().putFloat("fx", px).putFloat("fy", py).apply() }
+                    ) { change, drag ->
+                        change.consume()
+                        px = ((if (px < 0f) defX else px) + drag.x).coerceIn(0f, maxX)
+                        py = ((if (py < 0f) defY else py) + drag.y).coerceIn(0f, maxY)
                     }
                 }
                 .clickable(onClick = onClick),
