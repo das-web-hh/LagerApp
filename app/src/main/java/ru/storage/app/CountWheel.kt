@@ -1007,27 +1007,6 @@ private fun WheelRow(
                 }
                 .background(scheme.primary.copy(alpha = 0.55f * blink.value))
                 .then(if (selected) Modifier.border(2.5.dp, scheme.tertiary, RoundedCornerShape(14.dp)) else Modifier)
-                // выбранная строка (середина барабана) вверх-вниз не листается: список двигают только за невыбранные строки
-                .then(
-                    if (centerOnly && !plain && active) Modifier.pointerInput(Unit) {
-                        val slop = viewConfiguration.touchSlop
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            var dx = 0f
-                            var dy = 0f
-                            var down = true
-                            while (down) {
-                                val ev = awaitPointerEvent()
-                                ev.changes.forEach { c ->
-                                    val d = c.positionChange()
-                                    dx += d.x; dy += d.y
-                                    if (abs(dy) > slop && abs(dy) > abs(dx)) c.consume()
-                                }
-                                down = ev.changes.any { it.pressed }
-                            }
-                        }
-                    } else Modifier
-                )
                 .draggable(
                     orientation = Orientation.Horizontal,
                     enabled = canEdit,
