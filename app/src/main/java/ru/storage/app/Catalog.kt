@@ -1,6 +1,13 @@
 package ru.storage.app
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.widget.Toast
+import androidx.activity.result.IntentSenderRequest
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -68,12 +75,46 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
     }
     LaunchedEffect(sync.version) { list = withContext(Dispatchers.IO) { db.allProducts() } }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) scope.launch {
-            val data = withContext(Dispatchers.IO) {
-                try { Xlsx.read(ctx, uri) } catch (e: Exception) { emptyList() }
+    var initCols by remember { mutableStateOf<IntArray?>(null) }
+    var initHeader by remember { mutableStateOf<Boolean?>(null) }
+
+    // картинка, скриншот, PDF или снимок камеры: распознаёт телефон, а если не вышло, то ИИ; дальше выбор столбцов
+    fun startOcr(uri: Uri) {
+        scope.launch {
+            sync.busy = true
+            sync.text = "Распознаю список…"
+            try {
+                val t = CatalogOcr.read(ctx, uri) { sync.text = it }
+                initCols = t.cols
+                initHeader = t.header
+                rows = t.rows
+                sync.text = (if (t.viaAi) "Распознано через ИИ: " else "Распознано на телефоне: ") + "строк ${t.rows.size}. Проверьте столбцы."
+            } catch (e: Exception) {
+                sync.text = e.message ?: "Не удалось распознать список"
+            } finally {
+                sync.busy = false
             }
-            if (data.isEmpty()) sync.text = "Не удалось прочитать файл (нужен .xlsx)" else rows = data
+        }
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            val type = ctx.contentResolver.getType(uri).orEmpty()
+            if (type.startsWith("image/") || type == "application/pdf") {
+                initCols = null; initHeader = null
+                startOcr(uri)
+            } else scope.launch {
+                val data = withContext(Dispatchers.IO) {
+                    try { Xlsx.read(ctx, uri) } catch (e: Exception) { emptyList() }
+                }
+                initCols = null; initHeader = null
+                if (data.isEmpty()) sync.text = "Не удалось прочитать файл (Excel .xlsx, картинка или PDF)" else rows = data
+            }
+        }
+    }
+    val camScan = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            GmsDocumentScanningResult.fromActivityResultIntent(res.data)?.pdf?.uri?.let { startOcr(it) }
         }
     }
 
@@ -101,10 +142,25 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
             placeholder = "Поиск в каталоге"
         )
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (Session.isAdmin) {
                 Button(onClick = { creating = true }) { Text("+ Товар") }
-                OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("📥 Excel") }
+                OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("📥 Импорт") }
+                OutlinedButton(onClick = {
+                    var c: Context? = ctx
+                    while (c != null && c !is Activity) c = (c as? ContextWrapper)?.baseContext
+                    val act = c as? Activity
+                    if (act == null) return@OutlinedButton
+                    val opts = GmsDocumentScannerOptions.Builder()
+                        .setGalleryImportAllowed(false)
+                        .setPageLimit(8)
+                        .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+                        .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+                        .build()
+                    GmsDocumentScanning.getClient(opts).getStartScanIntent(act)
+                        .addOnSuccessListener { sender -> camScan.launch(IntentSenderRequest.Builder(sender).build()) }
+                        .addOnFailureListener { Toast.makeText(ctx, "Сканер недоступен: " + (it.message ?: ""), Toast.LENGTH_LONG).show() }
+                }) { Text("📷 Скан списка") }
             }
             OutlinedButton(
                 onClick = { scope.launch { Cloud.runProducts(db, sync, true) } },
@@ -136,6 +192,8 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
     rows?.let { data ->
         ImportDialog(
             rows = data,
+            initial = initCols,
+            initialHeader = initHeader,
             onCancel = { rows = null },
             onImport = { nc, bc, ac, header ->
                 rows = null
@@ -164,7 +222,11 @@ private fun importRows(db: ProductDb, rows: List<List<String>>, nc: Int, bc: Int
         val article = if (ac >= 0) r.getOrNull(ac)?.trim().orEmpty() else ""
         val existing = (if (barcode.isNotEmpty()) byBarcode[barcode] ?: db.findByBarcode(barcode) else null)
             ?: (if (article.isNotEmpty()) byArticle[article] ?: db.findByArticle(article) else null)
-        val base = existing ?: Product(UUID.randomUUID().toString(), name, "", "", "", "", "", "", emptyList(), 0L)
+        val local = if (existing == null) ProductParse.parseLocal(listOf(name)).firstOrNull() else null
+        val base = existing ?: Product(
+            UUID.randomUUID().toString(), name, "", "", local?.size ?: "", local?.unit ?: "", local?.pack ?: "",
+            local?.manufacturer ?: "", emptyList(), 0L
+        )
         val p = base.copy(
             name = name,
             article = if (article.isNotEmpty()) article else base.article,
@@ -220,15 +282,18 @@ private fun ColumnPicker(
 fun ImportDialog(
     rows: List<List<String>>,
     onCancel: () -> Unit,
-    onImport: (Int, Int, Int, Boolean) -> Unit
+    onImport: (Int, Int, Int, Boolean) -> Unit,
+    /** столбцы, найденные при распознавании: (название, штрих-код, артикул) */
+    initial: IntArray? = null,
+    initialHeader: Boolean? = null
 ) {
     val ctx = LocalContext.current
     val sp = remember { ctx.getSharedPreferences("import", Context.MODE_PRIVATE) }
     val width = rows.maxOf { it.size }
-    var nameCol by remember { mutableIntStateOf(sp.getInt("name", 0).coerceAtMost(width - 1)) }
-    var barcodeCol by remember { mutableIntStateOf(sp.getInt("barcode", -1).coerceAtMost(width - 1)) }
-    var articleCol by remember { mutableIntStateOf(sp.getInt("article", -1).coerceAtMost(width - 1)) }
-    var header by remember { mutableStateOf(sp.getBoolean("header", true)) }
+    var nameCol by remember { mutableIntStateOf((initial?.get(0) ?: sp.getInt("name", 0)).coerceAtMost(width - 1)) }
+    var barcodeCol by remember { mutableIntStateOf((initial?.get(1) ?: sp.getInt("barcode", -1)).coerceAtMost(width - 1)) }
+    var articleCol by remember { mutableIntStateOf((initial?.get(2) ?: sp.getInt("article", -1)).coerceAtMost(width - 1)) }
+    var header by remember { mutableStateOf(initialHeader ?: sp.getBoolean("header", true)) }
     val head = rows.first()
     val sample = rows.getOrNull(if (header) 1 else 0)
 

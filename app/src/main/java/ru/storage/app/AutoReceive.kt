@@ -1335,7 +1335,11 @@ private fun ColumnScope.NameModeMain(
     var scanStatus by remember { mutableStateOf("") }
 
     // Круглая кнопка и внешний сканер: код → строка с этим штрих-кодом, количество +1 (как нажатие на строку)
-    fun countByCode(raw: String) {
+    var scanBanner by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    LaunchedEffect(scanBanner) { if (scanBanner != null) { delay(1500); scanBanner = null } }
+    ScanBanner(scanBanner)
+    // announce: голосом количество называем только для внешнего сканера; кнопка камеры только пикает, вибрирует и показывает плашку
+    fun countByCode(raw: String, announce: Boolean) {
         val code = raw.trim()
         if (code.isEmpty()) return
         if (!editable) {
@@ -1356,21 +1360,25 @@ private fun ColumnScope.NameModeMain(
             }
             if (row == null) {
                 scanStatus = "Нет в списке: $code"
+                ScanFeedback.beep(false)
+                scanBanner = "Нет в списке: $code" to false
                 return@launch
             }
             row.fact = fmtQ(parseQ(row.fact) + 1)
             Haptics.pulse(ctx, Haptics.TAP)
-            CountAnnouncer.tap(ctx, row)
+            ScanFeedback.beep(true)
+            scanBanner = "${row.name.trim()} · ${row.fact}" to true
+            if (announce) CountAnnouncer.tap(ctx, row)
             scanStatus = "${row.name}: ${row.fact}"
             jump(row)
         }
     }
-    val countRef = rememberUpdatedState<(String) -> Unit> { c -> countByCode(c) }
+    val countRef = rememberUpdatedState<(String, Boolean) -> Unit> { c, a -> countByCode(c, a) }
     val scanForRef = rememberUpdatedState(scanFor)
     DisposableEffect(Unit) {
         val h: (String) -> Unit = { c ->
             val m = scanForRef.value
-            if (m == null || m == "count") countRef.value(c)
+            if (m == null || m == "count") countRef.value(c, true)
         }
         BtScan.handler = h
         onDispose { if (BtScan.handler === h) BtScan.handler = null }
@@ -1444,7 +1452,7 @@ private fun ColumnScope.NameModeMain(
         searchText = searchText, searchTick = searchTick,
         idleKeyboard = true,
         idleBlock = scanFor != null || conflict != null || editDoc || retryDlg,
-        onScanCode = { c -> countRef.value(c) }
+        onScanCode = { c -> countRef.value(c, true) }
     )
 
     scanFor?.let { mode ->
@@ -1461,7 +1469,7 @@ private fun ColumnScope.NameModeMain(
                         val code = raw.trim()
                         if (mode == "count") {
                             // круглая кнопка: сканер остаётся открытым, каждый код = +1 к строке
-                            countRef.value(code)
+                            countRef.value(code, false)
                         } else {
                             scanFor = null
                             if (code.isNotEmpty()) {

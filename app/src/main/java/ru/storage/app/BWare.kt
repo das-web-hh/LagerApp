@@ -34,6 +34,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -327,6 +328,9 @@ fun CatalogWheel(
     val sync = remember { SyncState() }
     val scope = rememberCoroutineScope()
     var unknownCode by remember { mutableStateOf<String?>(null) }
+    var scanBanner by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    LaunchedEffect(scanBanner) { if (scanBanner != null) { delay(1500); scanBanner = null } }
+    ScanBanner(scanBanner)
     var scanMode by remember { mutableStateOf<String?>(null) } // "add" — добавить товар по коду, "bind" — привязать код к строке
     var bindRow by remember { mutableStateOf<ItemRow?>(null) }
     var query by remember { mutableStateOf("") }
@@ -376,6 +380,8 @@ fun CatalogWheel(
         if (mode == "bind" && br != null) {
             br.barcode = code
             Haptics.pulse(ctx, Haptics.TAP)
+            ScanFeedback.beep(true)
+            scanBanner = "Штрих-код привязан: ${br.name.trim()}" to true
             Toast.makeText(ctx, "Штрих-код привязан: ${br.name}", Toast.LENGTH_SHORT).show()
             return
         }
@@ -385,20 +391,30 @@ fun CatalogWheel(
                 row.fact = fmtQ(bwQty(row.fact) + 1)
                 focusTarget = row; addTick++
                 Haptics.pulse(ctx, Haptics.TAP)
-                CountAnnouncer.tap(ctx, row)
+                ScanFeedback.beep(true)
+                scanBanner = "${row.name.trim()} · ${row.fact}" to true
+                // голосом количество называем только для внешнего сканера
+                if (mode == "ext") CountAnnouncer.tap(ctx, row)
                 return@launch
             }
             val p = withContext(Dispatchers.IO) { db.findByBarcode(code) }
-            if (p != null) addRow(p.name, p.id, fact = "1", barcode = code)
-            else if (inventory) unknownCode = code
-            else Toast.makeText(ctx, "Штрих-код не найден в каталоге: $code", Toast.LENGTH_LONG).show()
+            if (p != null) {
+                addRow(p.name, p.id, fact = "1", barcode = code)
+                Haptics.pulse(ctx, Haptics.TAP)
+                ScanFeedback.beep(true)
+                scanBanner = "Добавлено: ${p.name.trim()}" to true
+            } else {
+                ScanFeedback.beep(false)
+                if (inventory) unknownCode = code
+                else scanBanner = "Нет в каталоге: $code" to false
+            }
         }
     }
     val onCodeRef = rememberUpdatedState<(String, String?) -> Unit> { c, m -> onCode(c, m) }
     val scanModeRef = rememberUpdatedState(scanMode)
     if (scanner) {
         DisposableEffect(Unit) {
-            val h: (String) -> Unit = { c -> if (scanModeRef.value == null) onCodeRef.value(c, "add") }
+            val h: (String) -> Unit = { c -> if (scanModeRef.value == null) onCodeRef.value(c, "ext") }
             BtScan.handler = h
             onDispose { if (BtScan.handler === h) BtScan.handler = null }
         }
