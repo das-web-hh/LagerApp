@@ -27,17 +27,19 @@ html{overflow-x:auto}
 #sheet{position:absolute;left:0;top:58px;width:210mm;min-height:297mm;transform-origin:0 0;background-color:#fff;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 210 297' preserveAspectRatio='none'><rect x='8' y='8' width='194' height='281' fill='none' stroke='%23555555' stroke-width='0.35'/><line x1='0' y1='296.6' x2='210' y2='296.6' stroke='%23c4cad6' stroke-width='0.8'/></svg>");
   background-repeat:repeat-y;background-size:210mm 297mm;box-shadow:0 1px 8px rgba(0,0,0,.28)}
-#doc{background:transparent;color:#111;min-height:297mm;padding:14mm;font-size:16px;line-height:1.45;outline:none;
+#doc{background:transparent;color:#111;min-height:297mm;padding:14mm;font-size:72px;line-height:1.25;outline:none;
   word-wrap:break-word;overflow-wrap:anywhere}
 #doc p,#doc div{margin:0 0 6px}
-#doc h1{font-size:26px;margin:10px 0 8px}#doc h2{font-size:21px;margin:10px 0 6px}
+#doc h1{font-size:96px;margin:10px 0 8px}#doc h2{font-size:84px;margin:10px 0 6px}
 #doc ul,#doc ol{margin:0 0 6px;padding-left:26px}
+#sheet.land{width:297mm;min-height:210mm;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 297 210' preserveAspectRatio='none'><rect x='8' y='8' width='281' height='194' fill='none' stroke='%23555555' stroke-width='0.35'/><line x1='0' y1='209.6' x2='297' y2='209.6' stroke='%23c4cad6' stroke-width='0.8'/></svg>");background-size:297mm 210mm}
+#doc b,#doc strong{font-weight:900}
 </style></head><body>
 <div id="bar">
  <div class="g"><button id="zfit" title="Весь лист на экране">▣</button><button id="zm">🔍−</button><button id="zp">🔍+</button></div>
  <div class="g"><button data-c="undo">↶</button><button data-c="redo">↷</button></div>
- <div class="g"><button id="blk" data-c="blk">Аа</button></div>
- <div class="g"><button id="szm">−</button><span id="sz">16</span><button id="szp">+</button></div>
+ <div class="g"><button id="blk" data-c="blk">Аа</button><button id="land" title="Книжный / альбомный лист">▯/▭</button></div>
+ <div class="g"><button id="szm">−</button><span id="sz">72</span><button id="szp">+</button></div>
  <div class="g"><button data-c="bold" id="b_bold"><b>Ж</b></button><button data-c="italic" id="b_italic"><i>К</i></button>
   <button data-c="underline" id="b_underline"><u>Ч</u></button><button data-c="strikeThrough" id="b_strikeThrough"><s>З</s></button></div>
  <div class="g"><button data-c="fore"><span class="sw" style="background:#d32f2f"></span></button><button data-c="back"><span class="sw" style="background:#ffeb3b"></span></button></div>
@@ -51,7 +53,8 @@ html{overflow-x:auto}
 <div id="wrap"><div id="sheet"><div id="doc" contenteditable="true"><p><br></p></div></div></div>
 <script>
 var doc=document.getElementById('doc'),pal=document.getElementById('pal'),saved=null,timer=null,palMode='';
-var SIZES=[10,12,14,16,18,20,24,28,32,36,40,48,56,64,72];
+var SIZES=[36,40,48,56,64,72,80,96,112,128,144,160,200];
+var landscape=false;
 var COLORS=['#000000','#444444','#888888','#d32f2f','#f57c00','#fbc02d','#388e3c','#0097a7','#1976d2','#7b1fa2','#c2185b','#ffffff'];
 var BACKS=['transparent','#fff59d','#ffe0b2','#ffcdd2','#c8e6c9','#b3e5fc','#d1c4e9','#f8bbd0','#e0e0e0'];
 try{document.execCommand('defaultParagraphSeparator',false,'p');document.execCommand('styleWithCSS',false,true);}catch(e){}
@@ -66,13 +69,14 @@ function fit(){
   var vw=document.documentElement.clientWidth,sw=sheet.offsetWidth;
   if(!sw)return;
   baseH=Math.max(baseH,window.innerHeight);
-  var pageH=297*sw/210;
+  var PW=landscape?297:210,PHmm=landscape?210:297;
+  var pageH=PHmm*sw/PW;
   var zW=(vw-12)/sw,zH=(baseH-58-14)/pageH;
   var base=Math.max(0.15,Math.min(zW,zH)),z=base*zoomMul;
   lastZ=z;
   doc.style.minHeight='0';
   var pages=Math.max(1,Math.ceil((doc.scrollHeight-2)/pageH));
-  doc.style.minHeight=(pages*297)+'mm';
+  doc.style.minHeight=(pages*PHmm)+'mm';
   sheet.style.transform='translateX('+Math.max(6,(vw-sw*z)/2)+'px) scale('+z+')';
   wrap.style.width=Math.max(vw,sw*z+12)+'px';
   wrap.style.height=(58+sheet.offsetHeight*z+40)+'px';
@@ -101,9 +105,9 @@ function blockOf(n){
   return null;
 }
 function curSize(){
-  var s=getSelection();if(!s.rangeCount||!inDoc(s.anchorNode))return 16;
+  var s=getSelection();if(!s.rangeCount||!inDoc(s.anchorNode))return 72;
   var n=s.anchorNode;if(n.nodeType===3)n=n.parentNode;
-  return Math.round(parseFloat(getComputedStyle(n).fontSize))||16;
+  return Math.round(parseFloat(getComputedStyle(n).fontSize))||72;
 }
 function refresh(){
   var s=getSelection();
@@ -168,6 +172,15 @@ function showBlocks(){
   });
   pal.style.display='flex';
 }
+function setLand(on,noSave){
+  landscape=!!on;sheet.classList.toggle('land',landscape);
+  var m=doc.querySelector('[data-land]');
+  if(landscape&&!m){m=document.createElement('span');m.setAttribute('data-land','1');m.setAttribute('contenteditable','false');m.style.display='none';doc.insertBefore(m,doc.firstChild)}
+  if(!landscape&&m)m.remove();
+  document.getElementById('land').classList.toggle('on',landscape);
+  fit();if(!noSave)changed();
+}
+document.getElementById('land').onclick=function(){pal.style.display='none';setLand(!landscape)};
 document.getElementById('szm').onclick=function(){stepSize(-1)};
 document.getElementById('szp').onclick=function(){stepSize(1)};
 [].forEach.call(document.querySelectorAll('button[data-c]'),function(b){
@@ -195,21 +208,22 @@ function sanitize(html){
 window.setDoc=function(html,dark){
   document.documentElement.classList.toggle('dark',!!dark);
   doc.innerHTML=(html&&html.length)?sanitize(html):'<p><br></p>';
-  fit();
+  setLand(!!doc.querySelector('[data-land]'),true);
 };
 window.getDoc=function(){return doc.innerHTML};
 window.getPrintHtml=function(title){
   /* Лист A4 без полей страницы: рамка (8 мм от края бумаги) — настоящая рамка с границей, повторяется на каждой странице;
      верхний и нижний отступ 14 мм на каждой странице дают повторяющиеся пустые строки таблицы. */
-  var css='@page{size:A4;margin:0}html,body{margin:0;padding:0}'+
-   'body{font-family:Roboto,Arial,sans-serif;font-size:16px;line-height:1.45;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
-   '.frame{position:fixed;left:8mm;top:8mm;width:194mm;height:281mm;box-sizing:border-box;border:0.35mm solid #555;z-index:0}'+
+  var L=landscape;
+  var css='@page{size:'+(L?'A4 landscape':'A4')+';margin:0}html,body{margin:0;padding:0}'+
+   'body{font-family:Roboto,Arial,sans-serif;font-size:72px;line-height:1.25;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+   '.frame{position:fixed;left:8mm;top:8mm;width:'+(L?281:194)+'mm;height:'+(L?194:281)+'mm;box-sizing:border-box;border:0.35mm solid #555;z-index:0}'+
    'table.pg{width:100%;border-collapse:collapse;table-layout:fixed;border:0}'+
    'table.pg>thead>tr>td,table.pg>tfoot>tr>td{height:14mm;padding:0;border:0}'+
    'table.pg>tbody>tr>td.c{padding:0 14mm;border:0;vertical-align:top;word-wrap:break-word;overflow-wrap:anywhere}'+
-   'p,div{margin:0 0 6px}h1{font-size:26px;margin:10px 0 8px}h2{font-size:21px;margin:10px 0 6px}ul,ol{margin:0 0 6px;padding-left:26px}'+
+   'p,div{margin:0 0 6px}h1{font-size:96px;margin:10px 0 8px}h2{font-size:84px;margin:10px 0 6px}b,strong{font-weight:900}ul,ol{margin:0 0 6px;padding-left:26px}'+
    '.c table{border-collapse:collapse}.c td,.c th{border:1px solid #888;padding:4px 6px}';
-  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+String(title||'').replace(/</g,'&lt;')+'</title><style>'+css+'</style></head><body>'+
+  return '<!DOCTYPE html><html><head><meta charset="utf-8">'+(L?'<meta name="x-landscape" content="1">':'')+'<title>'+String(title||'').replace(/</g,'&lt;')+'</title><style>'+css+'</style></head><body>'+
    '<div class="frame"></div>'+
    '<table class="pg"><thead><tr><td></td></tr></thead><tfoot><tr><td></td></tr></tfoot><tbody><tr><td class="c">'+doc.innerHTML+'</td></tr></tbody></table>'+
    '</body></html>';

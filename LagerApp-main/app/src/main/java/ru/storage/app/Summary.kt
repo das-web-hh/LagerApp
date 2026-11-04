@@ -45,6 +45,8 @@ object Printer {
         if (record) DocStore.recordPrinted(ctx, jobName, html)
         val wv = WebView(activity)
         var done = false
+        // альбомный документ (метка в HTML из редактора) печатается как альбомный
+        val land = html.contains("name=\"x-landscape\"")
         wv.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String?) {
                 if (done) return
@@ -53,7 +55,9 @@ object Printer {
                 pm.print(
                     jobName,
                     view.createPrintDocumentAdapter(jobName),
-                    PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                    PrintAttributes.Builder().setMediaSize(
+                        if (land) PrintAttributes.MediaSize.ISO_A4.asLandscape() else PrintAttributes.MediaSize.ISO_A4
+                    )
                         .setMinMargins(margins(if (noMargins) 6 else 12))
                         .build()
                 )

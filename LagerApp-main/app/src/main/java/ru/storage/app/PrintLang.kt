@@ -14,6 +14,8 @@ object PrintCfg {
     var ru by mutableStateOf(true)
     var en by mutableStateOf(true)
     var sign by mutableStateOf(true)
+    /** Язык документа «Инвентаризация» (один): ru, en или de. */
+    var invLang by mutableStateOf("ru")
     /** Адрес в шапке документов (несколько строк). Пусто — шапка без адреса. */
     var address by mutableStateOf("")
 
@@ -25,13 +27,14 @@ object PrintCfg {
         ru = s.getBoolean("ru", true)
         en = s.getBoolean("en", true)
         sign = s.getBoolean("sign", true)
+        invLang = (s.getString("invLang", "ru") ?: "ru").takeIf { it in listOf("ru", "en", "de") } ?: "ru"
         address = s.getString("address", "") ?: ""
         if (!de && !ru && !en) ru = true
     }
 
     private fun store(ctx: Context) {
         sp(ctx).edit().putBoolean("de", de).putBoolean("ru", ru).putBoolean("en", en).putBoolean("sign", sign)
-            .putString("address", address).apply()
+            .putString("address", address).putString("invLang", invLang).apply()
     }
 
     fun setAddress(ctx: Context, v: String) {
@@ -57,6 +60,12 @@ object PrintCfg {
         store(ctx)
     }
 
+    fun setInvLang(ctx: Context, code: String) {
+        if (code !in listOf("ru", "en", "de")) return
+        invLang = code
+        store(ctx)
+    }
+
     fun setSign(ctx: Context, on: Boolean) {
         sign = on
         store(ctx)
@@ -70,7 +79,8 @@ object PrintCfg {
     }
 
     /** Применить значения из аккаунта (Firebase). */
-    fun applyCloud(ctx: Context, langs: List<*>?, signOn: Boolean?, addr: String? = null) {
+    fun applyCloud(ctx: Context, langs: List<*>?, signOn: Boolean?, addr: String? = null, inv: String? = null) {
+        if (inv != null && inv in listOf("ru", "en", "de")) invLang = inv
         if (langs != null) {
             val l = langs.mapNotNull { it as? String }
             if (l.isNotEmpty()) {
