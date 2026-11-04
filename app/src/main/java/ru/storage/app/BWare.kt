@@ -176,7 +176,7 @@ private fun bwareHtml(receiver: String, now: Long, photosHtml: String = "", qrHt
     h.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
         total += q
-        sb.append("<tr><td>${i + 1}.</td><td>${bwEsc(r.name.trim())}</td><td class='n'>${bwFmt(q)}</td>")
+        sb.append("<tr><td>${i + 1}.</td><td>${bwEsc(r.name.trim())}${ArticleLookup.html(r)}</td><td class='n'>${bwFmt(q)}</td>")
         sb.append("<td>${bwEsc(bwDash(r.expiry))}</td><td>${bwDetailsHtml(r, BWareDetails.groups)}</td></tr>")
     }
     sb.append("<tr class='tot'><th></th><th>${trb("total")}</th><th class='n'>${bwFmt(total)}</th><th></th><th></th></tr></table>")
@@ -481,6 +481,7 @@ fun CatalogWheel(
                 showSearch = false,
                 bware = !inventory,
                 plain = true,
+                extraLabel = if (inventory) "" else "нет в плане",
                 focusTarget = focusTarget,
                 onDetails = { r -> detailsRow = r },
                 onScanBind = if (scanner) ({ r -> bindRow = r; scanMode = "bind" }) else null,

@@ -76,6 +76,8 @@ import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -314,8 +316,10 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
                                 r.name, Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 16.sp,
                                 lineHeight = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
                             )
+                            val art = remember(r, r.article, r.name, r.barcode, r.productId) { ArticleLookup.find(r) }
                             val info = buildList {
-                                if (r.extra) add("нет в плане") else add(fmtQ(parseQ(r.qty)))
+                                if (r.extra) { if (art.isNotEmpty()) add("арт. $art") else add("нет в плане") }
+                                else { add(fmtQ(parseQ(r.qty))); if (art.isNotEmpty()) add("арт. $art") }
                                 if (r.fact.isNotBlank()) add("факт ${fmtQ(parseQ(r.fact))}")
                             }.joinToString(" · ")
                             Text(info, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall, maxLines = 1)
@@ -325,8 +329,10 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
                         Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val art = remember(r, r.article, r.name, r.barcode, r.productId) { ArticleLookup.find(r) }
                         val info = buildList {
-                            if (r.extra) add("нет в плане") else add("план ${fmtQ(parseQ(r.qty))}")
+                            if (r.extra) { if (art.isNotEmpty()) add("арт. $art") else add("нет в плане") }
+                            else { add("план ${fmtQ(parseQ(r.qty))}"); if (art.isNotEmpty()) add("арт. $art") }
                             if (r.fact.isNotBlank()) add("факт ${fmtQ(parseQ(r.fact))}")
                         }.joinToString(" · ")
                         Text(info, style = MaterialTheme.typography.bodySmall)
@@ -1083,9 +1089,16 @@ private fun WheelRow(
                         color = if (row.expiry.isBlank()) scheme.error else scheme.onSurfaceVariant
                     )
                 } else {
+                    // номер артикула (из каталога или введённый вручную) стоит вместо надписи «нет в плане»
+                    val art = remember(row, row.article, row.name, row.barcode, row.productId) { ArticleLookup.find(row) }
                     val sub = buildList {
                         // в компактной строке план стоит рядом с фактом, а не под названием
-                        if (row.extra) { if (extraLabel.isNotEmpty()) add(extraLabel) } else if (!(bigText || planBeside)) add("план ${fmtQ(planD)}")
+                        if (row.extra) {
+                            if (art.isNotEmpty()) add("арт. $art") else if (extraLabel.isNotEmpty()) add(extraLabel)
+                        } else {
+                            if (!(bigText || planBeside)) add("план ${fmtQ(planD)}")
+                            if (art.isNotEmpty()) add("арт. $art")
+                        }
                         if (defD > 0) add("брак ${fmtQ(defD)}")
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")
@@ -1294,14 +1307,26 @@ private fun QtyInputDialog(row: ItemRow, onApply: (Double) -> Unit, onDismiss: (
 /** Правка названия и плана (долгое нажатие на строку): ошибки распознавания можно исправить. */
 @Composable
 private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
     var name by remember { mutableStateOf(row.name) }
     var plan by remember { mutableStateOf(row.qty) }
+    var article by remember { mutableStateOf(ArticleLookup.find(row)) }
+    var barcode by remember { mutableStateOf(row.barcode) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Правка строки") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = germanKeys(it) }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    article, { article = it }, label = { Text("Номер артикула") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    barcode, { barcode = it.filter { c -> !c.isWhitespace() } }, label = { Text("Штрих-код") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                    modifier = Modifier.fillMaxWidth()
+                )
                 if (!row.extra) {
                     OutlinedTextField(
                         plan, { plan = it }, label = { Text("План (по документу)") }, singleLine = true,
@@ -1315,8 +1340,31 @@ private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
             Button(
                 enabled = name.isNotBlank(),
                 onClick = {
+                    val oldName = row.name.trim()
+                    val art = article.trim()
+                    val bc = barcode.trim()
                     row.name = name.trim()
+                    row.article = art
+                    row.barcode = bc
                     if (!row.extra) row.qty = plan
+                    // артикул и штрих-код сразу попадают в карточку товара в каталоге (если такой товар там есть)
+                    val app = ctx.applicationContext
+                    val pid = row.productId
+                    val newName = row.name
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            val db = ProductDb.get(app)
+                            val p = (if (pid.isNotEmpty()) db.getProduct(pid) else null)
+                                ?: db.findByName(oldName) ?: db.findByName(newName)
+                            if (p != null && (p.article != art || p.barcode != bc)) {
+                                if (bc.isNotEmpty() && bc != p.barcode) {
+                                    db.findByBarcode(bc)?.takeIf { it.id != p.id }?.let { Cloud.saveProduct(db, it.copy(barcode = "")) }
+                                }
+                                Cloud.saveProduct(db, p.copy(article = art, barcode = bc))
+                            }
+                        } catch (e: Exception) {
+                        }
+                    }
                     onDismiss()
                 }
             ) { Text("Сохранить") }

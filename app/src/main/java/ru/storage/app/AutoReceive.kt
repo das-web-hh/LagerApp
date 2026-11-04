@@ -143,6 +143,9 @@ class ItemRow(
 
     /** Штрих-код товара ("" — не привязан). Привязывается сканером; при сохранении попадает в каталог и в историю приёма. */
     var barcode by mutableStateOf("")
+
+    /** Номер артикула, введённый вручную ("" — берётся из каталога, если там есть). */
+    var article by mutableStateOf("")
     var fact by mutableStateOf("")
     var defect by mutableStateOf("")
 
@@ -1045,7 +1048,7 @@ suspend fun saveJob(
                 ?: withContext(Dispatchers.IO) { db.findByBarcode(bcRaw)?.id }
                 ?: newProducts.getOrPut(name.lowercase()) {
                     Product(
-                        id = UUID.randomUUID().toString(), name = name, article = "", barcode = bcRaw,
+                        id = UUID.randomUUID().toString(), name = name, article = r.article.trim(), barcode = bcRaw,
                         weight = local?.size ?: "", unit = local?.unit ?: "", pack = local?.pack ?: "",
                         manufacturer = local?.manufacturer ?: "", photos = emptyList(), updatedAt = 0L
                     )
@@ -1060,7 +1063,7 @@ suspend fun saveJob(
             // нового товара в каталоге нет — заводим карточку по разобранным полям (имя оставляем как в накладной, чтобы в следующий раз найти его по имени)
             pid = newProducts.getOrPut(name.lowercase()) {
                 Product(
-                    id = UUID.randomUUID().toString(), name = name, article = "", barcode = bcRaw,
+                    id = UUID.randomUUID().toString(), name = name, article = r.article.trim(), barcode = bcRaw,
                     weight = pt.size, unit = pt.unit, pack = pt.pack, manufacturer = pt.manufacturer,
                     photos = emptyList(), updatedAt = 0L
                 )

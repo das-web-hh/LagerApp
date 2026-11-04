@@ -11,6 +11,7 @@ class LagerApp : Application() {
         super.onCreate()
         ConnCfg.init(this)
         BWareDraft.app = this
+        ArticleLookup.app = this
         watchNetwork()
     }
 

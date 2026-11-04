@@ -114,7 +114,8 @@ private class Line(
     val plan: Double,
     val fact: Double,
     val defect: Double,
-    val extra: Boolean
+    val extra: Boolean,
+    val article: String = ""
 )
 
 /** kind: 0 — совпало, 1 — недостача, 2 — излишек, 3 — нет в плане. */
@@ -127,7 +128,7 @@ private fun fmtNum(d: Double): String =
     else String.format(Locale.ROOT, "%.2f", d).trimEnd('0').trimEnd('.')
 
 private fun lines(job: AutoJob): List<Line> = job.items.filter { it.name.trim().isNotEmpty() }.map {
-    Line(it.name.trim(), if (it.extra) 0.0 else num(it.qty), num(it.fact), num(it.defect), it.extra)
+    Line(it.name.trim(), if (it.extra) 0.0 else num(it.qty), num(it.fact), num(it.defect), it.extra, ArticleLookup.find(it))
 }
 
 private fun statusOf(l: Line): Status = when {
@@ -137,6 +138,9 @@ private fun statusOf(l: Line): Status = when {
     l.fact > l.plan -> Status(2, l.fact - l.plan)
     else -> Status(0, 0.0)
 }
+
+private fun art(l: Line) =
+    if (l.article.isEmpty()) "" else "<div class='sub'>${tr("article")}: ${esc(l.article)}</div>"
 
 private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
@@ -183,7 +187,7 @@ private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: S
             tp += l.plan
             tf += l.fact
             td += l.defect
-            sb.append("<tr><td>${i + 1}</td><td>${esc(l.name)}</td><td class='n'>${fmtNum(l.plan)}</td>")
+            sb.append("<tr><td>${i + 1}</td><td>${esc(l.name)}${art(l)}</td><td class='n'>${fmtNum(l.plan)}</td>")
             sb.append("<td class='n'>${fmtNum(l.fact)}</td><td class='n'>${fmtNum(l.defect)}</td>")
             sb.append("<td class='n'>${fmtNum(l.fact - l.defect)}</td>")
             sb.append("<td class='n'>${if (diff > 0) "+" else ""}${fmtNum(diff)}</td>")
@@ -196,7 +200,7 @@ private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: S
         if (short.isNotEmpty()) {
             sb.append("<h2>${tr("h_short")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_missing")}</th></tr>")
             short.forEach {
-                sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
+                sb.append("<tr><td>${esc(it.name)}${art(it)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
                 sb.append("<td class='n bad'>${fmtNum(it.plan - it.fact)}</td></tr>")
             }
             sb.append("</table>")
@@ -204,20 +208,20 @@ private fun buildReport(ctx: Context, job: AutoJob, f: IncomingFile, receiver: S
         if (excess.isNotEmpty()) {
             sb.append("<h2>${tr("h_excess")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_plan")}</th><th>${trb("th_fact")}</th><th>${trb("th_surplus")}</th></tr>")
             excess.forEach {
-                sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
+                sb.append("<tr><td>${esc(it.name)}${art(it)}</td><td class='n'>${fmtNum(it.plan)}</td><td class='n'>${fmtNum(it.fact)}</td>")
                 sb.append("<td class='n warn'>${fmtNum(it.fact - it.plan)}</td></tr>")
             }
             sb.append("</table>")
         }
         if (extra.isNotEmpty()) {
             sb.append("<h2>${tr("h_extra")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_arrived")}</th></tr>")
-            extra.forEach { sb.append("<tr><td>${esc(it.name)}</td><td class='n bad'>${fmtNum(it.fact)}</td></tr>") }
+            extra.forEach { sb.append("<tr><td>${esc(it.name)}${art(it)}</td><td class='n bad'>${fmtNum(it.fact)}</td></tr>") }
             sb.append("</table>")
         }
         if (defects.isNotEmpty()) {
             sb.append("<h2>${tr("h_defects")}</h2><table class='dt'><tr><th>${trb("th_item")}</th><th>${trb("th_recv_total")}</th><th>${trb("th_defect")}</th></tr>")
             defects.forEach {
-                sb.append("<tr><td>${esc(it.name)}</td><td class='n'>${fmtNum(it.fact)}</td><td class='n bad'>${fmtNum(it.defect)}</td></tr>")
+                sb.append("<tr><td>${esc(it.name)}${art(it)}</td><td class='n'>${fmtNum(it.fact)}</td><td class='n bad'>${fmtNum(it.defect)}</td></tr>")
             }
             sb.append("</table>")
         }

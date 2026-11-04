@@ -108,7 +108,7 @@ private fun invHtml(receiver: String, now: Long, photosHtml: String = "", qrHtml
     BWareInvHolder.rows.forEachIndexed { i, r ->
         val q = bwQty(r.fact)
         total += q
-        sb.append("<tr><td>${i + 1}.</td><td>${bwEsc(r.name.trim())}")
+        sb.append("<tr><td>${i + 1}.</td><td>${bwEsc(r.name.trim())}${ArticleLookup.html(r)}")
         if (r.note.isNotBlank()) sb.append("<div class='sub'>${bwEsc(r.note.trim()).replace("\n", "<br>")}</div>")
         sb.append("</td><td class='n'>${bwFmt(q)}</td><td>${bwEsc(bwDash(r.expiry))}</td>")
         sb.append("<td>${bullets(InvOptions.reasons.filter { it in r.reasons })}</td>")

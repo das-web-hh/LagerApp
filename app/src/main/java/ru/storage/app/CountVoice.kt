@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.onSizeChanged
@@ -233,7 +234,7 @@ fun CountOverlay() {
 
     // Палец закрывает середину экрана: центр цифры ставим в самом верху окна (12% высоты экрана — на уровне поиска и строки
     // отправителя / заказа), по горизонтали — по центру. Окно, в котором лежит список, может быть ниже верха экрана — считаем по координатам окна.
-    val screenH = LocalView.current.rootView.height
+    val topPx = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this).toFloat() + 6.dp.toPx() }
     var boxTop by remember { mutableIntStateOf(0) }
     var boxH by remember { mutableIntStateOf(0) }
     var numH by remember { mutableIntStateOf(0) }
@@ -248,8 +249,10 @@ fun CountOverlay() {
                 Modifier
                     .align(Alignment.TopCenter)
                     .offset {
-                        val y = (screenH * 0.12f - boxTop - numH / 2f).roundToInt()
-                        IntOffset(0, y.coerceIn(0, (boxH - numH).coerceAtLeast(0)))
+                        // самый верх экрана (под строкой состояния): палец не закрывает цифру; окно списка может начинаться ниже —
+                        // тогда сдвиг уходит вверх (отрицательный), за границы самого списка
+                        val y = topPx - boxTop
+                        IntOffset(0, y.roundToInt())
                     }
                     .onSizeChanged { numH = it.height }
                     .graphicsLayer {

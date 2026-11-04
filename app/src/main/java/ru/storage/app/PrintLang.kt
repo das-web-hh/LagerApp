@@ -122,6 +122,7 @@ private val T: Map<String, Array<String>> = mapOf(
     "st_short" to arrayOf("Fehlmenge", "Недостача", "Shortage"),
     "st_excess" to arrayOf("Überschuss", "Излишек", "Excess"),
     "st_extra" to arrayOf("Nicht im Plan", "Нет в плане", "Not in plan"),
+    "article" to arrayOf("Artikel-Nr.", "Артикул", "Article no."),
     "st_ok" to arrayOf("Stimmt", "Совпало", "Match"),
     "h_short" to arrayOf("Fehlmenge (weniger geliefert als geplant)", "Недостача (привезли меньше плана)", "Shortage (less delivered than planned)"),
     "th_missing" to arrayOf("Es fehlen", "Не хватает", "Missing"),

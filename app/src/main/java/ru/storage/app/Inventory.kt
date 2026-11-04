@@ -70,6 +70,7 @@ object InventoryStore {
                     row.expiry = r.optString("e")
                     row.barcode = r.optString("b")
                     row.photo = r.optString("ph")
+                    row.article = r.optString("a")
                     j.rows.add(row)
                 }
                 jobs.add(j)
@@ -87,7 +88,7 @@ object InventoryStore {
                 j.rows.toList().forEach { r ->
                     rs.put(
                         JSONObject().put("n", r.name).put("q", r.qty).put("f", r.fact).put("d", r.defect)
-                            .put("e", r.expiry).put("b", r.barcode).put("pid", r.productId).put("ph", r.photo)
+                            .put("e", r.expiry).put("b", r.barcode).put("pid", r.productId).put("ph", r.photo).put("a", r.article)
                     )
                 }
                 a.put(JSONObject().put("id", j.id).put("addr", j.address).put("at", j.created).put("step", j.step).put("rows", rs))
@@ -117,6 +118,7 @@ private fun invTotal(j: InvJob) = j.rows.sumOf { parseQ(it.fact) }
 private fun invArticles(ctx: Context, rows: List<ItemRow>): List<String> {
     val db = ProductDb.get(ctx)
     return rows.map { r ->
+        if (r.article.isNotBlank()) return@map r.article.trim()
         try {
             ((if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null)
                 ?: db.findByName(r.name.trim())
@@ -229,7 +231,7 @@ private fun invSaveBarcodes(ctx: Context, j: InvJob) {
                 Cloud.saveProduct(
                     db,
                     Product(
-                        id = UUID.randomUUID().toString(), name = r.name.trim(), article = "", barcode = code,
+                        id = UUID.randomUUID().toString(), name = r.name.trim(), article = r.article.trim(), barcode = code,
                         weight = local?.size ?: "", unit = local?.unit ?: "", pack = local?.pack ?: "",
                         manufacturer = local?.manufacturer ?: "", photos = emptyList(), updatedAt = 0L
                     )
