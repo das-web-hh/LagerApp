@@ -42,6 +42,9 @@ import com.google.mlkit.vision.text.Text as MlText
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -448,7 +451,14 @@ private fun lifecycleOwnerOf2(ctx: Context): LifecycleOwner? {
 
 /** Камера для обычного снимка: без поиска листа и рамок; нажатие на экран — фокус в этой точке. */
 @Composable
-private fun PhotoCamera(onShot: (Bitmap) -> Unit, onCancel: () -> Unit) {
+private fun PhotoCamera(
+    onShot: (Bitmap) -> Unit,
+    onCancel: () -> Unit,
+    info: String,
+    shots: Int,
+    pending: Int,
+    onFinish: () -> Unit
+) {
     val context = LocalContext.current
     val capture = remember { arrayOfNulls<ImageCapture>(1) }
     val cam = remember { arrayOfNulls<Camera>(1) }
@@ -490,7 +500,19 @@ private fun PhotoCamera(onShot: (Bitmap) -> Unit, onCancel: () -> Unit) {
                 pv
             }
         )
-        TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) { Text("Закрыть") }
+        Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onCancel) { Text("Закрыть") }
+                if (shots > 0) {
+                    Button(enabled = pending == 0, onClick = onFinish) { Text(if (pending == 0) "Готово ($shots)" else "Читаю…") }
+                }
+            }
+            if (info.isNotBlank()) {
+                Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp), color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f)) {
+                    Text(info, color = androidx.compose.ui.graphics.Color.White, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), maxLines = 3)
+                }
+            }
+        }
         Button(
             enabled = !busy,
             modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp).fillMaxWidth(0.6f).height(64.dp),
@@ -541,42 +563,56 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit) 
         return
     }
 
-    var stage by remember { mutableStateOf("camera") } // camera | work | result
-    var shot by remember { mutableStateOf<Bitmap?>(null) }
+    var stage by remember { mutableStateOf("camera") } // camera | result
     val found = remember { mutableStateListOf<ScannedLabel>() }
+    val errors = remember { mutableStateListOf<String>() }
+    var shots by remember { mutableIntStateOf(0) }
+    var pending by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-    var viaAi by remember { mutableStateOf(false) }
-    LaunchedEffect(shot) {
-        val b = shot ?: return@LaunchedEffect
-        stage = "work"
-        error = ""
-        status = "Распознаю на телефоне…"
-        found.clear()
-        try {
-            val r = withContext(Dispatchers.Default) { ListPhoto.read(app, b) { status = it } }
-            found.addAll(r.items)
-            viaAi = r.viaAi
-            if (r.items.isEmpty()) error = "Ничего не найдено. Переснимите: ближе, ровно и без бликов."
-        } catch (e: Exception) {
-            error = e.message ?: "Не удалось распознать"
+    var anyAi by remember { mutableStateOf(false) }
+    val mutex = remember { Mutex() }
+    val scope = rememberCoroutineScope()
+
+    // каждый снимок читается сразу, пока вы листаете дальше и снимаете следующий; повторы на стыках снимков склеиваются
+    fun addShot(b: Bitmap) {
+        shots++
+        pending++
+        val n = shots
+        scope.launch {
+            try {
+                mutex.withLock {
+                    val r = withContext(Dispatchers.Default) { ListPhoto.read(app, b) { status = "снимок $n: $it" } }
+                    if (r.viaAi) anyAi = true
+                    for (it in r.items) if (found.none { f -> f.key == it.key }) found.add(it)
+                    status = ""
+                }
+            } catch (e: Exception) {
+                errors.add("Снимок $n: " + (e.message ?: "не удалось распознать"))
+            } finally {
+                pending--
+            }
         }
-        stage = "result"
     }
 
     when (stage) {
-        "camera" -> PhotoCamera(onShot = { shot = it }, onCancel = onCancel)
-        "work" -> Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
-            Spacer(Modifier.height(16.dp))
-            Text(status)
-        }
+        "camera" -> PhotoCamera(
+            onShot = { addShot(it) },
+            onCancel = onCancel,
+            info = if (shots == 0) "Снимите список. Не поместился — пролистайте и снимите ещё"
+            else "Снимков: $shots · найдено: ${found.size}" + (if (pending > 0) " · читаю ${status.ifBlank { "…" }}" else ""),
+            shots = shots,
+            pending = pending,
+            onFinish = { stage = "result" }
+        )
         else -> Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
-                if (found.isEmpty()) "Результат" else "Найдено: ${found.size} · " + (if (viaAi) "прочитал ИИ" else "прочитал телефон"),
+                if (found.isEmpty()) "Результат" else "Найдено: ${found.size} · снимков: $shots" + (if (anyAi) " · часть прочитал ИИ" else ""),
                 style = MaterialTheme.typography.titleLarge
             )
-            if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+            if (found.isEmpty() && errors.isEmpty()) {
+                Text("Ничего не найдено. Переснимите: ближе, ровно и без бликов.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+            }
+            errors.forEach { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp)) }
             LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
                 items(found.toList(), key = { it.key }) { l ->
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -594,7 +630,7 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit) 
                 }
             }
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(modifier = Modifier.weight(1f), onClick = { shot = null; stage = "camera" }) { Text("Переснять") }
+                OutlinedButton(modifier = Modifier.weight(1f), onClick = { stage = "camera" }) { Text("Ещё снимок") }
                 Button(modifier = Modifier.weight(1f), enabled = found.isNotEmpty(), onClick = { onDone(found.toList()) }) { Text("Добавить (${found.size})") }
             }
         }
