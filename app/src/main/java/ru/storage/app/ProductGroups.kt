@@ -38,7 +38,7 @@ object ProductGroups {
         if (sameBarcode(a.barcode, b.barcode)) return 2.0
         if (!makerOk(a, b)) return 0.0
         if (sa.size == null || sb.size == null) return 0.0 // без веса/объёма по названию не склеиваем: только по штрих-коду
-        val direct = ProductMatch.score(sa, sb)
+        val direct = ProductMatch.scoreBrandAware(sa, sb)
         if (direct > 0.0) return direct
         // короткое имя производителя в начале названия: AG Kraftpaket ≈ AGROBS Kraftpaket
         val ta = sa.tokens
@@ -73,24 +73,53 @@ object ProductGroups {
     /** Один раз за запуск приложения: каталог, загруженный раньше, тоже проверяется на одинаковые товары. */
     fun linkOnce(db: ProductDb): Int = if (linkedOnce) 0 else link(db)
 
+    /**
+     * Карточки результата поиска, сведённые по товарам: сохранённый groupId плюс одинаковые товары,
+     * которые ещё не успели объединиться в фоне (поиск не должен показывать один товар двумя строками).
+     * Вручную отделённые («apart») не склеиваются.
+     */
+    fun groupsOf(db: ProductDb, found: List<Product>): List<List<Product>> {
+        val groups = LinkedHashMap<String, MutableList<Product>>()
+        for (p in found) {
+            val key = p.groupId.ifBlank { p.id }
+            if (key in groups) continue
+            val list = if (p.groupId.isBlank()) listOf(p) else db.byGroup(p.groupId).ifEmpty { listOf(p) }
+            groups[key] = list.toMutableList()
+        }
+        val keys = groups.keys.toList()
+        val sigs = HashMap<String, ProductMatch.Sig>()
+        val removed = HashSet<String>()
+        for (i in keys.indices) {
+            if (keys[i] in removed) continue
+            for (j in i + 1 until keys.size) {
+                if (keys[j] in removed) continue
+                val gi = groups[keys[i]]!!
+                val gj = groups[keys[j]]!!
+                var blocked = false
+                var match = false
+                for (x in gi) for (y in gj) {
+                    if (y.id in x.apart || x.id in y.apart) blocked = true
+                    else if (!match) {
+                        val sx = sigs.getOrPut(x.id) { ProductMatch.sigOfProduct(x) }
+                        val sy = sigs.getOrPut(y.id) { ProductMatch.sigOfProduct(y) }
+                        if (pairScore(x, y, sx, sy) > 0.0) match = true
+                    }
+                }
+                if (match && !blocked) { gi.addAll(gj); removed.add(keys[j]) }
+            }
+        }
+        return keys.filter { it !in removed }.map { groups[it]!! }
+    }
+
     /** Для подсказок поиска: карточки одного товара — одной строкой (главное название, артикул и штрих-код — с любой карточки группы). */
-    fun collapse(db: ProductDb, list: List<Product>): List<Product> {
-        val seen = HashSet<String>()
-        val out = ArrayList<Product>()
-        for (p in list) {
-            if (!seen.add(p.groupId.ifBlank { p.id })) continue
-            if (p.groupId.isBlank()) { out.add(p); continue }
-            val members = db.byGroup(p.groupId).ifEmpty { listOf(p) }
-            val main = primary(members)
-            out.add(
-                main.copy(
-                    article = members.firstOrNull { it.article.isNotBlank() }?.article.orEmpty(),
-                    barcode = members.firstOrNull { it.barcode.isNotBlank() }?.barcode.orEmpty()
-                )
+    fun collapse(db: ProductDb, list: List<Product>): List<Product> =
+        groupsOf(db, list).map { members ->
+            if (members.size == 1) members[0]
+            else primary(members).copy(
+                article = members.firstOrNull { it.article.isNotBlank() }?.article.orEmpty(),
+                barcode = members.firstOrNull { it.barcode.isNotBlank() }?.barcode.orEmpty()
             )
         }
-        return out
-    }
 
     /** Находит одинаковые товары и записывает им общий groupId. Возвращает, сколько карточек изменилось. */
     fun link(db: ProductDb): Int {

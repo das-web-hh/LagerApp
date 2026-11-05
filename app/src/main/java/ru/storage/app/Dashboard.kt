@@ -352,12 +352,8 @@ private fun searchProducts(db: ProductDb, all: List<Receipt>, query: String): Li
     val found = db.search(query, 100)
     if (found.isEmpty()) return emptyList()
     // карточки одного товара под разными названиями сводим в одну строку, даже если запросу подошло только одно из названий
-    val groups = LinkedHashMap<String, List<Product>>()
-    for (p in found) {
-        val key = p.groupId.ifBlank { p.id }
-        if (key !in groups) groups[key] = if (p.groupId.isBlank()) listOf(p) else db.byGroup(p.groupId).ifEmpty { listOf(p) }
-    }
-    val out = groups.values.map { members ->
+    val groups = ProductGroups.groupsOf(db, found)
+    val out = groups.map { members ->
         val ids = members.map { it.id }.toSet()
         val names = members.map { it.name.trim().lowercase() }.toSet()
         val rs = all.filter { r ->

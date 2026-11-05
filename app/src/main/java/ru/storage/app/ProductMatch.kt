@@ -12,7 +12,17 @@ object ProductMatch {
     /** Не меньше такой похожести названий (при совпавшем весе и упаковке) считаем товар тем же. */
     const val THRESHOLD = 0.7
 
-    class Sig(val tokens: List<String>, val size: String?, val pack: String)
+    /**
+     * tokens — слова названия без производителя; all — все слова (производитель тоже), brand — производитель (нижний регистр).
+     * all и brand нужны, чтобы «AG Kraftpaket» и «AGROBS Kraftpaket» узнавались как один товар.
+     */
+    class Sig(
+        val tokens: List<String>,
+        val size: String?,
+        val pack: String,
+        val all: List<String> = emptyList(),
+        val brand: String = ""
+    )
 
     private val SIZE = Regex("(\\d+(?:[.,]\\d+)?)\\s*(kg|ml|mg|g|lt|ltr|liter|l|t|кг|мл|мг|г|л|т)(?![\\p{L}])", RegexOption.IGNORE_CASE)
     private val SPLIT = Regex("[^\\p{L}\\p{N}]+")
@@ -36,20 +46,26 @@ object ProductMatch {
         return k + String.format(Locale.ROOT, "%.3f", v * mul)
     }
 
+    private fun rawTokens(name: String): List<String> =
+        SIZE.replace(name.lowercase(), " ").split(SPLIT)
+            .filter { it.length >= 2 && it !in PACKWORDS }
+            .distinct() // «Galopp … Beutel Galopp»: повторное слово не должно ронять похожесть
+
     private fun tokens(name: String, manufacturer: String): List<String> {
         val man = manufacturer.trim().lowercase()
-        return SIZE.replace(name.lowercase(), " ").split(SPLIT)
-            .filter { it.length >= 2 && it !in PACKWORDS && it != man }
-            .distinct() // «Galopp … Beutel Galopp»: повторное слово не должно ронять похожесть
+        return rawTokens(name).filter { it != man }
     }
 
     /** Подпись строки накладной; parts — разбор названия (если уже есть), иначе разбираем на телефоне. */
     fun sigOf(name: String, parts: ProductParts?): Sig {
         val p = parts ?: ProductParse.parseLocal(listOf(name)).firstOrNull()
+        val man = (p?.manufacturer ?: "").trim().lowercase()
         return Sig(
-            tokens = tokens(name, p?.manufacturer ?: ""),
+            tokens = tokens(name, man),
             size = if (p == null) null else canonSize(p.size, p.unit),
-            pack = p?.pack ?: ""
+            pack = p?.pack ?: "",
+            all = rawTokens(name),
+            brand = man
         )
     }
 
@@ -59,7 +75,8 @@ object ProductMatch {
         val hasFields = p.weight.isNotBlank() && p.unit.isNotBlank()
         val size = if (hasFields) canonSize(p.weight, p.unit) else local?.let { canonSize(it.size, it.unit) }
         val pack = p.pack.ifBlank { local?.pack ?: "" }
-        return Sig(tokens(p.name, p.manufacturer.ifBlank { local?.manufacturer ?: "" }), size, pack)
+        val man = p.manufacturer.ifBlank { local?.manufacturer ?: "" }.trim().lowercase()
+        return Sig(tokens(p.name, man), size, pack, rawTokens(p.name), man)
     }
 
     private fun lev1(a: String, b: String): Boolean {
@@ -96,7 +113,37 @@ object ProductMatch {
         return if (sim >= need) sim else 0.0
     }
 
-    fun same(a: Sig, b: Sig): Boolean = score(a, b) > 0.0
+    /** Короткое имя производителя — начало длинного (не короче двух букв): «ag» ≈ «agrobs». */
+    fun brandAlias(x: String, y: String): Boolean {
+        if (x == y) return true
+        val (s, l) = if (x.length <= y.length) x to y else y to x
+        return s.length >= 2 && l.startsWith(s)
+    }
+
+    /**
+     * Как score, но с учётом того, что у одной карточки производитель записан отдельным полем (и убран из слов названия),
+     * а у другой — просто первым словом названия («AGROBS Kraftpaket 20 kg» и «AG Kraftpaket 20kg»).
+     * Первое слово (или производитель) убирается с обеих сторон, только если оно похоже на производителя другой карточки:
+     * указан явно или короткое имя (до 4 букв) — иначе «Mineral Pellets» склеилось бы с «Mineralfutter Pellets».
+     */
+    fun scoreBrandAware(a: Sig, b: Sig): Double {
+        val direct = score(a, b)
+        if (direct > 0.0) return direct
+        if (a.all.isEmpty() || b.all.isEmpty()) return 0.0
+        val declared = a.brand.isNotEmpty() || b.brand.isNotEmpty()
+        fun brandsOf(s: Sig): List<String> = listOf(s.brand, s.all.first()).filter { it.isNotEmpty() }
+        fun strip(s: Sig, others: List<String>): List<String> = s.all.filterIndexed { i, t ->
+            val brandPlace = i == 0 || t == s.brand
+            val hit = brandPlace && others.any { o -> brandAlias(t, o) && (declared || minOf(t.length, o.length) <= 4) }
+            !hit
+        }
+        val ta = strip(a, brandsOf(b))
+        val tb = strip(b, brandsOf(a))
+        if (ta.size == a.all.size && tb.size == b.all.size) return 0.0 // производитель тут ни при чём
+        return score(Sig(ta, a.size, a.pack), Sig(tb, b.size, b.pack))
+    }
+
+    fun same(a: Sig, b: Sig): Boolean = scoreBrandAware(a, b) > 0.0
 
     /** Лучший товар каталога; если два разных кода почти одинаково подходят — ничего (не рискуем). */
     fun best(row: Sig, catalog: List<Pair<Product, Sig>>): Product? {
@@ -104,7 +151,7 @@ object ProductMatch {
         var topScore = 0.0
         var rival = false
         for ((p, s) in catalog) {
-            val sc = score(row, s)
+            val sc = scoreBrandAware(row, s)
             if (sc <= 0.0) continue
             if (sc > topScore + 0.05) { top = p; topScore = sc; rival = false }
             else if (sc >= topScore - 0.05 && top != null && !sameBarcode(top.barcode, p.barcode)) rival = true

@@ -5,8 +5,12 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.view.MotionEvent
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -175,7 +179,14 @@ fun ScannerScreen(
                     val scanner = BarcodeScanning.getClient(options)
                     scannerRef[0] = scanner
 
+                    // по умолчанию кадр анализируется в 640×480 — тонкие полосы EAN на изогнутом пакете сливаются; берём Full HD
+                    val hiRes = ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(android.util.Size(1920, 1080), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                        )
+                        .build()
                     val analysis = ImageAnalysis.Builder()
+                        .setResolutionSelector(hiRes)
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                     analysis.setAnalyzer(executor) { proxy ->
@@ -227,7 +238,18 @@ fun ScannerScreen(
                     val selector = if (prefs.useFront && provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA))
                         CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                     provider.unbindAll()
-                    provider.bindToLifecycle(owner, selector, preview, analysis)
+                    val camera = provider.bindToLifecycle(owner, selector, preview, analysis)
+                    // тап по экрану — навести фокус на штрих-код
+                    previewView.setOnTouchListener { v, ev ->
+                        if (ev.action == MotionEvent.ACTION_UP) {
+                            try {
+                                val pt = previewView.meteringPointFactory.createPoint(ev.x, ev.y)
+                                camera.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(pt).build())
+                            } catch (e: Exception) { }
+                            v.performClick()
+                        }
+                        true
+                    }
                   } catch (e: Exception) {
                     // камера занята или недоступна – закрываем сканер, а не роняем приложение
                     onClose()
