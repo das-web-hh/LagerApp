@@ -113,7 +113,7 @@ class LiveLabels(
 
     private fun put(l: ScannedLabel) {
         main.post {
-            if (l.key.substringBefore('#') in ignored) return@post // удалили, пока шло чтение
+            if (ignored.containsKey(l.key.substringBefore('#'))) return@post // удалили, пока шло чтение
             if (!alive && l.via == "wait") return@post
             val i = found.indexOfFirst { it.key == l.key }
             if (i >= 0) found[i] = l
@@ -145,7 +145,7 @@ class LiveLabels(
                 val box = b.boundingBox ?: continue
                 if (v.isEmpty()) continue
                 if (gtinFormat(b) && !gtinOk(v)) continue // прочитано с ошибкой
-                if (StrohLabel.key(v) in ignored) continue // удалена вручную: не отмечаем и не читаем
+                if (ignored.containsKey(StrohLabel.key(v))) continue // удалена вручную: не отмечаем и не читаем
                 bars.add(v to box)
             }
             if (bars.isEmpty()) { main.post { if (alive) onMarks(null) }; return }
