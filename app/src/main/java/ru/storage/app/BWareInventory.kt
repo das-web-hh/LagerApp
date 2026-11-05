@@ -121,7 +121,7 @@ private fun invHtml(receiver: String, now: Long, photosHtml: String = "", qrHtml
     if (anyDisposed) sb.append("<div class='sub' style='margin-top:10px;font-size:12px'>${bwEsc(tr("disposed_note"))}</div>")
     val bottom = "<div class='sg'>${Signature.cell("sig_compiled", receiver, now)}</div>" +
         "<div class='sg'>${Signature.cell("sig_checked", "", now, auto = false)}</div>"
-    return DocLayout.page(top, sb.toString(), (if (qrHtml.isNotBlank()) "<div>$qrHtml</div>" else "") + bottom, after = photosHtml)
+    return DocLayout.page(top, sb.toString(), (if (qrHtml.isNotBlank()) "<div>$qrHtml</div>" else "") + bottom, after = photosHtml, receipt = false)
 }
 
 /** CSV для Excel: разделитель «;», UTF-8 с BOM. */

@@ -7,7 +7,7 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 
 /**
  * Единое оформление всех документов приложения (приём B-Ware, опись, акты приёмки):
- *  • шапка «LAGER / WARENEINGANG» + адрес из Настройки → Печать — на каждом листе;
+ *  • шапка «LAGER / WARENEINGANG» (только в документах приёма товара; в остальных — просто «LAGER») + адрес из Настройки → Печать — на каждом листе;
  *  • слева значения (отправитель, заказ, машина…), справа название документа и пометка «INTERN – FÜR BÜRO»;
  *  • таблица без сетки: линия только под заголовком, без линии перед «Summe»;
  *  • внизу: QR-код (если есть) и подпись — линия, а надпись под линией;
@@ -60,11 +60,15 @@ object DocLayout {
     fun esc(s: String) =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
-    /** Шапка: слева «LAGER / WARENEINGANG», справа адрес из настроек. Повторяется на каждом листе (thead). */
-    fun header(): String {
+    /**
+     * Шапка: слева «LAGER / WARENEINGANG» (receipt = true, документы приёма товара) или просто «LAGER»
+     * (инвентаризация и прочее), справа адрес из настроек. Повторяется на каждом листе (thead).
+     */
+    fun header(receipt: Boolean = true): String {
         val addr = PrintCfg.address.lines().map { it.trim() }.filter { it.isNotEmpty() }
             .joinToString("<br>") { esc(it) }
-        return "<div class='dh'><div><div class='b1'>LAGER</div><div class='b2'>WARENEINGANG</div></div>" +
+        val b2 = if (receipt) "<div class='b2'>WARENEINGANG</div>" else ""
+        return "<div class='dh'><div><div class='b1'>LAGER</div>$b2</div>" +
             "<div class='addr'>$addr</div></div><div class='rule'></div>"
     }
 
@@ -143,12 +147,12 @@ object DocLayout {
      * Готовая страница. top — верхний блок (значения слева, название справа), body — таблицы,
      * bottom — QR и подпись (прижимается к низу листа).
      */
-    fun page(top: String, body: String, bottom: String, extraCss: String = "", after: String = ""): String {
+    fun page(top: String, body: String, bottom: String, extraCss: String = "", after: String = "", receipt: Boolean = true): String {
         val sb = StringBuilder()
         sb.append("<html><head><meta charset='utf-8'><style>")
             .append(CSS).append(pageNumberCss()).append(extraCss).append("</style></head><body>")
         sb.append("<table class='frame'>")
-        sb.append("<thead><tr><td>").append(header()).append("</td></tr></thead>")
+        sb.append("<thead><tr><td>").append(header(receipt)).append("</td></tr></thead>")
         sb.append("<tfoot><tr><td><div class='fspace'></div></td></tr></tfoot>")
         sb.append("<tbody><tr><td><div class='fin'><div>")
         sb.append(top).append("<div class='main'>").append(body).append("</div></div>")
