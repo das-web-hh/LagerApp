@@ -329,7 +329,7 @@ fun CatalogWheel(
     val scope = rememberCoroutineScope()
     var unknownCode by remember { mutableStateOf<String?>(null) }
     val unknownQueue = remember { mutableStateListOf<String>() } // коды этикеток без названия: спрашиваем по одному
-    var labelScan by remember { mutableStateOf(false) }          // камера «Этикетки» (Инвентаризация, «+» при пустом поиске)
+    var labelScan by remember { mutableStateOf(false) }          // обычный снимок списка (Инвентаризация, «+» при пустом поиске)
     fun nextUnknown() { unknownCode = if (unknownQueue.isNotEmpty()) unknownQueue.removeAt(0) else null }
     var scanBanner by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     LaunchedEffect(scanBanner) { if (scanBanner != null) { delay(1500); scanBanner = null } }
@@ -443,7 +443,7 @@ fun CatalogWheel(
         )
     }
 
-    // этикетки Ströh из камеры: новые строки наверх списка (количество считают потом барабаном), уже имеющиеся только дополняются
+    // список с обычного снимка (монитор, бумага, этикетка): новые строки наверх списка (количество считают потом барабаном), уже имеющиеся только дополняются
     fun addScanned(list: List<ScannedLabel>) {
         if (list.isEmpty()) return
         scope.launch {
@@ -452,7 +452,10 @@ fun CatalogWheel(
             val noName = ArrayList<String>()
             for (l in list) {
                 val prod = withContext(Dispatchers.IO) {
-                    try { if (l.barcode.isNotBlank()) db.findByBarcode(l.barcode) else null } catch (e: Exception) { null }
+                    try {
+                        (if (l.barcode.isNotBlank()) db.findByBarcode(l.barcode) else null)
+                            ?: (if (l.article.isNotBlank()) db.findByArticle(l.article) else null)
+                    } catch (e: Exception) { null }
                 }
                 val name = (prod?.name?.takeIf { it.isNotBlank() } ?: l.name).trim()
                 if (name.isEmpty()) {
@@ -492,7 +495,7 @@ fun CatalogWheel(
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
         ) {
             Surface(Modifier.fillMaxSize()) {
-                LabelScanScreen(
+                ListPhotoScreen(
                     onDone = { list -> labelScan = false; addScanned(list) },
                     onCancel = { labelScan = false }
                 )

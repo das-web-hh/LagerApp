@@ -463,7 +463,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
             groups = emptyList(),
             modifier = Modifier.weight(1f).fillMaxWidth(),
             errorText = error,
-            emptyText = "Отсканируйте штрих-код, найдите товар по названию или нажмите «+» (пустой поиск) — камера прочитает этикетки",
+            emptyText = "Отсканируйте штрих-код, найдите товар по названию или «+» при пустом поиске — снимок списка или этикетки",
             onAdded = { error = "" },
             scanner = true,
             inventory = true
