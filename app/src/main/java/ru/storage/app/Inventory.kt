@@ -114,6 +114,33 @@ object InventoryStore {
 
 private fun invTotal(j: InvJob) = j.rows.sumOf { parseQ(it.fact) }
 
+/** Строка печати: одинаковый товар с одинаковым сроком годности (две строки по 2) печатается одной строкой (4). */
+private class InvLine(val row: ItemRow, val fact: Double, val defect: Double, val info: ArticleLookup.Info)
+
+private fun invLines(j: InvJob, articles: List<ArticleLookup.Info>): List<InvLine> {
+    val out = ArrayList<InvLine>()
+    val at = HashMap<String, Int>()
+    j.rows.forEachIndexed { i, r ->
+        val info = articles.getOrNull(i) ?: ArticleLookup.Info(r.article.trim(), r.barcode.trim(), "")
+        val prod = when {
+            info.barcode.isNotBlank() -> "b:" + info.barcode.trim().trimStart('0')
+            r.productId.isNotEmpty() -> "p:" + r.productId
+            else -> "n:" + r.name.trim().lowercase()
+        }
+        val exp = r.expiry.trim().lowercase().filter { it.isLetterOrDigit() }
+        val key = "$prod|$exp"
+        val k = at[key]
+        if (k == null) {
+            at[key] = out.size
+            out.add(InvLine(r, parseQ(r.fact), parseQ(r.defect), info))
+        } else {
+            val o = out[k]
+            out[k] = InvLine(o.row, o.fact + parseQ(r.fact), o.defect + parseQ(r.defect), o.info)
+        }
+    }
+    return out
+}
+
 /** Артикул, штрих-код и вес строк из каталога (с учётом всех названий одного товара); индексы совпадают с j.rows. Вызывать не в главном потоке. */
 private fun invArticles(ctx: Context, rows: List<ItemRow>): List<ArticleLookup.Info> {
     val db = ProductDb.get(ctx)
@@ -162,12 +189,13 @@ private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Strin
     sb.append("<table class='inv'><colgroup><col style='width:7%'><col style='width:13%'><col style='width:27%'><col style='width:30%'><col style='width:8%'><col style='width:15%'></colgroup>")
     sb.append("<thead><tr><th>№</th><th>${t("Артикул", "Article", "Artikel")}</th><th>${t("Название товара", "Product name", "Produktname")}</th><th>${t("Штрих-код", "Barcode", "Barcode")}</th><th>${t("Штук", "Pcs", "Stück")}</th><th>${t("Срок годн.", "Best before", "Haltbar bis")}<br>(MHD)</th></tr></thead><tbody>")
     var total = 0.0
-    j.rows.forEachIndexed { i, r ->
-        val q = parseQ(r.fact)
-        val d = parseQ(r.defect)
+    invLines(j, articles).forEachIndexed { i, ln ->
+        val r = ln.row
+        val q = ln.fact
+        val d = ln.defect
         total += q
         sb.append("<tr><td class='n'>${i + 1}</td>")
-        val info = articles.getOrNull(i) ?: ArticleLookup.Info(r.article.trim(), r.barcode.trim(), "")
+        val info = ln.info
         sb.append("<td class='a'>${bwEsc(info.article)}</td>")
         sb.append("<td class='t'>${bwEsc(r.name.trim())}${if (info.weight.isNotBlank()) "<div style='font-size:8pt;font-weight:normal'>${bwEsc(info.weight)}</div>" else ""}</td>")
         sb.append("<td>${Ean.html(info.barcode)}</td>")
@@ -189,10 +217,11 @@ private fun invCsv(j: InvJob, now: Long, articles: List<ArticleLookup.Info> = em
     sb.append("Склад;").append(q(j.address.trim())).append(";;;;;\n")
     sb.append("Дата;").append(q(fmtTime(now))).append(";;;;;\n")
     sb.append("№;Артикул;Товар;Вес;Штрих-код;Количество;Брак;Срок годности\n")
-    j.rows.forEachIndexed { i, r ->
-        val info = articles.getOrNull(i) ?: ArticleLookup.Info(r.article.trim(), r.barcode.trim(), "")
+    invLines(j, articles).forEachIndexed { i, ln ->
+        val r = ln.row
+        val info = ln.info
         sb.append(i + 1).append(';').append(q(info.article)).append(';').append(q(r.name.trim())).append(';').append(q(info.weight)).append(';').append(q(info.barcode)).append(';')
-            .append(bwFmt(parseQ(r.fact))).append(';').append(bwFmt(parseQ(r.defect))).append(';').append(q(r.expiry)).append('\n')
+            .append(bwFmt(ln.fact)).append(';').append(bwFmt(ln.defect)).append(';').append(q(r.expiry)).append('\n')
     }
     return sb.toString()
 }
@@ -202,9 +231,10 @@ private fun invText(j: InvJob, now: Long): String {
     val sb = StringBuilder("Инвентаризация")
     if (j.address.isNotBlank()) sb.append(" — ").append(j.address.trim())
     sb.append("\n").append(fmtTime(now)).append("\n\n")
-    j.rows.forEachIndexed { i, r ->
-        sb.append(i + 1).append(". ").append(r.name.trim()).append(" — ").append(bwFmt(parseQ(r.fact)))
-        if (parseQ(r.defect) > 0.0) sb.append(" (брак ").append(bwFmt(parseQ(r.defect))).append(")")
+    invLines(j, emptyList()).forEachIndexed { i, ln ->
+        val r = ln.row
+        sb.append(i + 1).append(". ").append(r.name.trim()).append(" — ").append(bwFmt(ln.fact))
+        if (ln.defect > 0.0) sb.append(" (брак ").append(bwFmt(ln.defect)).append(")")
         if (r.expiry.isNotBlank()) sb.append(", срок ").append(r.expiry)
         sb.append("\n")
     }

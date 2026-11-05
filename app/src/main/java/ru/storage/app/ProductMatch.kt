@@ -40,6 +40,7 @@ object ProductMatch {
         val man = manufacturer.trim().lowercase()
         return SIZE.replace(name.lowercase(), " ").split(SPLIT)
             .filter { it.length >= 2 && it !in PACKWORDS && it != man }
+            .distinct() // «Galopp … Beutel Galopp»: повторное слово не должно ронять похожесть
     }
 
     /** Подпись строки накладной; parts — разбор названия (если уже есть), иначе разбираем на телефоне. */

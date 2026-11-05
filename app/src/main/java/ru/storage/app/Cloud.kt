@@ -316,7 +316,7 @@ object Cloud {
             val added = if (empty) full(col, st) { applyProducts(db, it) }
             else incremental(col, withContext(Dispatchers.IO) { db.maxProductUpdated() }, Int.MAX_VALUE) { applyProducts(db, it) }
             lastProducts = System.currentTimeMillis()
-            if (added > 0) withContext(Dispatchers.IO) { ProductGroups.link(db) }
+            withContext(Dispatchers.IO) { if (added > 0) ProductGroups.link(db) else ProductGroups.linkOnce(db) }
             val total = withContext(Dispatchers.IO) { db.countProducts() }
             st.text = if (empty) "Загружено товаров: $total"
             else if (added > 0) "Обновлено: $added, всего $total" else "Каталог актуален ($total)"

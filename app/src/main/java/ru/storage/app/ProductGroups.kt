@@ -68,8 +68,33 @@ object ProductGroups {
 
     // ---------- автоматическое объединение ----------
 
+    @Volatile private var linkedOnce = false
+
+    /** Один раз за запуск приложения: каталог, загруженный раньше, тоже проверяется на одинаковые товары. */
+    fun linkOnce(db: ProductDb): Int = if (linkedOnce) 0 else link(db)
+
+    /** Для подсказок поиска: карточки одного товара — одной строкой (главное название, артикул и штрих-код — с любой карточки группы). */
+    fun collapse(db: ProductDb, list: List<Product>): List<Product> {
+        val seen = HashSet<String>()
+        val out = ArrayList<Product>()
+        for (p in list) {
+            if (!seen.add(p.groupId.ifBlank { p.id })) continue
+            if (p.groupId.isBlank()) { out.add(p); continue }
+            val members = db.byGroup(p.groupId).ifEmpty { listOf(p) }
+            val main = primary(members)
+            out.add(
+                main.copy(
+                    article = members.firstOrNull { it.article.isNotBlank() }?.article.orEmpty(),
+                    barcode = members.firstOrNull { it.barcode.isNotBlank() }?.barcode.orEmpty()
+                )
+            )
+        }
+        return out
+    }
+
     /** Находит одинаковые товары и записывает им общий groupId. Возвращает, сколько карточек изменилось. */
     fun link(db: ProductDb): Int {
+        linkedOnce = true
         val all = db.allProducts()
         if (all.size < 2) return 0
         val byId = all.associateBy { it.id }

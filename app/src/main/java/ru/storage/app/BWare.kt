@@ -345,16 +345,27 @@ fun CatalogWheel(
     LaunchedEffect(Unit) { Cloud.runProducts(db, sync, false) }
     LaunchedEffect(query, sync.version) {
         suggestions = if (query.trim().length < MIN_SEARCH_CHARS) emptyList()
-        else withContext(Dispatchers.IO) { db.search(query, 8) }
+        else withContext(Dispatchers.IO) { ProductGroups.collapse(db, db.search(query, 12)).take(8) }
     }
 
     fun addRow(name: String, productId: String, fact: String = "", barcode: String = "") {
         val n = name.trim()
         if (n.isEmpty()) return
-        val existing = rows.firstOrNull {
-            (productId.isNotEmpty() && it.productId == productId) || it.name.trim().equals(n, true)
+        // тот же товар под другими названиями (группа) считается тем же товаром
+        val ids = HashSet<String>()
+        val names = hashSetOf(n.lowercase())
+        if (productId.isNotEmpty()) {
+            ids.add(productId)
+            try {
+                db.getProduct(productId)?.let { p -> ProductGroups.membersOf(db, p).forEach { ids.add(it.id); names.add(it.name.trim().lowercase()) } }
+            } catch (e: Exception) { }
         }
-        if (existing != null) {
+        val existing = rows.firstOrNull {
+            (it.productId.isNotEmpty() && it.productId in ids) || it.name.trim().lowercase() in names
+        }
+        // Инвентаризация: тот же товар можно добавить ещё одной строкой (у партий разные сроки годности); сканер по-прежнему считает +1
+        val another = inventory && fact.isBlank() && existing != null
+        if (existing != null && !another) {
             focusTarget = existing
             if (fact.isNotBlank()) {
                 // сканером: товар уже в списке — +1
@@ -364,9 +375,11 @@ fun CatalogWheel(
             } else Toast.makeText(ctx, "Этот товар уже в списке", Toast.LENGTH_SHORT).show()
         } else {
             // новый товар — на самый верх списка
-            val fresh = ItemRow(n, "", extra = true, productId = productId)
+            val fresh = ItemRow(n, "", extra = true, productId = productId.ifEmpty { existing?.productId.orEmpty() })
             if (fact.isNotBlank()) fresh.fact = fact
-            if (barcode.isNotBlank()) fresh.barcode = barcode
+            // у новой строки того же товара код и артикул те же: сканер считает в самую новую (верхнюю) строку
+            fresh.barcode = barcode.ifBlank { existing?.barcode.orEmpty() }
+            fresh.article = existing?.article.orEmpty()
             rows.add(0, fresh)
             focusTarget = fresh
         }
