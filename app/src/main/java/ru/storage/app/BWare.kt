@@ -443,14 +443,15 @@ fun CatalogWheel(
         )
     }
 
-    // список с обычного снимка (монитор, бумага, этикетка): новые строки наверх списка (количество считают потом барабаном), уже имеющиеся только дополняются
+    // список с камеры (этикетки, монитор, бумага): каждая позиция — отдельная строка наверх списка, количество пишут потом.
+    // Одинаковые товары не склеиваются: у них могут быть разные даты (срок годности).
     fun addScanned(list: List<ScannedLabel>) {
         if (list.isEmpty()) return
         scope.launch {
             var added = 0
-            var dup = 0
             val noName = ArrayList<String>()
-            for (l in list) {
+            var last: ItemRow? = null
+            for (l in list.asReversed()) {
                 val prod = withContext(Dispatchers.IO) {
                     try {
                         (if (l.barcode.isNotBlank()) db.findByBarcode(l.barcode) else null)
@@ -462,28 +463,19 @@ fun CatalogWheel(
                     if (l.barcode.isNotBlank()) noName.add(l.barcode)
                     continue
                 }
-                val existing = rows.firstOrNull {
-                    (l.barcode.isNotBlank() && sameBarcode(it.barcode, l.barcode)) ||
-                        (prod != null && it.productId == prod.id) || it.name.trim().equals(name, true)
-                }
-                if (existing != null) {
-                    if (existing.barcode.isBlank() && l.barcode.isNotBlank()) existing.barcode = l.barcode
-                    if (existing.article.isBlank()) existing.article = l.article.ifBlank { prod?.article.orEmpty() }
-                    focusTarget = existing
-                    dup++
-                    continue
-                }
                 val row = ItemRow(name, "", extra = true, productId = prod?.id.orEmpty())
                 row.barcode = l.barcode
                 row.article = l.article.ifBlank { prod?.article.orEmpty() }
+                // список камеры идёт от новых к старым; идём с конца, чтобы самая новая строка оказалась сверху
                 rows.add(0, row)
-                focusTarget = row
+                last = row
                 added++
             }
-            if (added > 0 || dup > 0) { addTick++; query = ""; onAdded() }
+            if (last != null) focusTarget = last
+            if (added > 0) { addTick++; query = ""; onAdded() }
             Toast.makeText(
                 ctx,
-                "Добавлено: $added" + (if (dup > 0) ", уже в списке: $dup" else "") + (if (noName.isNotEmpty()) ", без названия: ${noName.size}" else ""),
+                "Добавлено строк: $added" + (if (noName.isNotEmpty()) ", без названия: ${noName.size}" else ""),
                 Toast.LENGTH_LONG
             ).show()
             if (noName.isNotEmpty()) { unknownQueue.addAll(noName); if (unknownCode == null) nextUnknown() }

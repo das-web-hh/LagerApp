@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.util.Size
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -16,10 +17,17 @@ import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,7 +35,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,6 +61,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
@@ -449,24 +462,42 @@ private fun lifecycleOwnerOf2(ctx: Context): LifecycleOwner? {
     return null
 }
 
-/** Камера для обычного снимка: без поиска листа и рамок; нажатие на экран — фокус в этой точке. */
+/**
+ * Камера «Этикетки и списки»:
+ *  • идёте камерой по этикеткам Ströh — каждая получает отметку на экране и записывается в список (LiveLabels);
+ *    нажатие на отметку добавляет ещё одну такую же строку (у другой этикетки того же товара будет другая дата);
+ *  • список с монитора или бумаги снимается обычным снимком кнопкой «Снять список»; нажатие на экран — фокус.
+ */
 @Composable
 private fun PhotoCamera(
     onShot: (Bitmap) -> Unit,
     onCancel: () -> Unit,
+    engine: LiveLabels,
+    found: List<ScannedLabel>,
+    marks: LiveMarks?,
     info: String,
-    shots: Int,
     pending: Int,
+    allowAnother: Boolean,
     onFinish: () -> Unit
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val capture = remember { arrayOfNulls<ImageCapture>(1) }
     val cam = remember { arrayOfNulls<Camera>(1) }
+    val executor = remember { Executors.newSingleThreadExecutor() }
     var busy by remember { mutableStateOf(false) }
+    var liveOff by remember { mutableStateOf(false) }
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    // сначала отвязать камеру, потом гасить поток, иначе кадр уходит в закрытый executor
     DisposableEffect(Unit) {
-        onDispose { try { ProcessCameraProvider.getInstance(context).get().unbindAll() } catch (e: Exception) { } }
+        onDispose {
+            engine.alive = false
+            try { ProcessCameraProvider.getInstance(context).get().unbindAll() } catch (e: Exception) { }
+            executor.shutdown()
+        }
     }
-    Box(Modifier.fillMaxSize()) {
+    val ratio = remember { ResolutionSelector.Builder().setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY).build() }
+    Box(Modifier.fillMaxSize().onSizeChanged { box = it }) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -485,14 +516,37 @@ private fun PhotoCamera(
                 future.addListener({
                     try {
                         val provider = future.get()
-                        val preview = Preview.Builder().build()
+                        val preview = Preview.Builder().setResolutionSelector(ratio).build()
                         preview.setSurfaceProvider(pv.surfaceProvider)
-                        val ic = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
+                        val ic = ImageCapture.Builder()
+                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                            .setResolutionSelector(ratio)
+                            .build()
                         capture[0] = ic
+                        // для текста на этикетках нужна чёткая картинка: 1600x1200 вместо стандартных 640x480
+                        val analysis = ImageAnalysis.Builder()
+                            .setResolutionSelector(
+                                ResolutionSelector.Builder()
+                                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                                    .setResolutionStrategy(ResolutionStrategy(Size(1600, 1200), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                                    .build()
+                            )
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                        analysis.setAnalyzer(executor) { proxy ->
+                            if (engine.alive) engine.analyze(proxy) else proxy.close()
+                        }
                         val owner = lifecycleOwnerOf2(ctx)
                         if (owner == null) { onCancel(); return@addListener }
                         provider.unbindAll()
-                        cam[0] = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, ic)
+                        try {
+                            cam[0] = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, ic, analysis)
+                        } catch (e: Exception) {
+                            // телефон не тянет три потока сразу: остаётся только снимок списка, без живых отметок
+                            provider.unbindAll()
+                            liveOff = true
+                            cam[0] = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, ic)
+                        }
                     } catch (e: Exception) {
                         onCancel()
                     }
@@ -500,22 +554,69 @@ private fun PhotoCamera(
                 pv
             }
         )
+
+        // отметки на этикетках: серая — читаю, оранжевая — читает ИИ, зелёная — записана, красная — не распознана
+        val m = marks
+        if (m != null && box.width > 0 && box.height > 0 && !liveOff) {
+            val scale = max(box.width.toFloat() / m.w, box.height.toFloat() / m.h)
+            val ox = (box.width - m.w * scale) / 2f
+            val oy = (box.height - m.h * scale) / 2f
+            for (mk in m.items) {
+                val base = mk.key
+                val item = found.firstOrNull { it.key == base }
+                val cnt = found.count { it.key.substringBefore('#') == base }
+                val color = when {
+                    item == null -> androidx.compose.ui.graphics.Color(0xFF9E9E9E)
+                    item.via == "wait" -> androidx.compose.ui.graphics.Color(0xFFFFA000)
+                    item.via == "none" -> androidx.compose.ui.graphics.Color(0xFFE53935)
+                    else -> androidx.compose.ui.graphics.Color(0xFF2E7D32)
+                }
+                val label = when {
+                    item == null -> "…"
+                    item.via == "wait" -> "ИИ…"
+                    item.via == "none" -> "?"
+                    cnt > 1 -> "✓ ×$cnt"
+                    else -> "✓"
+                }
+                val l = (mk.rect.left * scale + ox).toInt()
+                val t = (mk.rect.top * scale + oy).toInt()
+                val w = (mk.rect.width() * scale).toInt().coerceAtLeast(1)
+                val h = (mk.rect.height() * scale).toInt().coerceAtLeast(1)
+                Box(
+                    Modifier
+                        .offset { IntOffset(l, t) }
+                        .size(with(density) { w.toDp() }, with(density) { h.toDp() })
+                        .border(3.dp, color, androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                        .clickable(enabled = allowAnother && item != null && item.via != "wait") { engine.addAnother(base) }
+                ) {
+                    Text(
+                        label, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.align(Alignment.TopStart).background(color).padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onCancel) { Text("Закрыть") }
-                if (shots > 0) {
-                    Button(enabled = pending == 0, onClick = onFinish) { Text(if (pending == 0) "Готово ($shots)" else "Читаю…") }
+                if (found.isNotEmpty() || pending > 0) {
+                    Button(enabled = pending == 0, onClick = onFinish) { Text(if (pending == 0) "Готово (${found.size})" else "Читаю…") }
                 }
             }
             if (info.isNotBlank()) {
                 Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp), color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f)) {
-                    Text(info, color = androidx.compose.ui.graphics.Color.White, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), maxLines = 3)
+                    Text(info, color = androidx.compose.ui.graphics.Color.White, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), maxLines = 4)
                 }
+            }
+            if (liveOff) {
+                Text("Живые отметки на этом телефоне недоступны: снимайте этикетки и списки кнопкой.", color = androidx.compose.ui.graphics.Color.White,
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
             }
         }
         Button(
             enabled = !busy,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp).fillMaxWidth(0.6f).height(64.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp).fillMaxWidth(0.7f).height(60.dp),
             onClick = {
                 val ic = capture[0] ?: return@Button
                 busy = true
@@ -538,13 +639,13 @@ private fun PhotoCamera(
                     }
                 )
             }
-        ) { Text(if (busy) "…" else "Снять", style = MaterialTheme.typography.titleLarge) }
+        ) { Text(if (busy) "…" else "Снять список", style = MaterialTheme.typography.titleMedium) }
     }
 }
 
-/** Окно «+» в Инвентаризации: снимок → распознавание → список с проверкой → «Добавить». */
+/** Окно «+» в Инвентаризации: проход камерой по этикеткам и снимки списков → список с проверкой → «Добавить». */
 @Composable
-fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit) {
+fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, catalogMode: Boolean = false) {
     val context = LocalContext.current
     val app = context.applicationContext
     var hasPermission by remember {
@@ -566,30 +667,34 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit) 
     var stage by remember { mutableStateOf("camera") } // camera | result
     val found = remember { mutableStateListOf<ScannedLabel>() }
     val errors = remember { mutableStateListOf<String>() }
+    var marks by remember { mutableStateOf<LiveMarks?>(null) }
     var shots by remember { mutableIntStateOf(0) }
-    var pending by remember { mutableIntStateOf(0) }
+    var photoPending by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf("") }
     var anyAi by remember { mutableStateOf(false) }
     val mutex = remember { Mutex() }
     val scope = rememberCoroutineScope()
+    val engine = remember { LiveLabels(app, found) { marks = it } }
+    DisposableEffect(Unit) { onDispose { engine.close() } }
+    val pending = photoPending + found.count { it.via == "wait" }
 
-    // каждый снимок читается сразу, пока вы листаете дальше и снимаете следующий; повторы на стыках снимков склеиваются
+    // снимок списка читается сразу, пока вы листаете дальше; повторы на стыках снимков склеиваются
     fun addShot(b: Bitmap) {
         shots++
-        pending++
+        photoPending++
         val n = shots
         scope.launch {
             try {
                 mutex.withLock {
                     val r = withContext(Dispatchers.Default) { ListPhoto.read(app, b) { status = "снимок $n: $it" } }
                     if (r.viaAi) anyAi = true
-                    for (it in r.items) if (found.none { f -> f.key == it.key }) found.add(it)
+                    for (it in r.items) if (found.none { f -> f.key.substringBefore('#') == it.key }) found.add(it)
                     status = ""
                 }
             } catch (e: Exception) {
                 errors.add("Снимок $n: " + (e.message ?: "не удалось распознать"))
             } finally {
-                pending--
+                photoPending--
             }
         }
     }
@@ -598,26 +703,37 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit) 
         "camera" -> PhotoCamera(
             onShot = { addShot(it) },
             onCancel = onCancel,
-            info = if (shots == 0) "Снимите список. Не поместился — пролистайте и снимите ещё"
-            else "Снимков: $shots · найдено: ${found.size}" + (if (pending > 0) " · читаю ${status.ifBlank { "…" }}" else ""),
-            shots = shots,
+            engine = engine,
+            found = found,
+            marks = marks,
+            info = (if (catalogMode) {
+                if (found.isEmpty() && shots == 0) "Ведите камерой по этикеткам: каждая отметится и запишется. Список с монитора или бумаги — кнопка «Снять список»"
+                else "Записано: ${found.size}"
+            } else {
+                if (found.isEmpty() && shots == 0) "Ведите камерой по этикеткам: каждая отметится и запишется. Нажмите на отметку — добавится ещё такая же строка. Список с монитора — кнопка «Снять список»"
+                else "Записано: ${found.size}. Нажмите на отметку — ещё такая же строка"
+            }) + (if (photoPending > 0) " · читаю ${status.ifBlank { "…" }}" else ""),
             pending = pending,
+            allowAnother = !catalogMode,
             onFinish = { stage = "result" }
         )
         else -> Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
-                if (found.isEmpty()) "Результат" else "Найдено: ${found.size} · снимков: $shots" + (if (anyAi) " · часть прочитал ИИ" else ""),
+                if (found.isEmpty()) "Результат" else "Найдено: ${found.size}" + (if (anyAi) " · часть прочитал ИИ" else ""),
                 style = MaterialTheme.typography.titleLarge
             )
             if (found.isEmpty() && errors.isEmpty()) {
-                Text("Ничего не найдено. Переснимите: ближе, ровно и без бликов.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+                Text("Ничего не найдено. Подойдите ближе, держите ровно, без бликов.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
             }
             errors.forEach { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp)) }
             LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
                 items(found.toList(), key = { it.key }) { l ->
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(l.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                l.name.ifBlank { "Название не прочитано — введёте после" },
+                                fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis
+                            )
                             val sub = listOf(
                                 if (l.article.isNotBlank()) "арт. ${l.article}" else "",
                                 if (l.barcode.isNotBlank()) "ШК ${l.barcode}" else ""
@@ -630,8 +746,8 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit) 
                 }
             }
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(modifier = Modifier.weight(1f), onClick = { stage = "camera" }) { Text("Ещё снимок") }
-                Button(modifier = Modifier.weight(1f), enabled = found.isNotEmpty(), onClick = { onDone(found.toList()) }) { Text("Добавить (${found.size})") }
+                OutlinedButton(modifier = Modifier.weight(1f), onClick = { stage = "camera" }) { Text("Ещё снимать") }
+                Button(modifier = Modifier.weight(1f), enabled = found.isNotEmpty(), onClick = { onDone(found.filter { it.via != "wait" }.toList()) }) { Text((if (catalogMode) "В импорт" else "Добавить") + " (${found.size})") }
             }
         }
     }

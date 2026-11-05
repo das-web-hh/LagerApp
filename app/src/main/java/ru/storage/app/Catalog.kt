@@ -61,6 +61,7 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
     var rows by remember { mutableStateOf<List<List<String>>?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
+    var camList by remember { mutableStateOf(false) } // камера «Скан списка»: этикетки и списки в каталог
     var found by remember { mutableStateOf<List<Product>?>(null) }
 
     LaunchedEffect(query, sync.version) {
@@ -118,6 +119,33 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         }
     }
 
+    if (camList) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { camList = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
+        ) {
+            Surface(Modifier.fillMaxSize()) {
+                ListPhotoScreen(
+                    catalogMode = true,
+                    onCancel = { camList = false },
+                    onDone = { list ->
+                        camList = false
+                        // найденное идёт в обычное окно импорта: там видно столбцы, совпадающие товары обновляются, а не дублируются
+                        val data = ArrayList<List<String>>()
+                        data.add(listOf("Артикул", "Название", "Штрих-код"))
+                        for (l in list.asReversed()) if (l.name.isNotBlank()) data.add(listOf(l.article, l.name, l.barcode))
+                        if (data.size < 2) {
+                            Toast.makeText(ctx, "Нет товаров с названием: ничего не импортируется", Toast.LENGTH_LONG).show()
+                        } else {
+                            initCols = intArrayOf(1, 2, 0)
+                            initHeader = true
+                            rows = data
+                        }
+                    }
+                )
+            }
+        }
+    }
     if (scanning) {
         ScannerScreen(prefs = prefs, onResult = { query = it; scanning = false }, onClose = { scanning = false })
         return
@@ -146,21 +174,7 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
             if (Session.isAdmin) {
                 Button(onClick = { creating = true }) { Text("+ Товар") }
                 OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("📥 Импорт") }
-                OutlinedButton(onClick = {
-                    var c: Context? = ctx
-                    while (c != null && c !is Activity) c = (c as? ContextWrapper)?.baseContext
-                    val act = c as? Activity
-                    if (act == null) return@OutlinedButton
-                    val opts = GmsDocumentScannerOptions.Builder()
-                        .setGalleryImportAllowed(false)
-                        .setPageLimit(8)
-                        .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
-                        .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
-                        .build()
-                    GmsDocumentScanning.getClient(opts).getStartScanIntent(act)
-                        .addOnSuccessListener { sender -> camScan.launch(IntentSenderRequest.Builder(sender).build()) }
-                        .addOnFailureListener { Toast.makeText(ctx, "Сканер недоступен: " + (it.message ?: ""), Toast.LENGTH_LONG).show() }
-                }) { Text("📷 Скан списка") }
+                OutlinedButton(onClick = { camList = true }) { Text("📷 Скан списка") }
             }
             OutlinedButton(
                 onClick = { scope.launch { Cloud.runProducts(db, sync, true) } },

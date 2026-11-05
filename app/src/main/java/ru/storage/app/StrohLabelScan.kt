@@ -21,7 +21,10 @@ object StrohLabel {
     private val RE_PRICE = Regex("^[€\\s]*\\d+[.,]\\d{2}\\s*€?$")
     private val RE_TIER = Regex("(?i)\\bab\\s*\\d+\\s*st")
 
-    class Parsed(val barcode: String, val article: String, val name: String, val region: Rect)
+    private val RE_LOGO = Regex("(?i)str[oö0ó]h|f[uü]r\\s*alle|alle\\s*st[aä]l")
+
+    /** logo — в области этикетки прочитан логотип STRÖH или «FÜR ALLE STÄLLE» (значит, это этикетка Ströh, а не чужой штрих-код). */
+    class Parsed(val barcode: String, val article: String, val name: String, val region: Rect, val logo: Boolean = false)
 
     /** Ключ товара: тот же код в записи UPC-A (12) и EAN-13 с нулём — один и тот же. */
     fun key(barcode: String): String = barcode.trim().trimStart('0')
@@ -33,7 +36,7 @@ object StrohLabel {
     fun region(b: Rect): Rect {
         val w = b.width()
         val h = b.height()
-        return Rect(b.right - (w * 3.25f).toInt(), b.top - (h * 0.35f).toInt(), b.right + (w * 0.12f).toInt(), b.top + (h * 3.1f).toInt())
+        return Rect(b.right - (w * 3.25f).toInt(), b.top - (h * 0.35f).toInt(), b.right + (w * 0.12f).toInt(), b.top + (h * 3.5f).toInt())
     }
 
     /** barcodes — все штрих-коды кадра, lines — все строки текста кадра (в координатах повёрнутого кадра). */
@@ -97,7 +100,7 @@ object StrohLabel {
                 }
             }
             val name = parts.joinToString(" ").replace(Regex("\\s+"), " ").trim()
-            Parsed(code, art, if (name.any { it.isLetter() }) name else "", regions[i])
+            Parsed(code, art, if (name.any { it.isLetter() }) name else "", regions[i], mine.any { RE_LOGO.containsMatchIn(it.first) })
         }
     }
 }
