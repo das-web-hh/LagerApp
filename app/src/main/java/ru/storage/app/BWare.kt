@@ -328,6 +328,9 @@ fun CatalogWheel(
     val sync = remember { SyncState() }
     val scope = rememberCoroutineScope()
     var unknownCode by remember { mutableStateOf<String?>(null) }
+    val unknownQueue = remember { mutableStateListOf<String>() } // коды этикеток без названия: спрашиваем по одному
+    var labelScan by remember { mutableStateOf(false) }          // камера «Этикетки» (Инвентаризация, «+» при пустом поиске)
+    fun nextUnknown() { unknownCode = if (unknownQueue.isNotEmpty()) unknownQueue.removeAt(0) else null }
     var scanBanner by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     LaunchedEffect(scanBanner) { if (scanBanner != null) { delay(1500); scanBanner = null } }
     ScanBanner(scanBanner)
@@ -422,7 +425,7 @@ fun CatalogWheel(
     unknownCode?.let { code ->
         var nm by remember(code) { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { unknownCode = null },
+            onDismissRequest = { nextUnknown() },
             title = { Text("Товара нет в базе") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -434,10 +437,67 @@ fun CatalogWheel(
                 }
             },
             confirmButton = {
-                Button(enabled = nm.isNotBlank(), onClick = { addRow(nm, "", fact = "1", barcode = code); unknownCode = null }) { Text("Добавить") }
+                Button(enabled = nm.isNotBlank(), onClick = { addRow(nm, "", fact = "1", barcode = code); nextUnknown() }) { Text("Добавить") }
             },
-            dismissButton = { TextButton(onClick = { unknownCode = null }) { Text("Отмена") } }
+            dismissButton = { TextButton(onClick = { nextUnknown() }) { Text("Отмена") } }
         )
+    }
+
+    // этикетки Ströh из камеры: новые строки наверх списка (количество считают потом барабаном), уже имеющиеся только дополняются
+    fun addScanned(list: List<ScannedLabel>) {
+        if (list.isEmpty()) return
+        scope.launch {
+            var added = 0
+            var dup = 0
+            val noName = ArrayList<String>()
+            for (l in list) {
+                val prod = withContext(Dispatchers.IO) {
+                    try { if (l.barcode.isNotBlank()) db.findByBarcode(l.barcode) else null } catch (e: Exception) { null }
+                }
+                val name = (prod?.name?.takeIf { it.isNotBlank() } ?: l.name).trim()
+                if (name.isEmpty()) {
+                    if (l.barcode.isNotBlank()) noName.add(l.barcode)
+                    continue
+                }
+                val existing = rows.firstOrNull {
+                    (l.barcode.isNotBlank() && sameBarcode(it.barcode, l.barcode)) ||
+                        (prod != null && it.productId == prod.id) || it.name.trim().equals(name, true)
+                }
+                if (existing != null) {
+                    if (existing.barcode.isBlank() && l.barcode.isNotBlank()) existing.barcode = l.barcode
+                    if (existing.article.isBlank()) existing.article = l.article.ifBlank { prod?.article.orEmpty() }
+                    focusTarget = existing
+                    dup++
+                    continue
+                }
+                val row = ItemRow(name, "", extra = true, productId = prod?.id.orEmpty())
+                row.barcode = l.barcode
+                row.article = l.article.ifBlank { prod?.article.orEmpty() }
+                rows.add(0, row)
+                focusTarget = row
+                added++
+            }
+            if (added > 0 || dup > 0) { addTick++; query = ""; onAdded() }
+            Toast.makeText(
+                ctx,
+                "Добавлено: $added" + (if (dup > 0) ", уже в списке: $dup" else "") + (if (noName.isNotEmpty()) ", без названия: ${noName.size}" else ""),
+                Toast.LENGTH_LONG
+            ).show()
+            if (noName.isNotEmpty()) { unknownQueue.addAll(noName); if (unknownCode == null) nextUnknown() }
+        }
+    }
+    if (labelScan) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { labelScan = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
+        ) {
+            Surface(Modifier.fillMaxSize()) {
+                LabelScanScreen(
+                    onDone = { list -> labelScan = false; addScanned(list) },
+                    onCancel = { labelScan = false }
+                )
+            }
+        }
     }
     scanMode?.let { mode ->
         androidx.compose.ui.window.Dialog(
@@ -462,8 +522,13 @@ fun CatalogWheel(
             onChange = { query = germanKeys(it) },
             onAdd = {
                 val typed = query.trim()
-                val pid = suggestions.firstOrNull { it.name.trim().equals(typed, true) }?.id.orEmpty()
-                addRow(typed, pid)
+                if (typed.isEmpty() && inventory) {
+                    // «Инвентаризация»: «+» при пустом поиске открывает камеру для этикеток
+                    labelScan = true
+                } else {
+                    val pid = suggestions.firstOrNull { it.name.trim().equals(typed, true) }?.id.orEmpty()
+                    addRow(typed, pid)
+                }
             },
             onScan = if (scanner) ({ scanMode = "add" }) else null
         )

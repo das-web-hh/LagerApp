@@ -217,27 +217,37 @@ private fun invText(j: InvJob, now: Long): String {
     return sb.toString()
 }
 
-/** Штрих-коды, привязанные при пересчёте, попадают в каталог (новые товары заводятся с весом/упаковкой из названия). */
+/**
+ * Штрихкоды и артикулы из инвентаризации попадают в каталог — и в телефон (SQLite), и в облако (Firebase):
+ * Cloud.saveProduct пишет в обе базы. Новые товары заводятся с весом/упаковкой из названия;
+ * у уже имеющегося товара дописываются только пустые поля (штрих-код, артикул), чужие данные не затираются.
+ */
 private fun invSaveBarcodes(ctx: Context, j: InvJob) {
     val db = ProductDb.get(ctx)
     j.rows.toList().forEach { r ->
         val code = r.barcode.trim()
-        if (code.isEmpty()) return@forEach
+        val art = r.article.trim()
+        val name = r.name.trim()
+        if (code.isEmpty() && art.isEmpty()) return@forEach
         try {
-            val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null) ?: db.findByName(r.name.trim())
+            val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null)
+                ?: (if (name.isNotEmpty()) db.findByName(name) else null)
+                ?: (if (code.isNotEmpty()) db.findByBarcode(code) else null)
             if (p == null) {
-                if (db.findByBarcode(code) != null) return@forEach
-                val local = ProductParse.parseLocal(listOf(r.name.trim())).firstOrNull()
+                if (name.isEmpty()) return@forEach
+                val local = ProductParse.parseLocal(listOf(name)).firstOrNull()
                 Cloud.saveProduct(
                     db,
                     Product(
-                        id = UUID.randomUUID().toString(), name = r.name.trim(), article = r.article.trim(), barcode = code,
+                        id = UUID.randomUUID().toString(), name = name, article = art, barcode = code,
                         weight = local?.size ?: "", unit = local?.unit ?: "", pack = local?.pack ?: "",
                         manufacturer = local?.manufacturer ?: "", photos = emptyList(), updatedAt = 0L
                     )
                 )
-            } else if (p.barcode.isBlank() && db.findByBarcode(code) == null) {
-                Cloud.saveProduct(db, p.copy(barcode = code))
+            } else {
+                val newCode = if (p.barcode.isBlank() && code.isNotEmpty() && db.findByBarcode(code) == null) code else p.barcode
+                val newArt = if (p.article.isBlank() && art.isNotEmpty()) art else p.article
+                if (newCode != p.barcode || newArt != p.article) Cloud.saveProduct(db, p.copy(barcode = newCode, article = newArt))
             }
         } catch (e: Exception) {
         }
@@ -453,7 +463,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
             groups = emptyList(),
             modifier = Modifier.weight(1f).fillMaxWidth(),
             errorText = error,
-            emptyText = "Отсканируйте штрих-код или найдите товар по названию",
+            emptyText = "Отсканируйте штрих-код, найдите товар по названию или нажмите «+» (пустой поиск) — камера прочитает этикетки",
             onAdded = { error = "" },
             scanner = true,
             inventory = true
