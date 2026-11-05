@@ -144,6 +144,9 @@ class ItemRow(
     /** Штрих-код товара ("" — не привязан). Привязывается сканером; при сохранении попадает в каталог и в историю приёма. */
     var barcode by mutableStateOf("")
 
+    /** true — код подставлен «по похожему» названию (не точно): внешний сканер такую строку берёт только в последнюю очередь. */
+    var barcodeSoft by mutableStateOf(false)
+
     /** Номер артикула, введённый вручную ("" — берётся из каталога, если там есть). */
     var article by mutableStateOf("")
     var fact by mutableStateOf("")
@@ -817,7 +820,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             arr.put(
                 JSONObject().put("n", r.name).put("q", r.qty).put("x", r.extra).put("p", r.productId)
                     .put("s", r.status).put("pr", r.printed).put("f", r.fact).put("d", r.defect)
-                    .put("e", r.expiry).put("b", r.barcode).put("nt", r.note).put("ph", r.photo)
+                    .put("e", r.expiry).put("b", r.barcode).put("bs", r.barcodeSoft).put("nt", r.note).put("ph", r.photo)
                     .put("dph", JSONArray(r.defectPhotos.toList()))
                     .put("rs", JSONArray(r.reasons.toList()))
             )
@@ -860,6 +863,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             r.defect = j.optString("d")
             r.expiry = j.optString("e")
             r.barcode = j.optString("b")
+            r.barcodeSoft = j.optBoolean("bs")
             r.note = j.optString("nt")
             r.photo = j.optString("ph")
             j.optJSONArray("dph")?.let { a -> for (k in 0 until a.length()) r.defectPhotos.add(a.getString(k)) }
@@ -888,19 +892,23 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             if (r.barcode.isNotBlank() || r.name.isBlank()) continue
             val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null) ?: db.findByName(r.name.trim())
             if (p != null) {
-                if (p.barcode.isNotBlank()) r.barcode = p.barcode
+                if (p.barcode.isNotBlank()) { r.barcode = p.barcode; r.barcodeSoft = false }
                 continue // карточка этого товара есть: чужой код ей не подставляем
             }
             val cat = catalog ?: db.allProducts().filter { it.barcode.isNotBlank() }
                 .map { it to ProductMatch.sigOfProduct(it) }.also { catalog = it }
             val m = ProductMatch.best(ProductMatch.sigOf(r.name, r.parts), cat) ?: continue
             r.barcode = m.barcode
+            r.barcodeSoft = true // подставлен по похожему названию
             if (r.productId.isEmpty()) r.productId = m.id // сохранится на ту же карточку, а не заведёт дубль
         }
         // одинаковые строки одной накладной (например, 30 + ещё 30) получают общий код
         for (r in items.toList()) {
             if (r.barcode.isNotBlank()) continue
-            twinsOf(r).firstOrNull { it.barcode.isNotBlank() }?.let { r.barcode = it.barcode }
+            twinsOf(r).firstOrNull { it.barcode.isNotBlank() }?.let { t ->
+                r.barcode = t.barcode
+                r.barcodeSoft = t.barcodeSoft || !t.name.trim().equals(r.name.trim(), true)
+            }
         }
     }
 
@@ -1326,7 +1334,8 @@ private fun ColumnScope.NameModeMain(
                 conflict = Triple(row, code, otherRow?.name ?: owner?.name ?: "")
             } else {
                 row.barcode = code
-                twins.forEach { if (it.barcode.isBlank() || sameBarcode(it.barcode, code)) it.barcode = code }
+                row.barcodeSoft = false
+                twins.forEach { if (it.barcode.isBlank() || sameBarcode(it.barcode, code)) { it.barcode = code; it.barcodeSoft = false } }
                 Haptics.pulse(ctx, Haptics.TAP)
                 val n = 1 + twins.count { sameBarcode(it.barcode, code) }
                 Toast.makeText(ctx, if (n > 1) "Штрих-код привязан к $n строкам: ${row.name}" else "Штрих-код привязан: ${row.name}", Toast.LENGTH_SHORT).show()
@@ -1350,17 +1359,28 @@ private fun ColumnScope.NameModeMain(
             return
         }
         scope.launch {
-            val withCode = job.items.filter { sameBarcode(it.barcode, code) }
+            // строго: сканированный штрих-код → строка именно этого товара.
+            // 1) строки с этим кодом, привязанным точно (с документа, из каталога по названию, сканером)
+            val hard = job.items.filter { !it.barcodeSoft && sameBarcode(it.barcode, code) }
             // одинаковые строки (30 + ещё 30): считаем в первую, где факт ещё не дошёл до плана
-            var row = withCode.firstOrNull { parseQ(it.fact) < parseQ(it.qty) } ?: withCode.firstOrNull()
+            fun pick(l: List<ItemRow>) = l.firstOrNull { parseQ(it.fact) < parseQ(it.qty) } ?: l.firstOrNull()
+            var row = pick(hard)
             if (row == null) {
-                val p = withContext(Dispatchers.IO) { db.findByBarcode(code) }
-                if (p != null) {
-                    row = job.items.firstOrNull { it.productId.isNotEmpty() && it.productId == p.id }
-                        ?: job.items.firstOrNull { it.name.trim().equals(p.name.trim(), true) }
-                    if (row != null && row.barcode.isBlank()) row.barcode = code
+                // 2) товар каталога по этому коду (с учётом всех названий одного товара) → его строка в списке
+                val ids = HashSet<String>()
+                val names = HashSet<String>()
+                withContext(Dispatchers.IO) {
+                    db.findByBarcode(code)?.let { p ->
+                        ProductGroups.membersOf(db, p).forEach { ids.add(it.id); names.add(it.name.trim().lowercase()) }
+                    }
+                }
+                if (ids.isNotEmpty()) {
+                    row = pick(job.items.filter { (it.productId.isNotEmpty() && it.productId in ids) || it.name.trim().lowercase() in names })
+                    if (row != null && (row.barcode.isBlank() || row.barcodeSoft)) { row.barcode = code; row.barcodeSoft = false }
                 }
             }
+            // 3) в последнюю очередь — строки, где код подставлен по похожему названию
+            if (row == null) row = pick(job.items.filter { it.barcodeSoft && sameBarcode(it.barcode, code) })
             if (row == null) {
                 scanStatus = "Нет в списке: $code"
                 ScanFeedback.beep(false)
@@ -1503,7 +1523,8 @@ private fun ColumnScope.NameModeMain(
                     val twins = job.twinsOf(row)
                     job.items.filter { it !== row && it !in twins && it.barcode == code }.forEach { it.barcode = "" }
                     row.barcode = code
-                    twins.forEach { it.barcode = code }
+                    row.barcodeSoft = false
+                    twins.forEach { it.barcode = code; it.barcodeSoft = false }
                     conflict = null
                 }) { Text("Привязать") }
             },
