@@ -115,7 +115,9 @@ private class Line(
     val fact: Double,
     val defect: Double,
     val extra: Boolean,
-    val article: String = ""
+    val article: String = "",
+    val barcode: String = "",
+    val weight: String = ""
 )
 
 /** kind: 0 — совпало, 1 — недостача, 2 — излишек, 3 — нет в плане. */
@@ -128,7 +130,8 @@ private fun fmtNum(d: Double): String =
     else String.format(Locale.ROOT, "%.2f", d).trimEnd('0').trimEnd('.')
 
 private fun lines(job: AutoJob): List<Line> = job.items.filter { it.name.trim().isNotEmpty() }.map {
-    Line(it.name.trim(), if (it.extra) 0.0 else num(it.qty), num(it.fact), num(it.defect), it.extra, ArticleLookup.find(it))
+    val info = ArticleLookup.app?.let { c -> ArticleLookup.info(ProductDb.get(c), it) } ?: ArticleLookup.Info(it.article.trim(), it.barcode.trim(), "")
+    Line(it.name.trim(), if (it.extra) 0.0 else num(it.qty), num(it.fact), num(it.defect), it.extra, info.article, info.barcode, info.weight)
 }
 
 private fun statusOf(l: Line): Status = when {
@@ -139,8 +142,7 @@ private fun statusOf(l: Line): Status = when {
     else -> Status(0, 0.0)
 }
 
-private fun art(l: Line) =
-    if (l.article.isEmpty()) "" else "<div class='sub'>${tr("article")}: ${esc(l.article)}</div>"
+private fun art(l: Line) = ArticleLookup.subHtml(l.article, l.barcode, l.weight)
 
 private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 

@@ -345,18 +345,25 @@ private fun searchReceipts(all: List<Receipt>, query: String): List<ReceiptHit> 
     return out.take(100)
 }
 
-/** Подсказка из каталога: товар, когда его принимали в последний раз и сколько раз. */
-private class ProdHit(val product: Product, val last: Receipt?, val count: Int)
+/** Подсказка из каталога: товар (все названия одного товара — одной строкой), когда его принимали в последний раз и сколько раз. */
+private class ProdHit(val product: Product, val last: Receipt?, val count: Int, val members: List<Product> = listOf(product))
 
 private fun searchProducts(db: ProductDb, all: List<Receipt>, query: String): List<ProdHit> {
     val found = db.search(query, 100)
     if (found.isEmpty()) return emptyList()
-    val out = found.map { p ->
-        val nameLc = p.name.trim().lowercase()
+    // карточки одного товара под разными названиями сводим в одну строку, даже если запросу подошло только одно из названий
+    val groups = LinkedHashMap<String, List<Product>>()
+    for (p in found) {
+        val key = p.groupId.ifBlank { p.id }
+        if (key !in groups) groups[key] = if (p.groupId.isBlank()) listOf(p) else db.byGroup(p.groupId).ifEmpty { listOf(p) }
+    }
+    val out = groups.values.map { members ->
+        val ids = members.map { it.id }.toSet()
+        val names = members.map { it.name.trim().lowercase() }.toSet()
         val rs = all.filter { r ->
-            r.items.any { it.productId == p.id || (it.productId.isEmpty() && it.name.trim().lowercase() == nameLc) }
+            r.items.any { it.productId in ids || (it.productId.isEmpty() && it.name.trim().lowercase() in names) }
         }
-        ProdHit(p, rs.maxByOrNull { it.receivedAt }, rs.size)
+        ProdHit(ProductGroups.primary(members), rs.maxByOrNull { it.receivedAt }, rs.size, members)
     }
     // сначала те, что принимали недавно; не принимавшиеся — в конце, по алфавиту
     return out.sortedWith(compareByDescending<ProdHit> { it.last?.receivedAt ?: Long.MIN_VALUE }.thenBy { it.product.name.lowercase() })
@@ -430,8 +437,16 @@ private fun SearchResultsList(
         items(prodHits, key = { "p" + it.product.id }) { h ->
             Column(Modifier.fillMaxWidth().clickable { onOpenProduct(h.product.id) }.padding(vertical = 6.dp)) {
                 Text(h.product.name, fontWeight = FontWeight.Medium)
-                val sub = listOf(h.product.article, h.product.barcode).filter { it.isNotBlank() }.joinToString(" · ")
+                val article = h.members.firstOrNull { it.article.isNotBlank() }?.article ?: ""
+                val barcode = h.members.firstOrNull { it.barcode.isNotBlank() }?.barcode ?: ""
+                val sub = listOf(article, barcode).filter { it.isNotBlank() }.joinToString(" · ")
                 if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
+                val others = h.members.filter { it.id != h.product.id }
+                if (others.isNotEmpty()) Text(
+                    "🔗 Тот же товар: " + others.joinToString("; ") { it.name },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
                 val l = h.last
                 Text(
                     if (l == null) "Ещё не принимали"

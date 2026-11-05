@@ -17,10 +17,13 @@ import kotlinx.coroutines.withContext
 private class HistEntry(val receipt: Receipt, val lines: List<ReceiptItem>)
 
 private fun entriesFor(db: ProductDb, p: Product): List<HistEntry> {
-    val nameLc = p.name.trim().lowercase()
+    // все названия одного и того же товара: приёмы собираются вместе
+    val members = ProductGroups.membersOf(db, p)
+    val ids = members.map { it.id }.toSet()
+    val names = members.map { it.name.trim().lowercase() }.toSet()
     return db.allReceipts().mapNotNull { r ->
         val lines = r.items.filter {
-            it.productId == p.id || (it.productId.isEmpty() && it.name.trim().lowercase() == nameLc)
+            it.productId in ids || (it.productId.isEmpty() && it.name.trim().lowercase() in names)
         }
         if (lines.isEmpty()) null else HistEntry(r, lines)
     }.sortedByDescending { it.receipt.receivedAt }   // новые приёмы сверху
@@ -36,6 +39,7 @@ fun ProductHistoryScreen(id: String, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
     var product by remember { mutableStateOf<Product?>(null) }
+    var sameNames by remember { mutableStateOf<List<Product>>(emptyList()) }
     var entries by remember { mutableStateOf<List<HistEntry>?>(null) }
     var loaded by remember { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<List<String>?>(null) }
@@ -44,6 +48,7 @@ fun ProductHistoryScreen(id: String, onClose: () -> Unit) {
         withContext(Dispatchers.IO) {
             val p = db.getProduct(id)
             product = p
+            sameNames = if (p != null) ProductGroups.membersOf(db, p).filter { it.id != p.id } else emptyList()
             entries = if (p != null) entriesFor(db, p) else emptyList()
         }
         loaded = true
@@ -72,6 +77,11 @@ fun ProductHistoryScreen(id: String, onClose: () -> Unit) {
                 "Штрих-код" to p.barcode
             ).filter { it.second.isNotBlank() }
             fields.forEach { (k, value) -> Text("$k: $value", style = MaterialTheme.typography.bodyMedium) }
+            if (sameNames.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text("🔗 Тот же товар под другими названиями:", style = MaterialTheme.typography.bodySmall)
+                sameNames.forEach { Text("• " + it.name, style = MaterialTheme.typography.bodySmall) }
+            }
             if (p.photos.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = { viewer = p.photos }) { Text("Фото товара (${p.photos.size})") }

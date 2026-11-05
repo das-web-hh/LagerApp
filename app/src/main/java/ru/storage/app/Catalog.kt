@@ -175,6 +175,18 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
                 Button(onClick = { creating = true }) { Text("+ Товар") }
                 OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("📥 Импорт") }
                 OutlinedButton(onClick = { camList = true }) { Text("📷 Скан списка") }
+                OutlinedButton(
+                    enabled = !sync.busy,
+                    onClick = {
+                        scope.launch {
+                            sync.busy = true
+                            val n = withContext(Dispatchers.IO) { ProductGroups.link(db) }
+                            sync.busy = false
+                            sync.text = if (n > 0) "Объединено одинаковых товаров, изменено карточек: $n" else "Новых одинаковых товаров не найдено"
+                            sync.version++
+                        }
+                    }
+                ) { Text("🔗 Объединить одинаковые") }
             }
             OutlinedButton(
                 onClick = { scope.launch { Cloud.runProducts(db, sync, true) } },
@@ -195,7 +207,7 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         LazyColumn(Modifier.fillMaxSize()) {
             items(found ?: list, key = { it.id }) { p ->
                 Text(
-                    p.name,
+                    (if (p.groupId.isNotBlank()) "🔗 " else "") + p.name,
                     modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 7.dp)
                 )
                 HorizontalDivider()
@@ -364,6 +376,18 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
     var error by remember { mutableStateOf("") }
     var parsing by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var groupMembers by remember { mutableStateOf<List<Product>>(emptyList()) }
+    var groupTick by remember { mutableStateOf(0) }
+    var mergeDialog by remember { mutableStateOf(false) }
+    var mergeQuery by remember { mutableStateOf("") }
+    var splitAsk by remember { mutableStateOf<Product?>(null) }
+
+    LaunchedEffect(id, groupTick) {
+        groupMembers = if (id == null) emptyList() else withContext(Dispatchers.IO) {
+            val cur = db.getProduct(id)
+            if (cur == null || cur.groupId.isBlank()) emptyList() else db.byGroup(cur.groupId)
+        }
+    }
 
     LaunchedEffect(id) {
         if (id != null) {
@@ -458,6 +482,27 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
                 FilledTonalButton(onClick = { scanning = true }) { Text("📷 Скан") }
             }
         }
+        if (id != null) {
+            Spacer(Modifier.height(16.dp))
+            Text("Одинаковый товар под другими названиями", style = MaterialTheme.typography.titleSmall)
+            if (groupMembers.size < 2) {
+                Text("Не объединён с другими карточками", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text("Эти карточки показываются как один товар, приёмы собраны вместе.", style = MaterialTheme.typography.bodySmall)
+                groupMembers.forEach { m ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            m.name + if (m.id == id) "  (эта карточка)" else "",
+                            modifier = Modifier.weight(1f).padding(vertical = 4.dp)
+                        )
+                        if (canEdit) TextButton(onClick = { splitAsk = m }) { Text("Отделить") }
+                    }
+                }
+            }
+            if (canEdit) OutlinedButton(onClick = { mergeQuery = ""; mergeDialog = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("🔗 Объединить с другой карточкой…")
+            }
+        }
         Spacer(Modifier.height(16.dp))
         Text("Фото", style = MaterialTheme.typography.titleSmall)
         Spacer(Modifier.height(4.dp))
@@ -486,7 +531,9 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
                         manufacturer = manufacturer.trim(), photos = cur, updatedAt = 0L
                     )
                     scope.launch(Dispatchers.IO) {
-                        Cloud.saveProduct(db, p)
+                        // группа могла измениться кнопками «Объединить»/«Отделить» уже после открытия карточки — берём свежую
+                        val fresh = old?.let { db.getProduct(it.id) }
+                        Cloud.saveProduct(db, p.copy(groupId = fresh?.groupId ?: "", apart = fresh?.apart ?: emptyList()))
                         Media.discard(ctx, db, (old?.photos ?: emptyList()).filter { it !in cur })
                         Media.uploadPending(ctx, db)
                         withContext(Dispatchers.Main) { onClose() }
@@ -520,6 +567,69 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
                 }) { Text("Удалить") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } }
+        )
+    }
+
+    splitAsk?.let { m ->
+        AlertDialog(
+            onDismissRequest = { splitAsk = null },
+            title = { Text("Отделить от группы?") },
+            text = { Text(m.name + "\n\nОна станет отдельным товаром и автоматически больше не будет объединяться с остальными названиями этой группы.") },
+            confirmButton = {
+                Button(onClick = {
+                    splitAsk = null
+                    scope.launch {
+                        withContext(Dispatchers.IO) { ProductGroups.split(db, m.id) }
+                        groupTick++
+                    }
+                }) { Text("Отделить") }
+            },
+            dismissButton = { TextButton(onClick = { splitAsk = null }) { Text("Отмена") } }
+        )
+    }
+
+    if (mergeDialog && id != null) {
+        var cands by remember { mutableStateOf<List<Product>>(emptyList()) }
+        LaunchedEffect(mergeQuery, groupTick) {
+            cands = if (mergeQuery.trim().length < MIN_SEARCH_CHARS) emptyList()
+            else withContext(Dispatchers.IO) {
+                val own = db.getProduct(id)
+                val skip = (own?.let { ProductGroups.membersOf(db, it) } ?: emptyList()).map { it.id }.toSet() + id
+                db.search(mergeQuery, 40).filter { it.id !in skip }
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { mergeDialog = false },
+            title = { Text("Тот же товар — какая карточка?") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        mergeQuery, { mergeQuery = germanKeys(it) }, label = { Text("Название, артикул или штрих-код") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        items(cands, key = { it.id }) { c ->
+                            Column(
+                                Modifier.fillMaxWidth().clickable {
+                                    mergeDialog = false
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) { ProductGroups.merge(db, listOf(id, c.id)) }
+                                        groupTick++
+                                    }
+                                }.padding(vertical = 6.dp)
+                            ) {
+                                Text(c.name)
+                                val sub = listOf(c.article, c.barcode).filter { it.isNotBlank() }.joinToString(" · ")
+                                if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { mergeDialog = false }) { Text("Отмена") } }
         )
     }
 }

@@ -20,7 +20,11 @@ data class Product(
     val pack: String,
     val manufacturer: String,
     val photos: List<String>,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** Общий код группы: товары с одинаковым кодом — один и тот же товар под разными названиями ("" — товар сам по себе). */
+    val groupId: String = "",
+    /** Товары, от которых этот отделили вручную: автоматически они больше не объединяются. */
+    val apart: List<String> = emptyList()
 )
 
 /** qty — фактическое количество; plan — по документу ("" если плана нет), defect — брак ("" если нет). */
@@ -105,7 +109,7 @@ fun jsonToItems(s: String?): List<ReceiptItem> {
 }
 
 class ProductDb private constructor(context: Context) :
-    SQLiteOpenHelper(context, "catalog.db", null, 4) {
+    SQLiteOpenHelper(context, "catalog.db", null, 5) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -114,10 +118,12 @@ class ProductDb private constructor(context: Context) :
                 "barcode TEXT NOT NULL, name_lc TEXT NOT NULL, search_lc TEXT NOT NULL, " +
                 "weight TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '', " +
                 "pack TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT '', " +
-                "photos TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL)"
+                "photos TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, " +
+                "group_id TEXT NOT NULL DEFAULT '', apart TEXT NOT NULL DEFAULT '')"
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name_lc)")
         createExtra(db)
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_group ON products(group_id)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -135,6 +141,11 @@ class ProductDb private constructor(context: Context) :
             if (oldVersion < 4) {
                 db.execSQL("ALTER TABLE receipts ADD COLUMN doc_hash TEXT NOT NULL DEFAULT ''")
             }
+        }
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE products ADD COLUMN group_id TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE products ADD COLUMN apart TEXT NOT NULL DEFAULT ''")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_group ON products(group_id)")
         }
     }
 
@@ -154,7 +165,7 @@ class ProductDb private constructor(context: Context) :
 
     // ---------- товары ----------
 
-    private val pcols = "id, name, article, barcode, weight, unit, pack, manufacturer, photos, updated_at"
+    private val pcols = "id, name, article, barcode, weight, unit, pack, manufacturer, photos, updated_at, group_id, apart"
 
     private fun readProducts(sql: String, args: Array<String>): List<Product> =
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -164,7 +175,8 @@ class ProductDb private constructor(context: Context) :
                     Product(
                         c.getString(0), c.getString(1), c.getString(2), c.getString(3),
                         c.getString(4), c.getString(5), c.getString(6), c.getString(7),
-                        jsonToList(c.getString(8)), c.getLong(9)
+                        jsonToList(c.getString(8)), c.getLong(9),
+                        c.getString(10), jsonToList(c.getString(11))
                     )
                 )
             }
@@ -199,6 +211,8 @@ class ProductDb private constructor(context: Context) :
                     put("manufacturer", p.manufacturer)
                     put("photos", listToJson(p.photos))
                     put("updated_at", p.updatedAt)
+                    put("group_id", p.groupId)
+                    put("apart", listToJson(p.apart))
                 }
                 db.insertWithOnConflict("products", null, v, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -230,6 +244,11 @@ class ProductDb private constructor(context: Context) :
 
     fun findByArticle(article: String): Product? =
         readProducts("SELECT $pcols FROM products WHERE article = ? LIMIT 1", arrayOf(article)).firstOrNull()
+
+    /** Все названия одного и того же товара (с общим кодом группы). */
+    fun byGroup(groupId: String): List<Product> =
+        if (groupId.isBlank()) emptyList()
+        else readProducts("SELECT $pcols FROM products WHERE group_id = ? ORDER BY name_lc", arrayOf(groupId))
 
     fun allProducts(): List<Product> =
         readProducts("SELECT $pcols FROM products ORDER BY name_lc", emptyArray())

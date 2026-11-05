@@ -41,7 +41,7 @@ class Dup(
 
 /*
  * Firestore:
- *  products/{id}: name, article, barcode, weight, unit, pack, manufacturer, photos[], updatedAt, deleted
+ *  products/{id}: name, article, barcode, weight, unit, pack, manufacturer, photos[], groupId, apart[], updatedAt, deleted
  *  receipts/{id}: sender, orderNo, receivedAt, receiver, items[{productId,name,qty}], photos[], invoices[], updatedAt, deleted
  * Файлы фото/накладных: Firebase Storage, путь media/<имя файла>
  */
@@ -65,16 +65,18 @@ object Cloud {
         "pack" to p.pack,
         "manufacturer" to p.manufacturer,
         "photos" to p.photos,
+        "groupId" to p.groupId,
+        "apart" to p.apart,
         "updatedAt" to p.updatedAt,
         "deleted" to false
     )
 
-    fun saveProduct(db: ProductDb, p: Product): Product {
+    fun saveProduct(db: ProductDb, p: Product, log: Boolean = true): Product {
         val isNew = db.getProduct(p.id) == null
         val np = p.copy(updatedAt = System.currentTimeMillis())
         db.upsertProducts(listOf(np))
         fs.collection("products").document(np.id).set(productMap(np))
-        Journal.log("Каталог", (if (isNew) "Добавлен товар: " else "Изменён товар: ") + np.name)
+        if (log) Journal.log("Каталог", (if (isNew) "Добавлен товар: " else "Изменён товар: ") + np.name)
         return np
     }
 
@@ -169,7 +171,10 @@ object Cloud {
         val nr = r.copy(items = items)
         db.upsertReceipts(listOf(nr))
         fs.collection("receipts").document(nr.id).set(receiptMap(nr))
-        if (added > 0) Journal.log("Каталог", "Из приёмки добавлено в каталог новых товаров: $added")
+        if (added > 0) {
+            Journal.log("Каталог", "Из приёмки добавлено в каталог новых товаров: $added")
+            ProductGroups.link(db) // новая запись названия может оказаться тем же товаром, что уже есть в каталоге
+        }
         return nr
     }
 
@@ -199,7 +204,9 @@ object Cloud {
             pack = get("pack")?.toString() ?: "",
             manufacturer = get("manufacturer")?.toString() ?: "",
             photos = strList(get("photos")),
-            updatedAt = getLong("updatedAt") ?: 0L
+            updatedAt = getLong("updatedAt") ?: 0L,
+            groupId = get("groupId")?.toString() ?: "",
+            apart = strList(get("apart"))
         )
     }
 
@@ -309,6 +316,7 @@ object Cloud {
             val added = if (empty) full(col, st) { applyProducts(db, it) }
             else incremental(col, withContext(Dispatchers.IO) { db.maxProductUpdated() }, Int.MAX_VALUE) { applyProducts(db, it) }
             lastProducts = System.currentTimeMillis()
+            if (added > 0) withContext(Dispatchers.IO) { ProductGroups.link(db) }
             val total = withContext(Dispatchers.IO) { db.countProducts() }
             st.text = if (empty) "Загружено товаров: $total"
             else if (added > 0) "Обновлено: $added, всего $total" else "Каталог актуален ($total)"

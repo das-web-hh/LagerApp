@@ -134,7 +134,7 @@ private fun invCsv(now: Long): String {
     BWareInvHolder.rows.forEachIndexed { i, r ->
         sb.append(i + 1).append(';')
             .append(q(r.name.trim())).append(';')
-            .append(q(r.barcode)).append(';')
+            .append(q(ArticleLookup.barcode(r))).append(';')
             .append(bwFmt(bwQty(r.fact))).append(';')
             .append(q(r.expiry)).append(';')
             .append(q(InvOptions.reasons.filter { it in r.reasons }.joinToString(", "))).append(';')

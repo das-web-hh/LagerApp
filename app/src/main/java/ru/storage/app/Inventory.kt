@@ -114,17 +114,10 @@ object InventoryStore {
 
 private fun invTotal(j: InvJob) = j.rows.sumOf { parseQ(it.fact) }
 
-/** Артикулы строк из каталога (по id товара, названию или штрих-коду); индексы совпадают с j.rows. Вызывать не в главном потоке. */
-private fun invArticles(ctx: Context, rows: List<ItemRow>): List<String> {
+/** Артикул, штрих-код и вес строк из каталога (с учётом всех названий одного товара); индексы совпадают с j.rows. Вызывать не в главном потоке. */
+private fun invArticles(ctx: Context, rows: List<ItemRow>): List<ArticleLookup.Info> {
     val db = ProductDb.get(ctx)
-    return rows.map { r ->
-        if (r.article.isNotBlank()) return@map r.article.trim()
-        try {
-            ((if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null)
-                ?: db.findByName(r.name.trim())
-                ?: (if (r.barcode.isNotBlank()) db.findByBarcode(r.barcode.trim()) else null))?.article.orEmpty()
-        } catch (e: Exception) { "" }
-    }
+    return rows.map { r -> ArticleLookup.info(db, r) }
 }
 
 private const val INV_CSS = """
@@ -154,7 +147,7 @@ tr.tot td{height:9mm;font-weight:bold;font-size:10pt;background:#f7f7f7}
 """
 
 /** Документ для печати и PDF: как образец «Коробка №» (№, артикул, название, штрих-код картинкой, штук, срок годности). Фото и QR идут ниже. */
-private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: String, qrHtml: String = "", articles: List<String> = emptyList()): String {
+private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: String, qrHtml: String = "", articles: List<ArticleLookup.Info> = emptyList()): String {
     val sb = StringBuilder()
     val L = PrintCfg.invLang
     fun t(ru: String, en: String, de: String) = when (L) { "en" -> en; "de" -> de; else -> ru }
@@ -174,9 +167,10 @@ private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Strin
         val d = parseQ(r.defect)
         total += q
         sb.append("<tr><td class='n'>${i + 1}</td>")
-        sb.append("<td class='a'>${bwEsc(articles.getOrNull(i).orEmpty())}</td>")
-        sb.append("<td class='t'>${bwEsc(r.name.trim())}</td>")
-        sb.append("<td>${Ean.html(r.barcode)}</td>")
+        val info = articles.getOrNull(i) ?: ArticleLookup.Info(r.article.trim(), r.barcode.trim(), "")
+        sb.append("<td class='a'>${bwEsc(info.article)}</td>")
+        sb.append("<td class='t'>${bwEsc(r.name.trim())}${if (info.weight.isNotBlank()) "<div style='font-size:8pt;font-weight:normal'>${bwEsc(info.weight)}</div>" else ""}</td>")
+        sb.append("<td>${Ean.html(info.barcode)}</td>")
         sb.append("<td class='q'>${bwFmt(q)}${if (d > 0.0) "<div class='d'>${t("брак", "defect", "defekt")} ${bwFmt(d)}</div>" else ""}</td>")
         sb.append("<td class='e'>${bwEsc(r.expiry)}</td></tr>")
     }
@@ -189,14 +183,15 @@ private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Strin
 }
 
 /** Таблица для Excel (CSV с «;», UTF-8 с BOM). */
-private fun invCsv(j: InvJob, now: Long, articles: List<String> = emptyList()): String {
+private fun invCsv(j: InvJob, now: Long, articles: List<ArticleLookup.Info> = emptyList()): String {
     fun q(v: String) = "\"" + v.replace("\"", "\"\"").replace('\n', ' ') + "\""
     val sb = StringBuilder("\uFEFF")
     sb.append("Склад;").append(q(j.address.trim())).append(";;;;;\n")
     sb.append("Дата;").append(q(fmtTime(now))).append(";;;;;\n")
-    sb.append("№;Артикул;Товар;Штрих-код;Количество;Брак;Срок годности\n")
+    sb.append("№;Артикул;Товар;Вес;Штрих-код;Количество;Брак;Срок годности\n")
     j.rows.forEachIndexed { i, r ->
-        sb.append(i + 1).append(';').append(q(articles.getOrNull(i).orEmpty())).append(';').append(q(r.name.trim())).append(';').append(q(r.barcode)).append(';')
+        val info = articles.getOrNull(i) ?: ArticleLookup.Info(r.article.trim(), r.barcode.trim(), "")
+        sb.append(i + 1).append(';').append(q(info.article)).append(';').append(q(r.name.trim())).append(';').append(q(info.weight)).append(';').append(q(info.barcode)).append(';')
             .append(bwFmt(parseQ(r.fact))).append(';').append(bwFmt(parseQ(r.defect))).append(';').append(q(r.expiry)).append('\n')
     }
     return sb.toString()
@@ -332,7 +327,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
         val photoNames = job.rows.map { it.photo }.filter { it.isNotBlank() }
         val photosHtml by produceState("", photoNames) { value = bwPhotosHtml(ctx, photoNames) }
         val qrHtml by produceState("", photoNames) { value = PhotoQr.html(ctx, "INV" + job.id.replace("-", "").take(8).uppercase(), photoNames) }
-        val articles by produceState(emptyList<String>(), job.rows.size) { value = withContext(Dispatchers.IO) { invArticles(ctx, job.rows.toList()) } }
+        val articles by produceState(emptyList<ArticleLookup.Info>(), job.rows.size) { value = withContext(Dispatchers.IO) { invArticles(ctx, job.rows.toList()) } }
         val html = invDocHtml(job, receiver, stamp, photosHtml, qrHtml, articles)
         val fileBase = "Инвентаризация_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.ROOT).format(Date(stamp))
         var busy by remember { mutableStateOf(false) }
