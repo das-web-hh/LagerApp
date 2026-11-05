@@ -7,6 +7,9 @@ import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import androidx.camera.core.ImageProxy
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -56,6 +59,41 @@ class LiveLabels(
     private val tr = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     @Volatile var alive = true
 
+    /** Удалённые этикетки (ключ товара → время): камера их не отмечает и не записывает; хранятся на телефоне. */
+    private val ignored = java.util.concurrent.ConcurrentHashMap<String, Long>().also { it.putAll(LabelDraft.ignored(app)) }
+    var ignoredCount by mutableIntStateOf(ignored.size)
+        private set
+
+    init {
+        // этикетки из черновика уже записаны: заново их не читаем и не добавляем
+        for (f in found) tracks[f.key.substringBefore('#')] = Track().also { it.done = true }
+    }
+
+    /** Долгое нажатие на отметку (в главном потоке): если у товара несколько строк — убирается последняя, иначе этикетка удаляется и запоминается. */
+    fun removeLabel(base: String) {
+        val rows = found.filter { it.key.substringBefore('#') == base }
+        if (rows.isEmpty()) return
+        if (rows.size > 1) {
+            // последняя добавленная строка («#n» с наибольшим n)
+            val last = rows.filter { it.key.contains('#') }.maxByOrNull { it.key.substringAfter('#').toIntOrNull() ?: 0 }
+            if (last != null) { found.remove(last); Haptics.pulse(app, Haptics.TAP); ScanFeedback.beep(false); return }
+        }
+        found.removeAll { it.key.substringBefore('#') == base }
+        ignored[base] = System.currentTimeMillis()
+        ignoredCount = ignored.size
+        LabelDraft.saveIgnored(app, ignored)
+        tracks.remove(base)
+        Haptics.pulse(app, Haptics.TAP)
+        ScanFeedback.beep(false)
+    }
+
+    /** Вернуть все удалённые этикетки: камера снова будет их записывать. */
+    fun restoreIgnored() {
+        ignored.clear()
+        ignoredCount = 0
+        LabelDraft.saveIgnored(app, ignored)
+    }
+
     fun close() {
         alive = false
         aiPool.shutdownNow()
@@ -75,6 +113,7 @@ class LiveLabels(
 
     private fun put(l: ScannedLabel) {
         main.post {
+            if (l.key.substringBefore('#') in ignored) return@post // удалили, пока шло чтение
             if (!alive && l.via == "wait") return@post
             val i = found.indexOfFirst { it.key == l.key }
             if (i >= 0) found[i] = l
@@ -106,6 +145,7 @@ class LiveLabels(
                 val box = b.boundingBox ?: continue
                 if (v.isEmpty()) continue
                 if (gtinFormat(b) && !gtinOk(v)) continue // прочитано с ошибкой
+                if (StrohLabel.key(v) in ignored) continue // удалена вручную: не отмечаем и не читаем
                 bars.add(v to box)
             }
             if (bars.isEmpty()) { main.post { if (alive) onMarks(null) }; return }

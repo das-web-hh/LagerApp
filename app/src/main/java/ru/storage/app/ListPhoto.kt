@@ -27,7 +27,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -468,6 +470,7 @@ private fun lifecycleOwnerOf2(ctx: Context): LifecycleOwner? {
  *    нажатие на отметку добавляет ещё одну такую же строку (у другой этикетки того же товара будет другая дата);
  *  • список с монитора или бумаги снимается обычным снимком кнопкой «Снять список»; нажатие на экран — фокус.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PhotoCamera(
     onShot: (Bitmap) -> Unit,
@@ -587,7 +590,11 @@ private fun PhotoCamera(
                         .offset { IntOffset(l, t) }
                         .size(with(density) { w.toDp() }, with(density) { h.toDp() })
                         .border(3.dp, color, androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                        .clickable(enabled = allowAnother && item != null && item.via != "wait") { engine.addAnother(base) }
+                        .combinedClickable(
+                            enabled = item != null && item.via != "wait",
+                            onClick = { if (allowAnother) engine.addAnother(base) },
+                            onLongClick = { engine.removeLabel(base) }
+                        )
                 ) {
                     Text(
                         label, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.titleMedium,
@@ -665,7 +672,12 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, 
     }
 
     var stage by remember { mutableStateOf("camera") } // camera | result
-    val found = remember { mutableStateListOf<ScannedLabel>() }
+    // записанное камерой хранится на телефоне: при возврате в камеру список продолжается с того же места
+    val found = remember { mutableStateListOf<ScannedLabel>().also { it.addAll(LabelDraft.load(app, catalogMode)) } }
+    LaunchedEffect(Unit) {
+        var first = true // первое значение — то, что только что загрузили: срок черновика не продлеваем
+        snapshotFlow { found.toList() }.collect { if (first) first = false else LabelDraft.save(app, catalogMode, it) }
+    }
     val errors = remember { mutableStateListOf<String>() }
     var marks by remember { mutableStateOf<LiveMarks?>(null) }
     var shots by remember { mutableIntStateOf(0) }
@@ -710,8 +722,8 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, 
                 if (found.isEmpty() && shots == 0) "Ведите камерой по этикеткам: каждая отметится и запишется. Список с монитора или бумаги — кнопка «Снять список»"
                 else "Записано: ${found.size}"
             } else {
-                if (found.isEmpty() && shots == 0) "Ведите камерой по этикеткам: каждая отметится и запишется. Нажмите на отметку — добавится ещё такая же строка. Список с монитора — кнопка «Снять список»"
-                else "Записано: ${found.size}. Нажмите на отметку — ещё такая же строка"
+                if (found.isEmpty() && shots == 0) "Ведите камерой по этикеткам: каждая отметится и запишется. Нажатие на отметку — ещё такая же строка, долгое нажатие — убрать. Список с монитора — кнопка «Снять список»"
+                else "Записано: ${found.size}. Нажатие на отметку — ещё строка, долгое — убрать"
             }) + (if (photoPending > 0) " · читаю ${status.ifBlank { "…" }}" else ""),
             pending = pending,
             allowAnother = !catalogMode,
@@ -726,6 +738,9 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, 
                 Text("Ничего не найдено. Подойдите ближе, держите ровно, без бликов.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
             }
             errors.forEach { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp)) }
+            if (engine.ignoredCount > 0) {
+                TextButton(onClick = { engine.restoreIgnored() }) { Text("Вернуть удалённые этикетки (${engine.ignoredCount})") }
+            }
             LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
                 items(found.toList(), key = { it.key }) { l ->
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -747,7 +762,11 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, 
             }
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(modifier = Modifier.weight(1f), onClick = { stage = "camera" }) { Text("Ещё снимать") }
-                Button(modifier = Modifier.weight(1f), enabled = found.isNotEmpty(), onClick = { onDone(found.filter { it.via != "wait" }.toList()) }) { Text((if (catalogMode) "В импорт" else "Добавить") + " (${found.size})") }
+                Button(modifier = Modifier.weight(1f), enabled = found.isNotEmpty(), onClick = {
+                    val done = found.filter { it.via != "wait" }.toList()
+                    LabelDraft.clear(app, catalogMode)
+                    onDone(done)
+                }) { Text((if (catalogMode) "В импорт" else "Добавить") + " (${found.size})") }
             }
         }
     }
