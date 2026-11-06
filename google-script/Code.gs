@@ -46,6 +46,9 @@ function checkToken_(value) {
 function doGet(e) {
   try {
     var params = (e && e.parameter) || {};
+    // Публично, без токена: мини-приложение «Сборка» в браузере получателя забирает список партии по коду.
+    // Отдаётся только файл BATCH_<код>.json; код — длинная случайная строка из ссылки/QR.
+    if (String(params.action || '').toLowerCase() === 'batch') return getBatch_(params.code);
     checkToken_(params.token);
     var action = String(params.action || 'ping').toLowerCase();
     var folder = getFolder_(params.folderId);
@@ -138,6 +141,20 @@ function doGet(e) {
   } catch (error) {
     return json_({ok: false, error: errorMessage_(error)});
   }
+}
+
+function getBatch_(code) {
+  code = String(code || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
+  var it = DriveApp.getFilesByName('BATCH_' + code + '.json');
+  var best = null;
+  while (it.hasNext()) {
+    var f = it.next();
+    if (f.isTrashed()) continue;
+    if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
+  }
+  if (!best) return json_({ok: false, error: 'Партия не найдена.'});
+  return json_({ok: true, batch: JSON.parse(best.getBlob().getDataAsString('UTF-8'))});
 }
 
 function doPost(e) {

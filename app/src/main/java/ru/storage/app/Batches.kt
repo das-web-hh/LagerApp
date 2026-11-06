@@ -142,50 +142,39 @@ object BatchShare {
         return JSONObject().put("v", 1).put("code", b.code).put("title", b.title).put("at", b.created).put("rows", rs).toString()
     }
 
-    fun html(b: Batch, link: String = ""): String {
-        val sb = StringBuilder()
-        sb.append("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>")
-        sb.append("<title>").append(bwEsc(b.title)).append("</title><style>")
-        sb.append("body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:14px;color:#111}h1{font-size:20px;margin:0 0 4px}")
-        sb.append(".m{color:#555;font-size:13px;margin-bottom:12px}table{width:100%;border-collapse:collapse}")
-        sb.append("th,td{border:1px solid #888;padding:6px 8px;text-align:left;vertical-align:middle;font-size:14px}th{background:#eee}")
-        sb.append("td.q{text-align:center;font-weight:bold;font-size:18px}.t{font-weight:600}svg.bc{width:150px;height:46px}")
-        sb.append(".h{margin-top:14px;font-size:13px;color:#333}@media print{@page{size:A4;margin:10mm}}")
-        sb.append("</style></head><body>")
-        sb.append("<h1>").append(bwEsc(b.title)).append("</h1>")
-        sb.append("<div class='m'>").append(bwEsc(fmtTime(b.created))).append(" · позиций: ").append(b.rows.size)
-        sb.append(" · всего: ").append(bwFmt(b.rows.sumOf { parseQ(batchQty(it.qty)) })).append("</div>")
-        sb.append("<table><tr><th>№</th><th>Артикул</th><th>Название</th><th>Штрих-код</th><th>Кол-во</th></tr>")
-        b.rows.toList().forEachIndexed { i, r ->
-            sb.append("<tr><td>").append(i + 1).append("</td><td>").append(bwEsc(r.article)).append("</td><td class='t'>")
-                .append(bwEsc(r.name.trim())).append("</td><td>").append(Ean.html(r.barcode)).append("</td><td class='q'>")
-                .append(bwEsc(batchQty(r.qty))).append("</td></tr>")
-        }
-        sb.append("</table>")
-        sb.append("<div class='h'>Чтобы загрузить список в приложение (работает без интернета): откройте этот файл через Warehouse («Открыть с помощью» → Warehouse). Или: Прочее → Сборка → «Получить» и QR / ссылка.")
-        if (link.isNotBlank()) sb.append("<br>").append(bwEsc(link))
-        sb.append("</div>")
-        // данные партии внутри страницы: файл самодостаточен
-        sb.append("<script type='application/json' id='lager-batch'>").append(json(b).replace("</", "<\\/")).append("</script>")
-        sb.append("</body></html>")
-        return sb.toString()
+    /**
+     * Файл партии — мини-приложение «Сборка» одним HTML-файлом (шаблон assets/batch_app.html): список партии внутри,
+     * работает в любом браузере без интернета и без установки: сканер (в том числе Bluetooth), камера, поиск по названию
+     * и артикулу, счёт, печать, переход к следующей партии с нуля. Счёт хранится в самом браузере.
+     * Те же данные внутри файла читает и приложение Warehouse (открыть файл через Warehouse).
+     */
+    fun html(ctx: Context, b: Batch, link: String = ""): String {
+        val tpl = ctx.applicationContext.assets.open("batch_app.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        // «<» в данных экранируется, чтобы текст товара не мог закрыть тег script
+        val data = json(b).replace("<", "\\u003c")
+        return tpl.replace("__TITLE__", bwEsc(b.title)).replace("__LINK__", bwEsc(link)).replace("__DATA__", data)
     }
 
-    /** Кладёт партию на Google Диск и возвращает ссылку (папка, открытая по ссылке, + код партии). Вызывать не в главном потоке. */
+    /** Страница мини-приложения (GitHub Pages: папка docs/batch.html репозитория). Можно переопределить в SharedPreferences «drive», ключ «page». */
+    private const val PAGE = "https://das-web-hh.github.io/LagerApp/batch.html"
+
+    private fun pageBase(app: Context): String =
+        app.getSharedPreferences("drive", Context.MODE_PRIVATE).getString("page", "")!!.trim().ifEmpty { PAGE }
+
+    /**
+     * Кладёт список партии на Google Диск (BATCH_код.json, при повторной отправке заменяется) и возвращает ссылку на мини-приложение:
+     * страница открывается в любом браузере (iPhone, Android), список забирает с Диска через скрипт по коду. Вызывать не в главном потоке.
+     */
     fun publish(app: Context, b: Batch): String {
         if (!DriveCfg.ready(app)) throw RuntimeException("Google Диск не настроен (Еще → Настройки → Google Диск)")
         val code = b.code
         val jsonName = "BATCH_$code.json"
         val data = json(b).toByteArray(Charsets.UTF_8)
-        // файл для приложения: в рабочей папке, при повторной отправке заменяется новым
         try { DriveApi.delete(app, jsonName) } catch (e: Exception) { }
         DriveApi.uploadBytes(app, jsonName, "application/json", data)
-        // страница для браузера: в отдельной папке, открытой по ссылке
-        val (folderId, url) = DriveApi.makeShare(app, "B_$code")
-        val link = url + TAG + code
-        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(Date())
-        DriveApi.uploadBytes(app, "batch_$stamp.html", "text/html", html(b, link).toByteArray(Charsets.UTF_8), folderId)
-        DriveApi.uploadBytes(app, "batch_$stamp.json", "application/json", data, folderId)
+        val s = java.net.URLEncoder.encode(DriveCfg.url(app), "UTF-8")
+        // «#lager=код» в конце — по нему приложение Lager узнаёт партию при сканировании QR
+        val link = pageBase(app) + "?c=" + code + "&s=" + s + TAG + code
         b.link = link
         return link
     }
@@ -212,28 +201,28 @@ object BatchShare {
         return Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
     }
 
-    private fun text(b: Batch, link: String): String {
-        val sb = StringBuilder(b.title).append("\n")
-        b.rows.toList().forEachIndexed { i, r -> sb.append(i + 1).append(". ").append(r.name.trim()).append(" — ").append(batchQty(r.qty)).append("\n") }
-        if (link.isNotBlank()) sb.append("\nОткрыть в приложении Warehouse (Сборка → Получить):\n").append(link)
-        return sb.toString()
-    }
+    private fun text(b: Batch, link: String): String =
+        if (link.isBlank()) b.title else b.title + "\n\nОткрыть список (сканировать, считать по коробкам, печатать):\n" + link
 
-    /** «Поделиться»: страница HTML файлом + ссылка текстом. whatsapp = true — сразу в WhatsApp (если установлен). */
+    /**
+     * «Поделиться»: уходит ссылка на мини-приложение (получатель открывает её в браузере, ничего не устанавливая).
+     * Если на Диск загрузить не удалось (ссылки нет) — уходит сам HTML-файл. whatsapp = true — сразу в WhatsApp (если установлен).
+     */
     fun share(ctx: Context, b: Batch, link: String, whatsapp: Boolean) {
         try {
-            val dir = File(ctx.cacheDir, "export").also { it.mkdirs() }
-            val safe = b.title.replace(Regex("[^\\p{L}\\p{N}_-]+"), "_").trim('_').ifBlank { "batch" }.take(40)
-            val f = File(dir, "Партия_$safe.html")
-            f.writeText(html(b, link), Charsets.UTF_8)
-            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
             val i = Intent(Intent.ACTION_SEND).apply {
-                type = "text/html"
-                putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_TEXT, text(b, link))
                 putExtra(Intent.EXTRA_SUBJECT, b.title)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
+            if (link.isBlank()) {
+                val dir = File(ctx.cacheDir, "export").also { it.mkdirs() }
+                val safe = b.title.replace(Regex("[^\\p{L}\\p{N}_-]+"), "_").trim('_').ifBlank { "batch" }.take(40)
+                val f = File(dir, "Партия_$safe.html")
+                f.writeText(html(ctx, b, ""), Charsets.UTF_8)
+                i.type = "text/html"
+                i.putExtra(Intent.EXTRA_STREAM, FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f))
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } else i.type = "text/plain"
             if (whatsapp) {
                 for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b")) {
                     try {
@@ -520,7 +509,7 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
         AlertDialog(
             onDismissRequest = { sendDlg = false },
             title = { Text("Отправить партию") },
-            text = { Text("Список загрузится на Google Диск. Получателю уйдёт страница HTML и ссылка: в приложении она откроет окно «Сборка».") },
+            text = { Text("Список загрузится на Google Диск. Получателю уйдёт ссылка: она открывает мини-приложение в браузере (iPhone и Android), ничего устанавливать не нужно.") },
             confirmButton = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(modifier = Modifier.fillMaxWidth(), onClick = {
@@ -551,7 +540,7 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
                         Image(bmp.asImageBitmap(), contentDescription = "QR-код партии", modifier = Modifier.fillMaxWidth().aspectRatio(1f).padding(8.dp))
                     }
                     Spacer(Modifier.height(8.dp))
-                    Text("Сборщик: Прочее → Сборка → «Получить» и сканирует этот код. Обычная камера телефона откроет страницу со списком.", style = MaterialTheme.typography.bodySmall)
+                    Text("Получатель наводит обычную камеру телефона на код — в браузере откроется мини-приложение со списком. В приложении Lager код тоже можно сканировать (Прочее → Сборка → «Получить»).", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = { TextButton(onClick = { qrLink = null }) { Text("Закрыть") } },
