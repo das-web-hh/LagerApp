@@ -250,7 +250,7 @@ internal fun invText(j: InvJob, now: Long, title: String = "Инвентариз
 /**
  * Штрихкоды и артикулы из инвентаризации попадают в каталог — и в телефон (SQLite), и в облако (Firebase):
  * Cloud.saveProduct пишет в обе базы. Новые товары заводятся с весом/упаковкой из названия;
- * у уже имеющегося товара дописываются только пустые поля (штрих-код, артикул), чужие данные не затираются.
+ * у уже имеющегося товара по «Сохранить» обновляются артикул и штрих-код, исправленные в инвентаризации (до этого правка меняет только строку).
  */
 internal fun invSaveBarcodes(ctx: Context, j: InvJob) {
     val db = ProductDb.get(ctx)
@@ -271,16 +271,57 @@ internal fun invSaveBarcodes(ctx: Context, j: InvJob) {
                     Product(
                         id = UUID.randomUUID().toString(), name = name, article = art, barcode = code,
                         weight = local?.size ?: "", unit = local?.unit ?: "", pack = local?.pack ?: "",
-                        manufacturer = local?.manufacturer ?: "", photos = emptyList(), updatedAt = 0L
+                        manufacturer = local?.manufacturer ?: "", photos = listOfNotNull(r.photo.takeIf { it.isNotBlank() }), updatedAt = 0L
                     )
                 )
             } else {
-                val newCode = if (p.barcode.isBlank() && code.isNotEmpty() && db.findByBarcode(code) == null) code else p.barcode
-                val newArt = if (p.article.isBlank() && art.isNotEmpty()) art else p.article
-                if (newCode != p.barcode || newArt != p.article) Cloud.saveProduct(db, p.copy(barcode = newCode, article = newArt))
+                // по «Сохранить» исправленные артикул и штрих-код записываются в карточку (65 → 55); пустое поле строки карточку не стирает
+                val newCode = if (code.isNotEmpty()) code else p.barcode
+                val newArt = if (art.isNotEmpty()) art else p.article
+                val ph = r.photo.trim()
+                val newPhotos = if (ph.isNotEmpty() && ph !in p.photos) p.photos + ph else p.photos
+                if (newCode != p.barcode || newArt != p.article || newPhotos != p.photos) {
+                    if (newCode != p.barcode) {
+                        // штрих-код был у другого товара: переезжает на этот (как при правке в каталоге)
+                        db.findByBarcode(newCode)?.takeIf { it.id != p.id }?.let { Cloud.saveProduct(db, it.copy(barcode = "")) }
+                    }
+                    Cloud.saveProduct(db, p.copy(barcode = newCode, article = newArt, photos = newPhotos))
+                }
             }
         } catch (e: Exception) {
         }
+    }
+}
+
+/**
+ * Состояние инвентаризации (адрес, товары, количество, брак, срок годности, штрих-код, артикул, фото) одним JSON-файлом:
+ * копия остаётся на телефоне (filesDir/inventory_saved) и уходит на Google Диск. Каталог (название, артикул, штрих-код, фото)
+ * отдельно пишет invSaveBarcodes — в телефон и в Firebase. Возвращает true, если файл загружен на Диск.
+ */
+internal fun invSaveState(ctx: Context, j: InvJob, stamp: Long, fileBase: String): Boolean {
+    val rs = JSONArray()
+    j.rows.toList().forEach { r ->
+        rs.put(
+            JSONObject().put("name", r.name).put("article", r.article).put("barcode", r.barcode)
+                .put("qty", r.fact).put("defect", r.defect).put("expiry", r.expiry).put("photo", r.photo)
+        )
+    }
+    val o = JSONObject().put("id", j.id).put("address", j.address).put("created", j.created)
+        .put("savedAt", stamp).put("total", invTotal(j)).put("rows", rs)
+    val bytes = o.toString(2).toByteArray(Charsets.UTF_8)
+    val name = "$fileBase.json"
+    try {
+        val dir = File(ctx.applicationContext.filesDir, "inventory_saved").also { it.mkdirs() }
+        File(dir, name).writeBytes(bytes)
+    } catch (e: Exception) {
+    }
+    if (!DriveCfg.ready(ctx)) return false
+    return try {
+        try { DriveApi.delete(ctx, name) } catch (e: Exception) { }
+        DriveApi.uploadBytes(ctx, name, "application/json", bytes)
+        true
+    } catch (e: Exception) {
+        false
     }
 }
 
@@ -384,6 +425,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
                         scope.launch {
                             try {
                                 withContext(Dispatchers.IO) { invSaveBarcodes(app, job) }
+                                val stateOnDrive = withContext(Dispatchers.IO) { invSaveState(app, job, stamp, fileBase) }
                                 DocStore.recordPrinted(ctx, fileBase, html)
                                 Media.uploadPending(app, ProductDb.get(app))
                                 if (DriveCfg.ready(app)) {
@@ -393,9 +435,9 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
                                         try { DriveApi.delete(app, name) } catch (e: Exception) { }
                                         DriveApi.uploadBytes(app, name, "application/pdf", pdf)
                                     }
-                                    Toast.makeText(app, "Инвентаризация сохранена: «Документы» и Google Диск", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(app, if (stateOnDrive) "Сохранено: телефон, Firebase и Google Диск" else "Сохранено на телефоне и в Firebase; данные на Google Диск не загрузились", Toast.LENGTH_LONG).show()
                                 } else {
-                                    Toast.makeText(app, "Сохранено в «Документы» (Google Диск не настроен)", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(app, "Сохранено на телефоне и в Firebase (Google Диск не настроен)", Toast.LENGTH_LONG).show()
                                 }
                                 InventoryStore.remove(app, job)
                                 onClose()
@@ -481,7 +523,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
             )
             Spacer(Modifier.width(8.dp))
             Button(
-                onClick = { error = ""; job.step = 1 },
+                onClick = { error = ""; InventoryStore.save(ctx); job.step = 1 },
                 enabled = job.rows.isNotEmpty(),
                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
                 modifier = Modifier.height(36.dp)

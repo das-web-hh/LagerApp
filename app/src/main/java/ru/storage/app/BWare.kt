@@ -568,6 +568,7 @@ fun CatalogWheel(
                 emptyText = emptyText,
                 showSearch = false,
                 bware = !inventory,
+                catalogSync = !inventory,
                 plain = true,
                 extraLabel = if (inventory) "" else "нет в плане",
                 focusTarget = focusTarget,

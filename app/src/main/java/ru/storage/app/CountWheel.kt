@@ -396,7 +396,9 @@ fun CountWheelList(
     /** Код, пришедший от внешнего сканера через поле поиска (быстрый набор): строка +1. Другие данные (QR, адреса) в поиск не попадают. */
     onScanCode: ((String) -> Unit)? = null,
     /** кнопка «Фото» в свайпе влево (в «Инвентаре B-Ware»; в «Приёме по имени» есть всегда) */
-    photoButton: Boolean = false
+    photoButton: Boolean = false,
+    /** false — правка строки (артикул, штрих-код) меняет только эту строку, каталог не трогает (инвентаризация, сборка: каталог обновляет «Сохранить») */
+    catalogSync: Boolean = true
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val scanBurst = remember { longArrayOf(0L, 0L) } // [время последнего символа, символов подряд «быстро»]
@@ -759,7 +761,7 @@ fun CountWheelList(
             photos = if (!isFact && !bware) row.defectPhotos else null
         )
     }
-    editing?.let { row -> RowEditDialog(row) { editing = null } }
+    editing?.let { row -> RowEditDialog(row, catalogSync) { editing = null } }
     qtyRow?.let { row ->
         QtyInputDialog(
             row = row,
@@ -1285,7 +1287,7 @@ private fun QtyInputDialog(row: ItemRow, onApply: (Double) -> Unit, onDismiss: (
 
 /** Правка названия и плана (долгое нажатие на строку): ошибки распознавания можно исправить. */
 @Composable
-private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
+private fun RowEditDialog(row: ItemRow, catalogSync: Boolean, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     var name by remember { mutableStateOf(row.name) }
     var plan by remember { mutableStateOf(row.qty) }
@@ -1326,11 +1328,11 @@ private fun RowEditDialog(row: ItemRow, onDismiss: () -> Unit) {
                     row.article = art
                     row.barcode = bc
                     if (!row.extra) row.qty = plan
-                    // артикул и штрих-код сразу попадают в карточку товара в каталоге (если такой товар там есть)
+                    // артикул и штрих-код сразу попадают в карточку товара в каталоге (если такой товар там есть); в инвентаризации — нет, только по «Сохранить»
                     val app = ctx.applicationContext
                     val pid = row.productId
                     val newName = row.name
-                    CoroutineScope(Dispatchers.IO).launch {
+                    if (catalogSync) CoroutineScope(Dispatchers.IO).launch {
                         try {
                             val db = ProductDb.get(app)
                             val p = (if (pid.isNotEmpty()) db.getProduct(pid) else null)
