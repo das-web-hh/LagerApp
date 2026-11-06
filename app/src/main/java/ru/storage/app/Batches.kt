@@ -124,7 +124,7 @@ object BatchStore {
 }
 
 /** Количество по строке: пусто или ноль → 1. */
-private fun batchQty(s: String): String {
+internal fun batchQty(s: String): String {
     val d = parseQ(s)
     return if (d > 0.0) fmtQ(d) else "1"
 }
@@ -290,25 +290,54 @@ fun BatchesScreen(prefs: Prefs, onBack: () -> Unit) {
         target = null
     }
 
+    // таблица, в которой столбцы не определились сами: показываем окно выбора
+    var colsData by remember { mutableStateOf<List<List<String>>?>(null) }
+    var colsTitle by remember { mutableStateOf("") }
+    var colsPick by remember { mutableStateOf<BatchPick?>(null) }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) scope.launch {
             busy = true
             try {
-                val (res, note) = withContext(Dispatchers.IO) {
-                    val data = try { Xlsx.read(ctx, uri) } catch (e: Exception) { emptyList() }
-                    if (data.isEmpty()) null to "Не удалось прочитать файл (нужен Excel .xlsx)" else readExcelRows(ctx, data)
-                }
-                if (res == null || res.items.isEmpty()) {
-                    Toast.makeText(ctx, note.ifBlank { "В файле нет товаров" }, Toast.LENGTH_LONG).show()
+                val data = withContext(Dispatchers.IO) { try { Xlsx.read(ctx, uri) } catch (e: Exception) { emptyList() } }
+                    .filter { r -> r.any { it.isNotBlank() } }
+                val title = displayName(ctx, uri)
+                if (data.isEmpty()) {
+                    Toast.makeText(ctx, "Не удалось прочитать файл (нужен Excel .xlsx)", Toast.LENGTH_LONG).show()
+                    target = null
                 } else {
-                    accept(res.items.map { BatchRow(it.name.trim(), batchQty(it.qty), it.barcode.trim()) }, displayName(ctx, uri))
+                    val pick = BatchColumns.detect(data)
+                    val auto = if (pick.name >= 0) BatchColumns.parse(data, pick) else emptyList()
+                    if (auto.isNotEmpty()) {
+                        accept(auto, title)
+                    } else {
+                        colsData = data; colsTitle = title; colsPick = pick
+                    }
                 }
             } catch (e: Exception) {
                 Toast.makeText(ctx, "Ошибка файла: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                target = null
             } finally {
                 busy = false
             }
         } else target = null
+    }
+
+    val cd = colsData
+    val cp = colsPick
+    if (cd != null && cp != null) {
+        BatchColumnsDialog(
+            rows = cd, initial = cp,
+            onCancel = { colsData = null; colsPick = null; target = null },
+            onConfirm = { p ->
+                val list = BatchColumns.parse(cd, p)
+                colsData = null; colsPick = null
+                if (list.isEmpty()) {
+                    Toast.makeText(ctx, "В выбранных столбцах нет товаров", Toast.LENGTH_LONG).show()
+                    target = null
+                } else accept(list, colsTitle)
+            }
+        )
     }
 
     val open = BatchStore.batches.firstOrNull { it.id == BatchStore.openId }
