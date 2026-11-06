@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -267,7 +268,7 @@ fun CompactField(
 
 /** Поиск товара: лупа, надпись «Товар», «+» справа. */
 @Composable
-private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit, onScan: (() -> Unit)? = null) {
+private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit, onScan: (() -> Unit)? = null, focusRequester: androidx.compose.ui.focus.FocusRequester? = null) {
     Row(
         Modifier.fillMaxWidth()
             .height(44.dp)
@@ -291,7 +292,7 @@ private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: (
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { onAdd() }),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             )
         }
         if (query.isNotEmpty()) {
@@ -327,9 +328,18 @@ fun CatalogWheel(
     /** true — общий каталог не используется вовсе: ни поиск, ни синхронизация, ни подсказки (свой список — «Сборка») */
     isolated: Boolean = false,
     /** true (вместе с isolated) — можно считать только товары списка; чего нет в списке, добавить нельзя */
-    strict: Boolean = false
+    strict: Boolean = false,
+    /** растёт — курсор встаёт в поле поиска и открывается клавиатура (кнопка поиска в шапке экрана) */
+    focusSearchTick: Int = 0
 ) {
     val ctx = LocalContext.current
+    val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(focusSearchTick) {
+        if (focusSearchTick > 0) {
+            try { searchFocus.requestFocus(); keyboard?.show() } catch (e: Exception) { }
+        }
+    }
     val db = remember { ProductDb.get(ctx) }
     val sync = remember { SyncState() }
     val scope = rememberCoroutineScope()
@@ -553,7 +563,8 @@ fun CatalogWheel(
                     addRow(typed, pid)
                 }
             },
-            onScan = if (scanner) ({ scanMode = "add" }) else null
+            onScan = if (scanner) ({ scanMode = "add" }) else null,
+            focusRequester = searchFocus
         )
         if (errorText.isNotBlank()) {
             Text(errorText, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,

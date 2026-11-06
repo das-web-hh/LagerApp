@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -201,11 +203,11 @@ internal fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Stri
         total += q
         sb.append("<tr><td class='n'>${i + 1}</td>")
         val info = ln.info
-        sb.append("<td class='a'>${bwEsc(info.article)}</td>")
-        sb.append("<td class='t'>${bwEsc(r.name.trim())}${if (info.weight.isNotBlank()) "<div style='font-size:8pt;font-weight:normal'>${bwEsc(info.weight)}</div>" else ""}</td>")
+        sb.append("<td class='a'>${bwEsc(bwDash(info.article))}</td>")
+        sb.append("<td class='t'>${bwEsc(bwDash(r.name))}${if (info.weight.isNotBlank()) "<div style='font-size:8pt;font-weight:normal'>${bwEsc(info.weight)}</div>" else ""}</td>")
         sb.append("<td>${Ean.html(info.barcode)}</td>")
         sb.append("<td class='q'>${bwFmt(q)}${if (d > 0.0) "<div class='d'>${t("брак", "defect", "defekt")} ${bwFmt(d)}</div>" else ""}${if (asm && ln.plan > 0.0) "<div class='d' style='color:#444'>${t("план", "plan", "Soll")} ${bwFmt(ln.plan)}</div>" else ""}</td>")
-        sb.append("<td class='e'>${bwEsc(r.expiry)}</td></tr>")
+        sb.append("<td class='e'>${bwEsc(bwDash(r.expiry))}</td></tr>")
     }
     sb.append("<tr class='tot'><td></td><td></td><td style='text-align:right;padding-right:6px'>${t("Итого", "Total", "Gesamt")}</td><td></td><td class='q' style='font-size:12pt'>${bwFmt(total)}</td><td></td></tr>")
     sb.append("</tbody></table>")
@@ -407,6 +409,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
         val html = invDocHtml(job, receiver, stamp, photosHtml, qrHtml, articles)
         val fileBase = "Инвентаризация_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.ROOT).format(Date(stamp))
         var busy by remember { mutableStateOf(false) }
+        var saveErr by remember { mutableStateOf("") }
         var sendDlg by remember { mutableStateOf(false) }
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row(Modifier.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -423,26 +426,52 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
                         busy = true
                         val app = ctx.applicationContext
                         scope.launch {
-                            try {
-                                withContext(Dispatchers.IO) { invSaveBarcodes(app, job) }
-                                val stateOnDrive = withContext(Dispatchers.IO) { invSaveState(app, job, stamp, fileBase) }
-                                DocStore.recordPrinted(ctx, fileBase, html)
-                                Media.uploadPending(app, ProductDb.get(app))
-                                if (DriveCfg.ready(app)) {
-                                    val pdf = withContext(Dispatchers.IO) { HtmlPdf.render(app, html) }
-                                    if (pdf != null) withContext(Dispatchers.IO) {
-                                        val name = "$fileBase.pdf"
-                                        try { DriveApi.delete(app, name) } catch (e: Exception) { }
-                                        DriveApi.uploadBytes(app, name, "application/pdf", pdf)
+                            // каждый этап отдельно и с ограничением по времени: сбой или зависание одного не ломает остальные,
+                            // а что именно не вышло — показывается в окне
+                            val problems = ArrayList<String>()
+                            suspend fun <T> stage(label: String, ms: Long, block: () -> T): T? {
+                                return try {
+                                    val r = kotlinx.coroutines.withTimeoutOrNull(ms) {
+                                        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).async { block() }.await()
                                     }
-                                    Toast.makeText(app, if (stateOnDrive) "Сохранено: телефон, Firebase и Google Диск" else "Сохранено на телефоне и в Firebase; данные на Google Диск не загрузились", Toast.LENGTH_LONG).show()
-                                } else {
-                                    Toast.makeText(app, "Сохранено на телефоне и в Firebase (Google Диск не настроен)", Toast.LENGTH_LONG).show()
+                                    if (r == null) problems.add("$label: нет ответа, попробуйте позже")
+                                    r
+                                } catch (e: Exception) {
+                                    problems.add("$label: ${e.message ?: e.javaClass.simpleName}")
+                                    null
                                 }
-                                InventoryStore.remove(app, job)
-                                onClose()
+                            }
+                            try {
+                                // 1. каталог (название, артикул, штрих-код, фото): телефон и Firebase
+                                stage("Каталог / Firebase", 60_000) { invSaveBarcodes(app, job); true }
+                                // 2. состояние (количество, срок годности, брак…): телефон и Google Диск
+                                val stateOnDrive = stage("Данные на Google Диск", 60_000) { invSaveState(app, job, stamp, fileBase) } ?: false
+                                // 3. документ в «Документы» на телефоне
+                                try { DocStore.recordPrinted(ctx, fileBase, html) } catch (e: Exception) { problems.add("Документы: ${e.message ?: e.javaClass.simpleName}") }
+                                // 4. фото и PDF на Диск
+                                try { Media.uploadPending(app, ProductDb.get(app)) } catch (e: Exception) { problems.add("Фото: ${e.message ?: e.javaClass.simpleName}") }
+                                if (DriveCfg.ready(app)) {
+                                    stage("PDF на Google Диск", 90_000) {
+                                        val pdf = HtmlPdf.render(app, html)
+                                        if (pdf != null) {
+                                            val name = "$fileBase.pdf"
+                                            try { DriveApi.delete(app, name) } catch (e: Exception) { }
+                                            DriveApi.uploadBytes(app, name, "application/pdf", pdf)
+                                        }
+                                        true
+                                    }
+                                }
+                                if (DriveCfg.ready(app) && !stateOnDrive && problems.none { it.startsWith("Данные на Google Диск") }) problems.add("Данные на Google Диск: не загрузились (проверьте интернет и настройки Диска)")
+                                if (problems.isEmpty()) {
+                                    Toast.makeText(app, if (DriveCfg.ready(app) && stateOnDrive) "Сохранено: телефон, Firebase и Google Диск" else "Сохранено на телефоне и в Firebase (Google Диск не настроен)", Toast.LENGTH_LONG).show()
+                                    InventoryStore.remove(app, job)
+                                    onClose()
+                                } else {
+                                    // инвентаризацию не удаляем с телефона, пока всё не ушло: можно нажать «Сохранить» ещё раз
+                                    saveErr = problems.joinToString("\n")
+                                }
                             } catch (e: Exception) {
-                                Toast.makeText(app, "Не удалось сохранить: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                                saveErr = "${e.javaClass.simpleName}: ${e.message ?: ""}"
                             } finally {
                                 busy = false
                             }
@@ -460,6 +489,14 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
             }
             Spacer(Modifier.height(8.dp))
             HtmlPreview(html, Modifier.weight(1f).fillMaxWidth())
+        }
+        if (saveErr.isNotEmpty()) {
+            AlertDialog(
+                onDismissRequest = { saveErr = "" },
+                title = { Text("Не всё сохранилось") },
+                text = { Text(saveErr + "\n\nИнвентаризация осталась на телефоне — нажмите «Сохранить» ещё раз.") },
+                confirmButton = { Button(onClick = { saveErr = "" }) { Text("ОК") } }
+            )
         }
         if (sendDlg) {
             AlertDialog(
@@ -508,10 +545,15 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
     }
 
     var error by remember { mutableStateOf("") }
+    var searchTick by remember { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(Modifier.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { InventoryStore.save(ctx); onClose() }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("← Назад") }
-            Text("Инвентаризация", style = MaterialTheme.typography.titleLarge)
+            Text("Инвентаризация", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            // кнопка поиска в самом верху: ставит курсор в поле «Товар» и открывает клавиатуру
+            IconButton(onClick = { searchTick++ }) {
+                Icon(Icons.Default.Search, contentDescription = "Поиск товара", tint = MaterialTheme.colorScheme.primary)
+            }
         }
         // под шапкой: слева адрес (просто поле), справа «Далее»
         Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -538,7 +580,8 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
             emptyText = "Отсканируйте штрих-код, найдите товар по названию или «+» при пустом поиске — снимок списка или этикетки",
             onAdded = { error = "" },
             scanner = true,
-            inventory = true
+            inventory = true,
+            focusSearchTick = searchTick
         )
     }
 }

@@ -9,6 +9,9 @@ import android.view.MotionEvent
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.core.Preview
@@ -95,6 +98,39 @@ private fun ownerOf(ctx: android.content.Context): LifecycleOwner? {
     return null
 }
 
+/** Контрольная цифра GS1 (EAN-8, UPC-A, EAN-13, ITF-14): защита от «выдумок» ИИ. */
+private fun gs1Valid(code: String): Boolean {
+    if (code.length !in listOf(8, 12, 13, 14) || !code.all { it.isDigit() }) return false
+    val d = code.map { it - '0' }
+    var sum = 0
+    for (i in 0 until d.size - 1) {
+        val fromRight = d.size - 1 - i
+        sum += d[i] * (if (fromRight % 2 == 1) 3 else 1)
+    }
+    return (10 - sum % 10) % 10 == d.last()
+}
+
+/** Кадр с камеры → JPEG до 1600 px по длинной стороне, с учётом поворота. */
+private fun jpegFromProxy(proxy: ImageProxy): ByteArray {
+    val buf = proxy.planes[0].buffer
+    val raw = ByteArray(buf.remaining()).also { buf.get(it) }
+    val rot = proxy.imageInfo.rotationDegrees
+    val bmp = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.size) ?: return raw
+    val m = android.graphics.Matrix()
+    if (rot != 0) m.postRotate(rot.toFloat())
+    val k = 1600f / maxOf(bmp.width, bmp.height)
+    if (k < 1f) m.postScale(k, k)
+    val out = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+    val bos = java.io.ByteArrayOutputStream()
+    out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, bos)
+    return bos.toByteArray()
+}
+
+private const val AI_BARCODE_PROMPT =
+    "На фото штрих-код (возможно, плохо читаемый, изогнутый или блестящий). Считай цифры, напечатанные под штрихами, " +
+        "и/или распознай сами штрихи. Если кодов несколько — верни самый крупный и чёткий. " +
+        "Ответь ТОЛЬКО цифрами кода без пробелов и пояснений. Если код разобрать нельзя — ответь словом NONE. Ничего не выдумывай."
+
 @Composable
 fun ScannerScreen(
     prefs: Prefs,
@@ -145,6 +181,9 @@ fun ScannerScreen(
     val lastOk = remember { arrayOf<String?>(null) }
     val lastSeen = remember { longArrayOf(0L) }
     val scannerRef = remember { arrayOfNulls<com.google.mlkit.vision.barcode.BarcodeScanner>(1) }
+    val captureRef = remember { arrayOfNulls<ImageCapture>(1) }
+    var aiBusy by remember { mutableStateOf(false) }
+    val mainH = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     // Порядок важен: сначала отвязать камеру, потом гасить поток, иначе кадр уходит в закрытый executor и приложение падает.
     DisposableEffect(Unit) {
         onDispose {
@@ -238,7 +277,16 @@ fun ScannerScreen(
                     val selector = if (prefs.useFront && provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA))
                         CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                     provider.unbindAll()
-                    val camera = provider.bindToLifecycle(owner, selector, preview, analysis)
+                    val capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
+                    captureRef[0] = capture
+                    val camera = try {
+                        provider.bindToLifecycle(owner, selector, preview, analysis, capture)
+                    } catch (e: Exception) {
+                        // телефон не тянет три потока сразу — работаем без кнопки «Снимок»
+                        captureRef[0] = null
+                        provider.unbindAll()
+                        provider.bindToLifecycle(owner, selector, preview, analysis)
+                    }
                     // тап по экрану — навести фокус на штрих-код
                     previewView.setOnTouchListener { v, ev ->
                         if (ev.action == MotionEvent.ACTION_UP) {
@@ -260,7 +308,7 @@ fun ScannerScreen(
         )
         if (hint.isNotEmpty()) {
             Surface(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 32.dp, end = 32.dp, bottom = 104.dp),
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
                 color = Color.Black.copy(alpha = 0.6f)
             ) {
@@ -280,5 +328,52 @@ fun ScannerScreen(
             onClick = onClose,
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
         ) { Text(if (continuous) "Готово" else "Закрыть") }
+        if (!onlyQr) {
+            // «Снимок»: плохой штрих-код не читается — снимок уходит ИИ, он возвращает цифры кода
+            Button(
+                enabled = !aiBusy,
+                onClick = {
+                    if (!AiCfg.ready(context)) { hint = "Ключ ИИ не настроен (Ещё → Настройки)"; return@Button }
+                    val cap = captureRef[0]
+                    if (cap == null) { hint = "Снимок на этом телефоне недоступен"; return@Button }
+                    aiBusy = true
+                    hint = "Снимаю…"
+                    cap.takePicture(ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: ImageProxy) {
+                            hint = "ИИ распознаёт код…"
+                            Thread {
+                                var msg = ""
+                                var found: String? = null
+                                try {
+                                    val jpg = try { jpegFromProxy(image) } finally { image.close() }
+                                    val ans = Ai.call(context, AI_BARCODE_PROMPT, jpg, json = false)
+                                    val digits = Regex("\\d[\\d\\s-]{6,20}\\d").find(ans)?.value?.filter { it.isDigit() }.orEmpty()
+                                    msg = when {
+                                        digits.isEmpty() -> "ИИ не смог разобрать код — снимите ближе и без бликов"
+                                        !gs1Valid(digits) -> "ИИ прочитал $digits, но контрольная цифра не сходится — снимите ещё раз"
+                                        else -> { found = digits; "" }
+                                    }
+                                } catch (e: Exception) {
+                                    msg = "Ошибка ИИ: " + (e.message ?: e.javaClass.simpleName)
+                                }
+                                mainH.post {
+                                    aiBusy = false
+                                    val code = found
+                                    if (!alive.get()) return@post
+                                    if (code == null) hint = msg
+                                    else if (continuous) { hint = ""; onResult(code) }
+                                    else if (done.compareAndSet(false, true)) onResult(code)
+                                }
+                            }.start()
+                        }
+                        override fun onError(exception: ImageCaptureException) {
+                            aiBusy = false
+                            hint = "Не удалось снять: " + (exception.message ?: "")
+                        }
+                    })
+                },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp)
+            ) { Text(if (aiBusy) "ИИ…" else "Снимок") }
+        }
     }
 }
