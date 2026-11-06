@@ -429,7 +429,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
                             // каждый этап отдельно и с ограничением по времени: сбой или зависание одного не ломает остальные,
                             // а что именно не вышло — показывается в окне
                             val problems = ArrayList<String>()
-                            suspend fun <T> stage(label: String, ms: Long, block: () -> T): T? {
+                            suspend fun <T> stage(label: String, ms: Long, block: suspend () -> T): T? {
                                 return try {
                                     val r = kotlinx.coroutines.withTimeoutOrNull(ms) {
                                         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).async { block() }.await()
