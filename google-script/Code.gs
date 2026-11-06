@@ -49,6 +49,7 @@ function doGet(e) {
     // Публично, без токена: мини-приложение «Сборка» в браузере получателя забирает список партии по коду.
     // Отдаётся только файл BATCH_<код>.json; код — длинная случайная строка из ссылки/QR.
     if (String(params.action || '').toLowerCase() === 'batch') return getBatch_(params.code);
+    if (String(params.action || '').toLowerCase() === 'app') return getBatchPage_(params.code);
     checkToken_(params.token);
     var action = String(params.action || 'ping').toLowerCase();
     var folder = getFolder_(params.folderId);
@@ -155,6 +156,25 @@ function getBatch_(code) {
   }
   if (!best) return json_({ok: false, error: 'Партия не найдена.'});
   return json_({ok: true, batch: JSON.parse(best.getBlob().getDataAsString('UTF-8'))});
+}
+
+// Страница партии: HTML-файл с Диска (BATCHPAGE_<код>.html) открывается в браузере получателя по ссылке/QR.
+function getBatchPage_(code) {
+  code = String(code || '');
+  var msg = function(t) { return HtmlService.createHtmlOutput('<p style="font:18px sans-serif;padding:24px">' + t + '</p>').addMetaTag('viewport', 'width=device-width,initial-scale=1'); };
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return msg('Некорректная ссылка.');
+  var it = DriveApp.getFilesByName('BATCHPAGE_' + code + '.html');
+  var best = null;
+  while (it.hasNext()) {
+    var f = it.next();
+    if (f.isTrashed()) continue;
+    if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
+  }
+  if (!best) return msg('Партия не найдена. Попросите отправить её ещё раз.');
+  return HtmlService.createHtmlOutput(best.getBlob().getDataAsString('UTF-8'))
+    .setTitle('Сборка')
+    .addMetaTag('viewport', 'width=device-width,initial-scale=1,maximum-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function doPost(e) {

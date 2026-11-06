@@ -155,26 +155,22 @@ object BatchShare {
         return tpl.replace("__TITLE__", bwEsc(b.title)).replace("__LINK__", bwEsc(link)).replace("__DATA__", data)
     }
 
-    /** Страница мини-приложения (GitHub Pages: папка docs/batch.html репозитория). Можно переопределить в SharedPreferences «drive», ключ «page». */
-    private const val PAGE = "https://das-web-hh.github.io/LagerApp/batch.html"
-
-    private fun pageBase(app: Context): String =
-        app.getSharedPreferences("drive", Context.MODE_PRIVATE).getString("page", "")!!.trim().ifEmpty { PAGE }
-
     /**
-     * Кладёт список партии на Google Диск (BATCH_код.json, при повторной отправке заменяется) и возвращает ссылку на мини-приложение:
-     * страница открывается в любом браузере (iPhone, Android), список забирает с Диска через скрипт по коду. Вызывать не в главном потоке.
+     * Создаёт страницу-мини-приложение (HTML со списком внутри) и кладёт её на Google Диск, как и список (BATCH_код.json) для приложения.
+     * Ссылка и QR ведут на скрипт Диска (действие app), он отдаёт эту страницу в браузер — iPhone и Android, без установки.
+     * Повторная отправка заменяет файлы. Нужен обновлённый скрипт Диска (google-script/Code.gs). Вызывать не в главном потоке.
      */
     fun publish(app: Context, b: Batch): String {
         if (!DriveCfg.ready(app)) throw RuntimeException("Google Диск не настроен (Еще → Настройки → Google Диск)")
         val code = b.code
-        val jsonName = "BATCH_$code.json"
-        val data = json(b).toByteArray(Charsets.UTF_8)
-        try { DriveApi.delete(app, jsonName) } catch (e: Exception) { }
-        DriveApi.uploadBytes(app, jsonName, "application/json", data)
-        val s = java.net.URLEncoder.encode(DriveCfg.url(app), "UTF-8")
+        val base = DriveCfg.url(app)
         // «#lager=код» в конце — по нему приложение Lager узнаёт партию при сканировании QR
-        val link = pageBase(app) + "?c=" + code + "&s=" + s + TAG + code
+        val link = base + (if (base.contains('?')) "&" else "?") + "action=app&code=" + code + TAG + code
+        val data = json(b).toByteArray(Charsets.UTF_8)
+        val page = html(app, b, link).toByteArray(Charsets.UTF_8)
+        for (n in listOf("BATCH_$code.json", "BATCHPAGE_$code.html")) try { DriveApi.delete(app, n) } catch (e: Exception) { }
+        DriveApi.uploadBytes(app, "BATCH_$code.json", "application/json", data)
+        DriveApi.uploadBytes(app, "BATCHPAGE_$code.html", "text/html", page)
         b.link = link
         return link
     }
