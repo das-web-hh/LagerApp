@@ -112,12 +112,16 @@ object InventoryStore {
     }
 }
 
-private fun invTotal(j: InvJob) = j.rows.sumOf { parseQ(it.fact) }
+internal fun invTotal(j: InvJob) = j.rows.sumOf { parseQ(it.fact) }
 
 /** Строка печати: одинаковый товар с одинаковым сроком годности (две строки по 2) печатается одной строкой (4). */
-private class InvLine(val row: ItemRow, val fact: Double, val defect: Double, val info: ArticleLookup.Info)
+internal class InvLine(
+    val row: ItemRow, val fact: Double, val defect: Double, val info: ArticleLookup.Info,
+    /** план по списку (только «Сборка»): сумма по слитым строкам */
+    val plan: Double = if (row.extra) 0.0 else parseQ(row.qty)
+)
 
-private fun invLines(j: InvJob, articles: List<ArticleLookup.Info>): List<InvLine> {
+internal fun invLines(j: InvJob, articles: List<ArticleLookup.Info>): List<InvLine> {
     val out = ArrayList<InvLine>()
     val at = HashMap<String, Int>()
     j.rows.forEachIndexed { i, r ->
@@ -135,14 +139,14 @@ private fun invLines(j: InvJob, articles: List<ArticleLookup.Info>): List<InvLin
             out.add(InvLine(r, parseQ(r.fact), parseQ(r.defect), info))
         } else {
             val o = out[k]
-            out[k] = InvLine(o.row, o.fact + parseQ(r.fact), o.defect + parseQ(r.defect), o.info)
+            out[k] = InvLine(o.row, o.fact + parseQ(r.fact), o.defect + parseQ(r.defect), o.info, o.plan + (if (r.extra) 0.0 else parseQ(r.qty)))
         }
     }
     return out
 }
 
 /** Артикул, штрих-код и вес строк из каталога (с учётом всех названий одного товара); индексы совпадают с j.rows. Вызывать не в главном потоке. */
-private fun invArticles(ctx: Context, rows: List<ItemRow>): List<ArticleLookup.Info> {
+internal fun invArticles(ctx: Context, rows: List<ItemRow>): List<ArticleLookup.Info> {
     val db = ProductDb.get(ctx)
     return rows.map { r -> ArticleLookup.info(db, r) }
 }
@@ -174,14 +178,15 @@ tr.tot td{height:9mm;font-weight:bold;font-size:10pt;background:#f7f7f7}
 """
 
 /** Документ для печати и PDF: как образец «Коробка №» (№, артикул, название, штрих-код картинкой, штук, срок годности). Фото и QR идут ниже. */
-private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: String, qrHtml: String = "", articles: List<ArticleLookup.Info> = emptyList()): String {
+internal fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: String, qrHtml: String = "", articles: List<ArticleLookup.Info> = emptyList(), asm: Boolean = false): String {
     val sb = StringBuilder()
     val L = PrintCfg.invLang
     fun t(ru: String, en: String, de: String) = when (L) { "en" -> en; "de" -> de; else -> ru }
     sb.append("<html><head><meta charset='utf-8'><style>").append(INV_CSS).append("</style></head><body>")
-    sb.append("<div class='ttl'><span class='h'>${t("Коробка №", "Box No.", "Karton Nr.")}</span><span class='ln'></span></div>")
+    if (asm) sb.append("<div class='ttl'><span class='h'>${t("Сборка", "Picking", "Kommissionierung")}</span><span class='ln' style='border:0;font-size:13pt;font-weight:bold'>${bwEsc(j.address.trim())}</span></div>")
+    else sb.append("<div class='ttl'><span class='h'>${t("Коробка №", "Box No.", "Karton Nr.")}</span><span class='ln'></span></div>")
     val meta = listOfNotNull(
-        j.address.trim().takeIf { it.isNotEmpty() }?.let { "${t("Склад", "Warehouse", "Lager")}: ${bwEsc(it)}" },
+        j.address.trim().takeIf { it.isNotEmpty() && !asm }?.let { "${t("Склад", "Warehouse", "Lager")}: ${bwEsc(it)}" },
         fmtTime(now),
         bwEsc(bwDash(receiver)).takeIf { receiver.isNotBlank() }
     ).joinToString(" · ")
@@ -199,7 +204,7 @@ private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Strin
         sb.append("<td class='a'>${bwEsc(info.article)}</td>")
         sb.append("<td class='t'>${bwEsc(r.name.trim())}${if (info.weight.isNotBlank()) "<div style='font-size:8pt;font-weight:normal'>${bwEsc(info.weight)}</div>" else ""}</td>")
         sb.append("<td>${Ean.html(info.barcode)}</td>")
-        sb.append("<td class='q'>${bwFmt(q)}${if (d > 0.0) "<div class='d'>${t("брак", "defect", "defekt")} ${bwFmt(d)}</div>" else ""}</td>")
+        sb.append("<td class='q'>${bwFmt(q)}${if (d > 0.0) "<div class='d'>${t("брак", "defect", "defekt")} ${bwFmt(d)}</div>" else ""}${if (asm && ln.plan > 0.0) "<div class='d' style='color:#444'>${t("план", "plan", "Soll")} ${bwFmt(ln.plan)}</div>" else ""}</td>")
         sb.append("<td class='e'>${bwEsc(r.expiry)}</td></tr>")
     }
     sb.append("<tr class='tot'><td></td><td></td><td style='text-align:right;padding-right:6px'>${t("Итого", "Total", "Gesamt")}</td><td></td><td class='q' style='font-size:12pt'>${bwFmt(total)}</td><td></td></tr>")
@@ -211,7 +216,7 @@ private fun invDocHtml(j: InvJob, receiver: String, now: Long, photosHtml: Strin
 }
 
 /** Таблица для Excel (CSV с «;», UTF-8 с BOM). */
-private fun invCsv(j: InvJob, now: Long, articles: List<ArticleLookup.Info> = emptyList()): String {
+internal fun invCsv(j: InvJob, now: Long, articles: List<ArticleLookup.Info> = emptyList()): String {
     fun q(v: String) = "\"" + v.replace("\"", "\"\"").replace('\n', ' ') + "\""
     val sb = StringBuilder("\uFEFF")
     sb.append("Склад;").append(q(j.address.trim())).append(";;;;;\n")
@@ -227,8 +232,8 @@ private fun invCsv(j: InvJob, now: Long, articles: List<ArticleLookup.Info> = em
 }
 
 /** Текстом для WhatsApp / Telegram. */
-private fun invText(j: InvJob, now: Long): String {
-    val sb = StringBuilder("Инвентаризация")
+internal fun invText(j: InvJob, now: Long, title: String = "Инвентаризация"): String {
+    val sb = StringBuilder(title)
     if (j.address.isNotBlank()) sb.append(" — ").append(j.address.trim())
     sb.append("\n").append(fmtTime(now)).append("\n\n")
     invLines(j, emptyList()).forEachIndexed { i, ln ->
@@ -247,7 +252,7 @@ private fun invText(j: InvJob, now: Long): String {
  * Cloud.saveProduct пишет в обе базы. Новые товары заводятся с весом/упаковкой из названия;
  * у уже имеющегося товара дописываются только пустые поля (штрих-код, артикул), чужие данные не затираются.
  */
-private fun invSaveBarcodes(ctx: Context, j: InvJob) {
+internal fun invSaveBarcodes(ctx: Context, j: InvJob) {
     val db = ProductDb.get(ctx)
     j.rows.toList().forEach { r ->
         val code = r.barcode.trim()

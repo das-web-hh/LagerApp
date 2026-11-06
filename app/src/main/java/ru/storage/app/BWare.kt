@@ -321,7 +321,13 @@ fun CatalogWheel(
     /** true — сканер штрих-кодов в поиске, кнопки «Штрих-код» и «Фото» в свайпе влево (инвентарь) */
     scanner: Boolean = false,
     /** true — «Инвентаризация»: обычный счёт (факт и брак барабаном, количество с клавиатуры), неизвестный штрих-код — окно с названием */
-    inventory: Boolean = false
+    inventory: Boolean = false,
+    /** true — «Сборка»: строки списка партии — база; поиск идёт и по ним (название, артикул, ШК), тот же товар не дублируется */
+    listBase: Boolean = false,
+    /** true — общий каталог не используется вовсе: ни поиск, ни синхронизация, ни подсказки (свой список — «Сборка») */
+    isolated: Boolean = false,
+    /** true (вместе с isolated) — можно считать только товары списка; чего нет в списке, добавить нельзя */
+    strict: Boolean = false
 ) {
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
@@ -342,9 +348,9 @@ fun CatalogWheel(
     var focusTarget by remember { mutableStateOf<ItemRow?>(null) }
     var detailsRow by remember { mutableStateOf<ItemRow?>(null) }
 
-    LaunchedEffect(Unit) { Cloud.runProducts(db, sync, false) }
+    LaunchedEffect(Unit) { if (!isolated) Cloud.runProducts(db, sync, false) }
     LaunchedEffect(query, sync.version) {
-        suggestions = if (query.trim().length < MIN_SEARCH_CHARS) emptyList()
+        suggestions = if (isolated || query.trim().length < MIN_SEARCH_CHARS) emptyList()
         else withContext(Dispatchers.IO) { ProductGroups.collapse(db, db.search(query, 12)).take(8) }
     }
 
@@ -364,9 +370,15 @@ fun CatalogWheel(
             (it.productId.isNotEmpty() && it.productId in ids) || it.name.trim().lowercase() in names
         }
         // Инвентаризация: тот же товар можно добавить ещё одной строкой (у партий разные сроки годности); сканер по-прежнему считает +1
-        val another = inventory && fact.isBlank() && existing != null
+        val another = inventory && !listBase && fact.isBlank() && existing != null
+        if (strict && existing == null) {
+            Toast.makeText(ctx, "Этого товара нет в списке партии", Toast.LENGTH_SHORT).show()
+            query = ""
+            return
+        }
         if (existing != null && !another) {
             focusTarget = existing
+            if (barcode.isNotBlank() && existing.barcode.isBlank()) existing.barcode = barcode
             if (fact.isNotBlank()) {
                 // сканером: товар уже в списке — +1
                 existing.fact = fmtQ(bwQty(existing.fact) + 1)
@@ -403,6 +415,7 @@ fun CatalogWheel(
         }
         scope.launch {
             val row = rows.firstOrNull { sameBarcode(it.barcode, code) }
+                ?: (if (listBase) rows.firstOrNull { it.article.isNotBlank() && it.article.trim().equals(code, true) } else null)
             if (row != null) {
                 row.fact = fmtQ(bwQty(row.fact) + 1)
                 focusTarget = row; addTick++
@@ -413,7 +426,7 @@ fun CatalogWheel(
                 if (mode == "ext") CountAnnouncer.tap(ctx, row)
                 return@launch
             }
-            val p = withContext(Dispatchers.IO) { db.findByBarcode(code) }
+            val p = if (isolated) null else withContext(Dispatchers.IO) { db.findByBarcode(code) }
             if (p != null) {
                 addRow(p.name, p.id, fact = "1", barcode = code)
                 Haptics.pulse(ctx, Haptics.TAP)
@@ -421,7 +434,8 @@ fun CatalogWheel(
                 scanBanner = "Добавлено: ${p.name.trim()}" to true
             } else {
                 ScanFeedback.beep(false)
-                if (inventory) unknownCode = code
+                if (strict) scanBanner = "Нет в списке: $code" to false
+                else if (inventory) unknownCode = code
                 else scanBanner = "Нет в каталоге: $code" to false
             }
         }
@@ -467,6 +481,7 @@ fun CatalogWheel(
             for (l in list.asReversed()) {
                 val prod = withContext(Dispatchers.IO) {
                     try {
+                        if (isolated) return@withContext null
                         (if (l.barcode.isNotBlank()) db.findByBarcode(l.barcode) else null)
                             ?: (if (l.article.isNotBlank()) db.findByArticle(l.article) else null)
                     } catch (e: Exception) { null }
@@ -530,7 +545,7 @@ fun CatalogWheel(
             onChange = { query = germanKeys(it) },
             onAdd = {
                 val typed = query.trim()
-                if (typed.isEmpty() && inventory) {
+                if (typed.isEmpty() && inventory && !strict) {
                     // «Инвентаризация»: «+» при пустом поиске открывает камеру для этикеток
                     labelScan = true
                 } else {
@@ -561,15 +576,38 @@ fun CatalogWheel(
                 photoButton = scanner
             )
             val typed = query.trim()
+            // «Сборка»: сначала товары из самого списка партии (работает без интернета)
+            val listHits = if (listBase && typed.length >= MIN_SEARCH_CHARS) rows.filter { r ->
+                r.name.contains(typed, true) || (r.article.isNotBlank() && r.article.contains(typed, true)) ||
+                    (r.barcode.isNotBlank() && r.barcode.contains(typed))
+            }.take(8) else emptyList()
             if (typed.length >= MIN_SEARCH_CHARS) {
                 Card(Modifier.fillMaxWidth().heightIn(max = 300.dp).align(Alignment.TopCenter)) {
-                    if (suggestions.isEmpty()) {
+                    if (suggestions.isEmpty() && listHits.isEmpty()) {
                         Text(
-                            if (sync.busy) "Загрузка каталога…" else "Нет в каталоге — нажмите «+», чтобы добавить как написано.",
+                            if (sync.busy) "Загрузка каталога…" else if (strict) "Нет в списке партии." else if (isolated) "Нет в списке — нажмите «+», чтобы добавить как написано." else "Нет в каталоге — нажмите «+», чтобы добавить как написано.",
                             Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium
                         )
                     } else {
                         Column(Modifier.verticalScroll(rememberScrollState())) {
+                            listHits.forEach { r ->
+                                Column(
+                                    Modifier.fillMaxWidth().clickable {
+                                        r.fact = fmtQ(bwQty(r.fact) + 1)
+                                        focusTarget = r; addTick++; query = ""
+                                        Haptics.pulse(ctx, Haptics.TAP)
+                                        ScanFeedback.beep(true)
+                                    }.padding(horizontal = 14.dp, vertical = 10.dp)
+                                ) {
+                                    Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    val sub = listOf(
+                                        "из списка", if (r.article.isNotBlank()) "арт. ${r.article}" else "",
+                                        if (r.barcode.isNotBlank()) "ШК ${r.barcode}" else ""
+                                    ).filter { it.isNotEmpty() }.joinToString(" · ")
+                                    Text(sub, style = MaterialTheme.typography.bodySmall)
+                                }
+                                HorizontalDivider()
+                            }
                             suggestions.forEachIndexed { i, p ->
                                 Column(
                                     Modifier.fillMaxWidth().clickable { addRow(p.name, p.id) }

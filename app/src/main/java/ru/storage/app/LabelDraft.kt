@@ -16,26 +16,26 @@ object LabelDraft {
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences("label_draft", Context.MODE_PRIVATE)
 
-    private fun mode(catalog: Boolean) = if (catalog) "cat" else "inv"
+    private fun mode(catalog: Boolean, tag: String = "") = if (tag.isNotEmpty()) tag else if (catalog) "cat" else "inv"
 
-    fun save(ctx: Context, catalog: Boolean, list: List<ScannedLabel>) {
+    fun save(ctx: Context, catalog: Boolean, list: List<ScannedLabel>, tag: String = "") {
         try {
             val a = JSONArray()
             // «ИИ…» (ещё читается) не сохраняем: после возврата этикетка снова будет прочитана
             list.filter { it.via != "wait" }.forEach {
                 a.put(JSONObject().put("k", it.key).put("b", it.barcode).put("a", it.article).put("n", it.name).put("v", it.via))
             }
-            sp(ctx).edit().putString("found_" + mode(catalog), a.toString())
-                .putLong("found_at_" + mode(catalog), System.currentTimeMillis()).apply()
+            sp(ctx).edit().putString("found_" + mode(catalog, tag), a.toString())
+                .putLong("found_at_" + mode(catalog, tag), System.currentTimeMillis()).apply()
         } catch (e: Exception) { }
     }
 
-    fun load(ctx: Context, catalog: Boolean): List<ScannedLabel> {
+    fun load(ctx: Context, catalog: Boolean, tag: String = ""): List<ScannedLabel> {
         return try {
             val p = sp(ctx)
-            val at = p.getLong("found_at_" + mode(catalog), 0L)
+            val at = p.getLong("found_at_" + mode(catalog, tag), 0L)
             if (System.currentTimeMillis() - at > MAX_AGE) return emptyList()
-            val a = JSONArray(p.getString("found_" + mode(catalog), "[]"))
+            val a = JSONArray(p.getString("found_" + mode(catalog, tag), "[]"))
             List(a.length()) {
                 val o = a.getJSONObject(it)
                 ScannedLabel(o.optString("k"), o.optString("b"), o.optString("a"), o.optString("n"), o.optString("v"))
@@ -45,8 +45,8 @@ object LabelDraft {
         }
     }
 
-    fun clear(ctx: Context, catalog: Boolean) {
-        sp(ctx).edit().remove("found_" + mode(catalog)).remove("found_at_" + mode(catalog)).apply()
+    fun clear(ctx: Context, catalog: Boolean, tag: String = "") {
+        sp(ctx).edit().remove("found_" + mode(catalog, tag)).remove("found_at_" + mode(catalog, tag)).apply()
     }
 
     // ---------- удалённые этикетки ----------

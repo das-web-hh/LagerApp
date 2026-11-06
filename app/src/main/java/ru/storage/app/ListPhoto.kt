@@ -652,7 +652,13 @@ private fun PhotoCamera(
 
 /** Окно «+» в Инвентаризации: проход камерой по этикеткам и снимки списков → список с проверкой → «Добавить». */
 @Composable
-fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, catalogMode: Boolean = false) {
+fun ListPhotoScreen(
+    onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, catalogMode: Boolean = false,
+    /** отдельный черновик камеры (например «партия»), чтобы не смешивать с каталогом и инвентаризацией */
+    draftTag: String = "",
+    /** подпись кнопки завершения вместо «В импорт» */
+    doneLabel: String? = null
+) {
     val context = LocalContext.current
     val app = context.applicationContext
     var hasPermission by remember {
@@ -673,10 +679,10 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, 
 
     var stage by remember { mutableStateOf("camera") } // camera | result
     // записанное камерой хранится на телефоне: при возврате в камеру список продолжается с того же места
-    val found = remember { mutableStateListOf<ScannedLabel>().also { it.addAll(LabelDraft.load(app, catalogMode)) } }
+    val found = remember { mutableStateListOf<ScannedLabel>().also { it.addAll(LabelDraft.load(app, catalogMode, draftTag)) } }
     LaunchedEffect(Unit) {
         var first = true // первое значение — то, что только что загрузили: срок черновика не продлеваем
-        snapshotFlow { found.toList() }.collect { if (first) first = false else LabelDraft.save(app, catalogMode, it) }
+        snapshotFlow { found.toList() }.collect { if (first) first = false else LabelDraft.save(app, catalogMode, it, draftTag) }
     }
     val errors = remember { mutableStateListOf<String>() }
     var marks by remember { mutableStateOf<LiveMarks?>(null) }
@@ -764,9 +770,9 @@ fun ListPhotoScreen(onDone: (List<ScannedLabel>) -> Unit, onCancel: () -> Unit, 
                 OutlinedButton(modifier = Modifier.weight(1f), onClick = { stage = "camera" }) { Text("Ещё снимать") }
                 Button(modifier = Modifier.weight(1f), enabled = found.isNotEmpty(), onClick = {
                     val done = found.filter { it.via != "wait" }.toList()
-                    LabelDraft.clear(app, catalogMode)
+                    LabelDraft.clear(app, catalogMode, draftTag)
                     onDone(done)
-                }) { Text((if (catalogMode) "В импорт" else "Добавить") + " (${found.size})") }
+                }) { Text((doneLabel ?: if (catalogMode) "В импорт" else "Добавить") + " (${found.size})") }
             }
         }
     }

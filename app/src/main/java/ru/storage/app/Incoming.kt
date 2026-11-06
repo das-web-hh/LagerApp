@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -93,6 +94,35 @@ object Incoming {
         (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
         else intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)) ?: emptyList()
 
+    /**
+     * Присланный файл партии (HTML со встроенными данными): база загружается из самого файла, интернет не нужен.
+     * true — это был файл партии (дальше как PDF/фото его обрабатывать не надо).
+     */
+    private fun batchFromHtml(ctx: Context, uri: Uri): Boolean {
+        val app = ctx.applicationContext
+        val isHtml = (app.contentResolver.getType(uri) ?: "").startsWith("text/html") ||
+            (displayName(app, uri) ?: "").lowercase().let { it.endsWith(".html") || it.endsWith(".htm") }
+        if (!isHtml) return false
+        return try {
+            val text = app.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return true
+            val m = Regex("<script[^>]*id=['\"]lager-batch['\"][^>]*>(.*?)</script>", RegexOption.DOT_MATCHES_ALL).find(text)
+            if (m == null) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Toast.makeText(app, "В этом файле нет данных партии Warehouse", Toast.LENGTH_LONG).show()
+                }
+                return true
+            }
+            val o = org.json.JSONObject(m.groupValues[1].replace("<\\/", "</"))
+            android.os.Handler(android.os.Looper.getMainLooper()).post { AsmStore.receiveJson(app, o) }
+            true
+        } catch (e: Exception) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                Toast.makeText(app, "Не удалось прочитать файл партии", Toast.LENGTH_LONG).show()
+            }
+            true
+        }
+    }
+
     fun handleIntent(ctx: Context, intent: Intent?) {
         if (intent == null) return
         val uris: List<Uri> = when (intent.action) {
@@ -101,7 +131,15 @@ object Incoming {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)
             else -> emptyList()
         }
-        if (uris.isNotEmpty()) thread { uris.forEach { accept(ctx, it) } }
+        // ссылка на партию текстом («Поделиться» из WhatsApp и др.): партия скачивается и открывается «Сборка»
+        if (uris.isEmpty() && intent.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
+            val t = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
+            if (BatchShare.codeFrom(t) != null) {
+                AsmStore.receive(ctx, t) { Toast.makeText(ctx.applicationContext, it, Toast.LENGTH_LONG).show() }
+            }
+            return
+        }
+        if (uris.isNotEmpty()) thread { uris.forEach { if (!batchFromHtml(ctx, it)) accept(ctx, it) } }
     }
 }
 

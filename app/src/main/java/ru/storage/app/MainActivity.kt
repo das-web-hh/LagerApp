@@ -288,6 +288,14 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     }
     val swipePx = with(LocalDensity.current) { 90.dp.toPx() }
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
+    // пришла партия по ссылке (WhatsApp, QR): открываем «Прочее → Сборка»
+    LaunchedEffect(AsmStore.pendingOpen) {
+        if (AsmStore.pendingOpen) {
+            go(2)
+            TabNav.other = "Сборка"
+            AsmStore.pendingOpen = false
+        }
+    }
     LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
     // общие настройки рабочего времени от администратора подтягиваются на этот телефон
     LaunchedEffect(Unit) {

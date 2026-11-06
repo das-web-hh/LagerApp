@@ -67,6 +67,21 @@
                 <data android:mimeType="image/jpeg" />
                 <data android:mimeType="image/png" />
             </intent-filter>
+            <!-- ссылка на партию (Сборка), присланная текстом -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/html" />
+            </intent-filter>
+            <!-- присланный файл партии (HTML) открывается через Warehouse -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="text/html" />
+            </intent-filter>
             <!-- «Открыть через…» PDF -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
