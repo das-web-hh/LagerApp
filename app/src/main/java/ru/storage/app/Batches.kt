@@ -124,7 +124,7 @@ object BatchStore {
 }
 
 /** Количество по строке: пусто или ноль → 1. */
-private fun cleanQty(s: String): String {
+private fun batchQty(s: String): String {
     val d = parseQ(s)
     return if (d > 0.0) fmtQ(d) else "1"
 }
@@ -137,7 +137,7 @@ object BatchShare {
     fun json(b: Batch): String {
         val rs = JSONArray()
         b.rows.toList().forEach { r ->
-            rs.put(JSONObject().put("n", r.name.trim()).put("q", cleanQty(r.qty)).put("b", r.barcode).put("a", r.article))
+            rs.put(JSONObject().put("n", r.name.trim()).put("q", batchQty(r.qty)).put("b", r.barcode).put("a", r.article))
         }
         return JSONObject().put("v", 1).put("code", b.code).put("title", b.title).put("at", b.created).put("rows", rs).toString()
     }
@@ -154,12 +154,12 @@ object BatchShare {
         sb.append("</style></head><body>")
         sb.append("<h1>").append(bwEsc(b.title)).append("</h1>")
         sb.append("<div class='m'>").append(bwEsc(fmtTime(b.created))).append(" · позиций: ").append(b.rows.size)
-        sb.append(" · всего: ").append(bwFmt(b.rows.sumOf { parseQ(cleanQty(it.qty)) })).append("</div>")
+        sb.append(" · всего: ").append(bwFmt(b.rows.sumOf { parseQ(batchQty(it.qty)) })).append("</div>")
         sb.append("<table><tr><th>№</th><th>Артикул</th><th>Название</th><th>Штрих-код</th><th>Кол-во</th></tr>")
         b.rows.toList().forEachIndexed { i, r ->
             sb.append("<tr><td>").append(i + 1).append("</td><td>").append(bwEsc(r.article)).append("</td><td class='t'>")
                 .append(bwEsc(r.name.trim())).append("</td><td>").append(Ean.html(r.barcode)).append("</td><td class='q'>")
-                .append(bwEsc(cleanQty(r.qty))).append("</td></tr>")
+                .append(bwEsc(batchQty(r.qty))).append("</td></tr>")
         }
         sb.append("</table>")
         sb.append("<div class='h'>Чтобы загрузить список в приложение (работает без интернета): откройте этот файл через Warehouse («Открыть с помощью» → Warehouse). Или: Прочее → Сборка → «Получить» и QR / ссылка.")
@@ -214,7 +214,7 @@ object BatchShare {
 
     private fun text(b: Batch, link: String): String {
         val sb = StringBuilder(b.title).append("\n")
-        b.rows.toList().forEachIndexed { i, r -> sb.append(i + 1).append(". ").append(r.name.trim()).append(" — ").append(cleanQty(r.qty)).append("\n") }
+        b.rows.toList().forEachIndexed { i, r -> sb.append(i + 1).append(". ").append(r.name.trim()).append(" — ").append(batchQty(r.qty)).append("\n") }
         if (link.isNotBlank()) sb.append("\nОткрыть в приложении Warehouse (Сборка → Получить):\n").append(link)
         return sb.toString()
     }
@@ -301,7 +301,7 @@ fun BatchesScreen(prefs: Prefs, onBack: () -> Unit) {
                 if (res == null || res.items.isEmpty()) {
                     Toast.makeText(ctx, note.ifBlank { "В файле нет товаров" }, Toast.LENGTH_LONG).show()
                 } else {
-                    accept(res.items.map { BatchRow(it.name.trim(), cleanQty(it.qty), it.barcode.trim()) }, displayName(ctx, uri))
+                    accept(res.items.map { BatchRow(it.name.trim(), batchQty(it.qty), it.barcode.trim()) }, displayName(ctx, uri))
                 }
             } catch (e: Exception) {
                 Toast.makeText(ctx, "Ошибка файла: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
@@ -461,7 +461,7 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
         CompactField(value = b.title, onChange = { b.title = germanKeys(it) }, hint = "Название партии", modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(6.dp))
         Text(
-            "Позиций: ${b.rows.size} · всего: ${fmtQ(b.rows.sumOf { parseQ(cleanQty(it.qty)) })}",
+            "Позиций: ${b.rows.size} · всего: ${fmtQ(b.rows.sumOf { parseQ(batchQty(it.qty)) })}",
             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 4.dp)
         )
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 4.dp)) {
