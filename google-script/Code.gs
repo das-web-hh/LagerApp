@@ -50,6 +50,8 @@ function doGet(e) {
     // Отдаётся только файл BATCH_<код>.json; код — длинная случайная строка из ссылки/QR.
     if (String(params.action || '').toLowerCase() === 'batch') return getBatch_(params.code);
     if (String(params.action || '').toLowerCase() === 'app') return getBatchPage_(params.code);
+    // Публично, по коду партии: счёт всех устройств (для общего подсчёта в браузере)
+    if (String(params.action || '').toLowerCase() === 'counts') return getCounts_(params.code);
     checkToken_(params.token);
     var action = String(params.action || 'ping').toLowerCase();
     var folder = getFolder_(params.folderId);
@@ -158,6 +160,55 @@ function getBatch_(code) {
   return json_({ok: true, batch: JSON.parse(best.getBlob().getDataAsString('UTF-8'))});
 }
 
+// ───────── общий счёт партии с нескольких устройств ─────────
+function countsFile_(code, create) {
+  var it = DriveApp.getFilesByName('BATCHCOUNT_' + code + '.json');
+  while (it.hasNext()) { var f = it.next(); if (!f.isTrashed()) return f; }
+  if (!create) return null;
+  return DriveApp.createFile('BATCHCOUNT_' + code + '.json', '{"devs":{}}', 'application/json');
+}
+
+function devList_(data) {
+  var out = [];
+  var devs = (data && data.devs) || {};
+  for (var d in devs) out.push({dev: d, name: devs[d].name || '', t: devs[d].t || 0, c: devs[d].c || {}});
+  return out;
+}
+
+function getCounts_(code) {
+  code = String(code || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
+  var f = countsFile_(code, false);
+  if (!f) return json_({ok: true, devs: []});
+  return json_({ok: true, devs: devList_(JSON.parse(f.getBlob().getDataAsString('UTF-8')))});
+}
+
+function saveCounts_(p) {
+  var code = String(p.code || ''), dev = String(p.dev || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code) || !/^[A-Za-z0-9]{6,40}$/.test(dev)) return json_({ok: false, error: 'Некорректный код.'});
+  if (!DriveApp.getFilesByName('BATCH_' + code + '.json').hasNext()) return json_({ok: false, error: 'Партия не найдена.'});
+  var src = p.counts || {}, clean = {}, n = 0;
+  for (var k in src) {
+    var v = Number(src[k]);
+    if (!isFinite(v) || v <= 0 || v > 1000000 || String(k).length > 80) continue;
+    if (++n > 3000) break;
+    clean[k] = Math.round(v * 1000) / 1000;
+  }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var f = countsFile_(code, true);
+    var data = JSON.parse(f.getBlob().getDataAsString('UTF-8'));
+    data.devs = data.devs || {};
+    if (!data.devs[dev] && Object.keys(data.devs).length >= 30) return json_({ok: false, error: 'Слишком много устройств.'});
+    data.devs[dev] = {name: String(p.name || '').slice(0, 40), t: Date.now(), c: clean};
+    f.setContent(JSON.stringify(data));
+    return json_({ok: true, devs: devList_(data)});
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // Страница партии: HTML-файл с Диска (BATCHPAGE_<код>.html) открывается в браузере получателя по ссылке/QR.
 function getBatchPage_(code) {
   code = String(code || '');
@@ -180,6 +231,8 @@ function getBatchPage_(code) {
 function doPost(e) {
   try {
     var payload = readPayload_(e);
+    // Публично, по коду партии: устройство отправляет свой счёт (запись только в BATCHCOUNT_<код>.json)
+    if (String(payload.action || '').toLowerCase() === 'count') return saveCounts_(payload);
     checkToken_(payload.token);
     var action = String(payload.action || 'upload').toLowerCase();
     if (action === 'delete') return deleteByName_(payload);

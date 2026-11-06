@@ -117,7 +117,7 @@ var CODE = (DATA && DATA.code) || P.get('c') || '';
 var KEY = 'lager_batch2_' + CODE;
 var state = null, filter = 'all', title = '';
 
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} if(typeof schedulePush === 'function') schedulePush(); }
 function load(){ try{ var s = JSON.parse(localStorage.getItem(KEY)||'null'); if(s && s.rows) return s; }catch(e){} return null; }
 
 // ——— старт: данные внутри файла, либо из памяти браузера, либо с сервера по ссылке ———
@@ -129,15 +129,17 @@ function init(d){
     var n = 0;
     state = {rows:(d.rows||[]).map(function(r){
       return {id:++n, n:String(r.n||''), q:parseFloat(String(r.q||'0').replace(',', '.'))||0, b:String(r.b||'').trim(), a:String(r.a||'').trim()};
-    }), nid:n, box:1, fact:{}, boxes:[], title:title};
+    }), nid:n, base:n, box:1, fact:{}, boxes:[], title:title};
     save();
   } else if(state.title) title = state.title;
+  if(state.base === undefined) state.base = state.rows.length;
   render();
+  startSync();
 }
 if(DATA && DATA.rows){ init(DATA); }
 else {
   var cached = CODE ? load() : null;
-  var api = P.get('s') || '';
+  var api = P.get('s') || ''; SYNC = /^https:\/\/script\.google(usercontent)?\.com\//.test(api) ? api : '';
   if(cached){ init({title:cached.title}); }
   else if(!CODE || !/^https:\/\/script\.google(usercontent)?\.com\//.test(api)){
     $('list').innerHTML = '<p class="sub" style="text-align:center;margin-top:30px">Ссылка неполная. Откройте её целиком или отсканируйте QR-код ещё раз.</p>';
@@ -151,14 +153,21 @@ else {
 
 // ——— звук и сообщения ———
 var actx = null;
+function tone(f, type, dur, at){
+  var o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.value = f; o.type = type; g.gain.value = .15;
+  o.connect(g); g.connect(actx.destination);
+  var t0 = actx.currentTime + (at||0); o.start(t0); o.stop(t0 + dur);
+}
+// ok — товар из плана (короткий высокий); 'over' — из плана, но уже набрано всё/больше (два средних); false — товара нет в плане (низкий длинный)
 function beep(ok){
   try{
     actx = actx || new (window.AudioContext||window.webkitAudioContext)();
-    var o = actx.createOscillator(), g = actx.createGain();
-    o.frequency.value = ok ? 1000 : 260; o.type = ok ? 'sine' : 'square'; g.gain.value = .15;
-    o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + (ok ? .09 : .35));
+    if(ok === true) tone(1000, 'sine', .09);
+    else if(ok === 'over'){ tone(700, 'triangle', .1); tone(700, 'triangle', .1, .16); }
+    else tone(220, 'square', .5);
   }catch(e){}
-  try{ if(navigator.vibrate) navigator.vibrate(ok ? 40 : [80,60,80]); }catch(e){}
+  try{ if(navigator.vibrate) navigator.vibrate(ok === true ? 40 : (ok === 'over' ? [50,50,50] : [200,80,200])); }catch(e){}
 }
 var msgT = 0;
 function say(text, ok){
@@ -171,13 +180,18 @@ function rowById(id){ for(var i=0;i<state.rows.length;i++) if(state.rows[i].id==
 function inBox(id){ return state.fact[id] || 0; }
 function inClosed(id){ var s = 0; state.boxes.forEach(function(b){ b.items.forEach(function(it){ if(it.id===id) s += it.q; }); }); return s; }
 function total(id){ return inClosed(id) + inBox(id); }
+// ——— несколько устройств: счёт других устройств складывается со своим ———
+var OTH = {}, DEVS = [], DEV = '', DEVNAME = '', SYNC = '', pushT = 0, synced = false;
+function rkey(r){ return r.id <= (state.base||0) ? 'k'+r.id : 'n:'+String(r.n).toLowerCase().slice(0,50); }
+function oth(r){ return OTH[rkey(r)] || 0; }
+function tot(r){ return total(r.id) + oth(r); }
 
 function add(id, d, quiet){
   var r = rowById(id); if(!r) return;
   state.fact[id] = Math.max(0, inBox(id) + d);
   if(!state.fact[id]) delete state.fact[id];
   save(); render();
-  if(!quiet){ beep(true); say(r.n + ' · в коробке ' + fmt(inBox(id)) + ' · всего ' + fmt(total(id)) + ' из ' + fmt(r.q), true); }
+  if(!quiet){ var ov = d > 0 && tot(r) > r.q; beep(ov ? 'over' : true); say(r.n + ' · в коробке ' + fmt(inBox(id)) + ' · всего ' + fmt(tot(r)) + ' из ' + fmt(r.q) + (ov ? ' · больше плана!' : ''), !ov); }
   var el = document.querySelector('[data-i="'+id+'"]');
   if(el){ el.scrollIntoView({block:'center', behavior:'smooth'}); el.classList.add('flash'); setTimeout(function(){ el.classList.remove('flash'); }, 700); }
 }
@@ -221,20 +235,20 @@ function hideSug(){ $('sug').style.display = 'none'; $('q').value = ''; }
 function render(){
   if(!state) return;
   var plan = 0, got = 0, boxQ = 0;
-  state.rows.forEach(function(r){ plan += r.q; got += Math.min(total(r.id), r.q); boxQ += inBox(r.id); });
-  var all = 0; state.rows.forEach(function(r){ all += total(r.id); });
+  state.rows.forEach(function(r){ plan += r.q; got += Math.min(tot(r), r.q); boxQ += inBox(r.id); });
+  var all = 0; state.rows.forEach(function(r){ all += tot(r); });
   $('ttl').textContent = title;
-  $('stat').textContent = 'Коробка №' + state.box + ' · в ней ' + fmt(boxQ) + ' · собрано ' + fmt(all) + ' из ' + fmt(plan);
+  $('stat').textContent = 'Коробка №' + state.box + ' · в ней ' + fmt(boxQ) + ' · собрано ' + fmt(all) + ' из ' + fmt(plan) + (DEVS.length > 1 ? ' · устройств: ' + DEVS.length : '');
   $('pb').style.width = (plan ? Math.min(100, got / plan * 100) : 0) + '%';
   var h = '';
   state.rows.forEach(function(r){
-    var t = total(r.id), st = (t > r.q) ? 'over' : (t >= r.q && r.q > 0 ? 'done' : 'todo');
+    var t = tot(r), st = (t > r.q) ? 'over' : (t >= r.q && r.q > 0 ? 'done' : 'todo');
     if(filter !== 'all' && filter !== st) return;
     var left = r.q - t;
     h += '<div class="row '+(st==='todo'?'':st)+'" data-i="'+r.id+'"><div class="info" data-edit="1"><div class="nm">'+esc(r.n)+'</div><div class="meta">'
       + (r.a ? 'арт. '+esc(r.a)+' · ' : '') + (r.b ? 'ШК '+esc(r.b) : 'нет штрих-кода') + '</div></div>'
       + '<div><div class="qty"><button data-d="-1">−</button><input type="text" inputmode="decimal" value="'+fmt(inBox(r.id))+'" data-e="1"><button data-d="1">+</button></div>'
-      + '<div class="plan">план '+fmt(r.q)+' · '+(left>0?'осталось '+fmt(left):(left<0?'лишних '+fmt(-left):'готово'))+'</div></div></div>';
+      + '<div class="plan">план '+fmt(r.q)+' · '+(left>0?'осталось '+fmt(left):(left<0?'лишних '+fmt(-left):'готово'))+(oth(r) ? ' · другие: '+fmt(oth(r)) : '')+'</div></div></div>';
   });
   $('list').innerHTML = h || '<p class="sub" style="text-align:center;margin-top:30px">Нет строк</p>';
 }
@@ -380,10 +394,71 @@ function boxesDlg(){
 function csv(){
   function q(v){ return '"' + String(v).replace(/"/g,'""') + '"'; }
   var out = '\uFEFF№;Артикул;Название;Штрих-код;План;Факт\n';
-  state.rows.forEach(function(r, k){ out += (k+1)+';'+q(r.a)+';'+q(r.n)+';'+q(r.b)+';'+fmt(r.q)+';'+fmt(total(r.id))+'\n'; });
+  state.rows.forEach(function(r, k){ out += (k+1)+';'+q(r.a)+';'+q(r.n)+';'+q(r.b)+';'+fmt(r.q)+';'+fmt(tot(r))+'\n'; });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([out], {type:'text/csv;charset=utf-8'})); a.download = 'sborka_' + CODE + '.csv';
   document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
+
+// ——— общий счёт с других устройств (через скрипт Диска, по коду партии) ———
+function myCounts(){
+  var c = {};
+  state.rows.forEach(function(r){ var t = total(r.id); if(t > 0) c[rkey(r)] = t; });
+  return c;
+}
+function applyDevs(devs){
+  OTH = {}; DEVS = devs || [];
+  DEVS.forEach(function(d){
+    if(d.dev === DEV) return;
+    for(var k in d.c) OTH[k] = (OTH[k]||0) + d.c[k];
+  });
+  render();
+}
+function schedulePush(){
+  if(!synced) return;
+  clearTimeout(pushT); pushT = setTimeout(push, 1200);
+}
+function push(){
+  if(!SYNC || !CODE) return;
+  fetch(SYNC, {method:'POST', redirect:'follow', body: JSON.stringify({action:'count', code:CODE, dev:DEV, name:DEVNAME, counts:myCounts()})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(j.ok) applyDevs(j.devs); }).catch(function(){});
+}
+function pull(){
+  if(!SYNC || !CODE || document.hidden) return;
+  fetch(SYNC + (SYNC.indexOf('?')<0?'?':'&') + 'action=counts&code=' + encodeURIComponent(CODE), {redirect:'follow'})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(j.ok) applyDevs(j.devs); }).catch(function(){});
+}
+function startSync(){
+  if(synced || !SYNC || !CODE) return;
+  try{ DEV = localStorage.getItem('lager_dev') || ''; DEVNAME = localStorage.getItem('lager_devname') || ''; }catch(e){}
+  if(!/^[A-Za-z0-9]{6,40}$/.test(DEV)){
+    DEV = ''; for(var i=0;i<12;i++) DEV += 'abcdefghijklmnopqrstuvwxyz0123456789'.charAt(Math.floor(Math.random()*36));
+    try{ localStorage.setItem('lager_dev', DEV); }catch(e){}
+  }
+  if(!DEVNAME) DEVNAME = 'Устройство ' + DEV.slice(0,3).toUpperCase();
+  synced = true;
+  push();
+  setInterval(pull, 8000);
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) pull(); });
+}
+function devicesDlg(){
+  if(!synced){ say('Общий счёт работает, когда список открыт по ссылке из интернета', false); return; }
+  var h = '<h3>Устройства</h3><div class="sub">Счёт всех устройств складывается по каждому товару.</div>';
+  DEVS.forEach(function(d){
+    var s = 0; for(var k in d.c) s += d.c[k];
+    h += '<div class="li"><div class="t"><b>'+esc(d.name||'Устройство')+(d.dev===DEV?' (это)':'')+'</b><div class="meta">штук: '+fmt(s)+' · позиций: '+Object.keys(d.c).length+'</div></div></div>';
+  });
+  h += '<label>Название этого устройства</label><input id="dN" value="'+esc(DEVNAME)+'">'
+     + '<div class="btns"><button class="sec" id="dX">Закрыть</button><button id="dS">Сохранить имя</button></div>';
+  dlgOpen(h);
+  $('dX').onclick = dlgClose;
+  $('dS').onclick = function(){
+    var v = $('dN').value.trim().slice(0,40); if(v){ DEVNAME = v; try{ localStorage.setItem('lager_devname', v); }catch(e){} push(); }
+    dlgClose();
+  };
 }
 
 // ——— камера: встроенный сканер браузера, а на iPhone — библиотека ZXing ———
@@ -465,6 +540,7 @@ $('chips').addEventListener('click', function(e){
   Array.prototype.forEach.call($('chips').children, function(c){ c.className = c === b ? 'on' : ''; });
   render();
 });
+$('stat').addEventListener('click', devicesDlg);
 $('printBtn').addEventListener('click', function(){ if(state) closeBoxAndPrint(); });
 $('boxBtn').addEventListener('click', function(){ if(state) boxesDlg(); });
 $('addBtn').addEventListener('click', function(){ if(state) editRow(0); });
