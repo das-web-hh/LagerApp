@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>Сборка</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--tx:#151a21;--mut:#667085;--line:#d9dde3;--pri:#1f6feb;--ok:#1a9d5c;--okbg:#e4f6ec;--warn:#d9822b;--warnbg:#fdf0e1;--bad:#c93a3a}
+@media(prefers-color-scheme:dark){:root{--bg:#12161b;--card:#1b2128;--tx:#eef1f5;--mut:#9aa4b2;--line:#2c343d;--pri:#5b9bff;--ok:#43c783;--okbg:#14301f;--warn:#f0a050;--warnbg:#38281a;--bad:#ff7a7a}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--tx);font-size:16px}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top))}
+h1{font-size:18px;margin:0 0 2px;line-height:1.25}
+.sub{color:var(--mut);font-size:13px}
+.bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:8px 0 2px}
+.bar i{display:block;height:100%;background:var(--ok);width:0;transition:width .2s}
+.srch{display:flex;gap:8px;margin-top:8px}
+.srch input{flex:1;min-width:0;font-size:17px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--tx)}
+button{font:inherit;border:0;border-radius:12px;padding:10px 14px;background:var(--pri);color:#fff;font-weight:600}
+button.sec{background:var(--card);color:var(--pri);border:1px solid var(--line)}
+button.bad{background:var(--bad)}
+button:disabled{opacity:.45}
+.chips{display:flex;gap:6px;margin-top:8px;overflow-x:auto}
+.chips button{padding:6px 12px;font-weight:500;background:var(--card);color:var(--tx);border:1px solid var(--line);white-space:nowrap}
+.chips button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+#sug{position:absolute;left:12px;right:12px;z-index:9;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.2);max-height:46vh;overflow:auto;display:none}
+#sug div{padding:10px 12px;border-bottom:1px solid var(--line)}
+#sug div:last-child{border:0}
+#msg{display:none;position:fixed;left:12px;right:12px;top:max(10px,env(safe-area-inset-top));z-index:30;padding:10px 12px;border-radius:12px;font-weight:600}
+#msg.err{display:block;background:var(--warnbg);color:var(--bad);border:1px solid var(--bad)}
+#msg.ok{display:block;background:var(--okbg);color:var(--ok);border:1px solid var(--ok)}
+main{padding:8px 12px 120px}
+.row{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin:8px 0;display:flex;gap:10px;align-items:center}
+.row.done{background:var(--okbg);border-color:var(--ok)}
+.row.over{background:var(--warnbg);border-color:var(--warn)}
+.row.flash{outline:3px solid var(--pri)}
+.info{flex:1;min-width:0}
+.nm{font-weight:600;line-height:1.25;word-break:break-word}
+.meta{color:var(--mut);font-size:12.5px;margin-top:2px;word-break:break-all}
+.qty{display:flex;align-items:center;gap:6px}
+.qty button{width:40px;height:40px;padding:0;font-size:22px;line-height:1}
+.qty input{width:58px;text-align:center;font-size:20px;font-weight:700;padding:6px 2px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--tx)}
+.plan{font-size:12px;color:var(--mut);text-align:center;margin-top:2px;white-space:nowrap}
+footer{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:8px 12px;padding-bottom:max(8px,env(safe-area-inset-bottom));display:flex;gap:8px;z-index:5}
+footer button{flex:1;padding:12px 6px;font-size:15px}
+footer button.big{flex:2}
+#cam{position:fixed;inset:0;background:#000;z-index:20;display:none;flex-direction:column}
+#cam video{flex:1;width:100%;object-fit:cover}
+#cam .t{position:absolute;top:0;left:0;right:0;padding:12px;color:#fff;background:rgba(0,0,0,.5);font-weight:600}
+#cam button{margin:12px}
+#dlgbg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;display:none;align-items:flex-end;justify-content:center}
+#dlg{background:var(--card);width:100%;max-width:560px;max-height:88vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
+#dlg h3{margin:0 0 10px;font-size:18px}
+#dlg label{display:block;font-size:12.5px;color:var(--mut);margin:10px 0 3px}
+#dlg input{width:100%;font-size:17px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--tx)}
+#dlg .btns{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+#dlg .btns button{flex:1;min-width:30%}
+#dlg .li{padding:10px 0;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+#dlg .li .t{flex:1;min-width:0}
+#dlg .li button{padding:7px 10px;font-size:14px}
+#doc{display:none}
+@media print{
+  @page{size:A4;margin:12mm 10mm}
+  header,main,footer,#cam,#sug,#msg,#dlgbg{display:none!important}
+  #doc{display:block;color:#000;background:#fff}
+  body{background:#fff}
+  #doc h2{font-size:22px;margin:0 0 4px}
+  #doc .m{font-size:12px;color:#333;margin-bottom:10px}
+  #doc table{width:100%;border-collapse:collapse}
+  #doc th,#doc td{border:1px solid #444;padding:4px 6px;font-size:12px;vertical-align:middle}
+  #doc th{background:#eee}
+  #doc td.c{text-align:center;font-weight:700;font-size:15px}
+  #doc tr{page-break-inside:avoid}
+  #doc .neg{color:#b00}
+  #doc svg{display:block;height:34px;width:140px}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="ttl"></h1>
+  <div class="sub" id="stat"></div>
+  <div class="bar"><i id="pb"></i></div>
+  <div class="srch">
+    <input id="q" type="text" inputmode="search" enterkeyhint="done" autocomplete="off" autocapitalize="off" placeholder="Штрих-код, артикул или название">
+    <button id="camBtn" class="sec">Камера</button>
+  </div>
+  <div class="chips" id="chips">
+    <button data-f="all" class="on">Все</button><button data-f="todo">Не собрано</button><button data-f="done">Готово</button><button data-f="over">Лишнее</button>
+  </div>
+</header>
+<div id="sug"></div>
+<div id="msg"></div>
+<main id="list"><p class="sub" style="text-align:center;margin-top:30px">Загружаю список…</p></main>
+<footer>
+  <button class="sec" id="boxBtn">Коробки</button>
+  <button class="sec" id="addBtn">+ Товар</button>
+  <button id="printBtn" class="big">Печать, след. коробка</button>
+</footer>
+<div id="cam"><div class="t" id="camT">Наведите на штрих-код</div><video id="vid" playsinline muted></video><button id="camClose" class="bad">Закрыть</button></div>
+<div id="dlgbg"><div id="dlg"></div></div>
+<div id="doc"></div>
+
+<script type="application/json" id="lager-batch">__DATA__</script>
+<script>
+(function(){
+'use strict';
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function fmt(n){ n = Math.round(n*1000)/1000; return String(n).replace('.', ','); }
+function nb(s){ return String(s).replace(/\D/g,'').replace(/^0+/,''); }
+
+var DATA = null;
+try{ DATA = JSON.parse($('lager-batch').textContent); }catch(e){}
+var P = new URLSearchParams(location.search);
+var CODE = (DATA && DATA.code) || P.get('c') || '';
+var KEY = 'lager_batch2_' + CODE;
+var state = null, filter = 'all', title = '';
+
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+function load(){ try{ var s = JSON.parse(localStorage.getItem(KEY)||'null'); if(s && s.rows) return s; }catch(e){} return null; }
+
+// ——— старт: данные внутри файла, либо из памяти браузера, либо с сервера по ссылке ———
+function init(d){
+  title = d.title || 'Сборка';
+  document.title = title;
+  state = load();
+  if(!state){
+    var n = 0;
+    state = {rows:(d.rows||[]).map(function(r){
+      return {id:++n, n:String(r.n||''), q:parseFloat(String(r.q||'0').replace(',', '.'))||0, b:String(r.b||'').trim(), a:String(r.a||'').trim()};
+    }), nid:n, box:1, fact:{}, boxes:[], title:title};
+    save();
+  } else if(state.title) title = state.title;
+  render();
+}
+if(DATA && DATA.rows){ init(DATA); }
+else {
+  var cached = CODE ? load() : null;
+  var api = P.get('s') || '';
+  if(cached){ init({title:cached.title}); }
+  else if(!CODE || !/^https:\/\/script\.google(usercontent)?\.com\//.test(api)){
+    $('list').innerHTML = '<p class="sub" style="text-align:center;margin-top:30px">Ссылка неполная. Откройте её целиком или отсканируйте QR-код ещё раз.</p>';
+  } else {
+    fetch(api + (api.indexOf('?')<0?'?':'&') + 'action=batch&code=' + encodeURIComponent(CODE), {redirect:'follow'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){ if(!j.ok) throw new Error(j.error||'нет данных'); init(j.batch); })
+      .catch(function(e){ $('list').innerHTML = '<p class="sub" style="text-align:center;margin:30px 12px">Не удалось загрузить список ('+esc(e.message||e)+'). Проверьте интернет и откройте ссылку ещё раз.</p>'; });
+  }
+}
+
+// ——— звук и сообщения ———
+var actx = null;
+function beep(ok){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.value = ok ? 1000 : 260; o.type = ok ? 'sine' : 'square'; g.gain.value = .15;
+    o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + (ok ? .09 : .35));
+  }catch(e){}
+  try{ if(navigator.vibrate) navigator.vibrate(ok ? 40 : [80,60,80]); }catch(e){}
+}
+var msgT = 0;
+function say(text, ok){
+  var m = $('msg'); m.textContent = text; m.className = ok ? 'ok' : 'err';
+  clearTimeout(msgT); msgT = setTimeout(function(){ m.className = ''; m.style.display=''; }, 2200);
+}
+
+// ——— данные ———
+function rowById(id){ for(var i=0;i<state.rows.length;i++) if(state.rows[i].id===id) return state.rows[i]; return null; }
+function inBox(id){ return state.fact[id] || 0; }
+function inClosed(id){ var s = 0; state.boxes.forEach(function(b){ b.items.forEach(function(it){ if(it.id===id) s += it.q; }); }); return s; }
+function total(id){ return inClosed(id) + inBox(id); }
+
+function add(id, d, quiet){
+  var r = rowById(id); if(!r) return;
+  state.fact[id] = Math.max(0, inBox(id) + d);
+  if(!state.fact[id]) delete state.fact[id];
+  save(); render();
+  if(!quiet){ beep(true); say(r.n + ' · в коробке ' + fmt(inBox(id)) + ' · всего ' + fmt(total(id)) + ' из ' + fmt(r.q), true); }
+  var el = document.querySelector('[data-i="'+id+'"]');
+  if(el){ el.scrollIntoView({block:'center', behavior:'smooth'}); el.classList.add('flash'); setTimeout(function(){ el.classList.remove('flash'); }, 700); }
+}
+function byCode(code){
+  var c = code.trim(); if(!c) return null;
+  var n = nb(c), k, r;
+  if(n.length >= 6){ for(k=0;k<state.rows.length;k++){ r = state.rows[k]; if(r.b && nb(r.b) === n) return r; } }
+  var lc = c.toLowerCase();
+  for(k=0;k<state.rows.length;k++){ r = state.rows[k]; if(r.a && r.a.toLowerCase() === lc) return r; }
+  return null;
+}
+function byText(text){
+  var t = text.toLowerCase().split(/\s+/).filter(Boolean);
+  if(!t.length) return [];
+  return state.rows.filter(function(r){
+    var h = (r.n + ' ' + r.a + ' ' + r.b).toLowerCase();
+    return t.every(function(w){ return h.indexOf(w) >= 0; });
+  });
+}
+function isCode(s){ return /^\d{6,}$/.test(s.trim()); }
+function submit(code){
+  var q = code.trim(); if(!q) return;
+  var r = byCode(q);
+  if(r){ add(r.id, 1); hideSug(); return; }
+  var m = isCode(q) ? [] : byText(q);
+  if(m.length === 1){ add(m[0].id, 1); hideSug(); return; }
+  if(m.length > 1){ showSug(m); return; }
+  beep(false); hideSug(); unknown(q);
+}
+function showSug(list){
+  var s = $('sug'), h = '';
+  list.slice(0, 12).forEach(function(r){
+    h += '<div data-s="'+r.id+'"><b>'+esc(r.n)+'</b><div class="meta">'+(r.a?'арт. '+esc(r.a)+' · ':'')+(r.b?'ШК '+esc(r.b):'')+'</div></div>';
+  });
+  s.innerHTML = h; s.style.display = 'block';
+  s.style.top = ($('q').getBoundingClientRect().bottom + window.scrollY + 6) + 'px';
+}
+function hideSug(){ $('sug').style.display = 'none'; $('q').value = ''; }
+
+// ——— экран ———
+function render(){
+  if(!state) return;
+  var plan = 0, got = 0, boxQ = 0;
+  state.rows.forEach(function(r){ plan += r.q; got += Math.min(total(r.id), r.q); boxQ += inBox(r.id); });
+  var all = 0; state.rows.forEach(function(r){ all += total(r.id); });
+  $('ttl').textContent = title;
+  $('stat').textContent = 'Коробка №' + state.box + ' · в ней ' + fmt(boxQ) + ' · собрано ' + fmt(all) + ' из ' + fmt(plan);
+  $('pb').style.width = (plan ? Math.min(100, got / plan * 100) : 0) + '%';
+  var h = '';
+  state.rows.forEach(function(r){
+    var t = total(r.id), st = (t > r.q) ? 'over' : (t >= r.q && r.q > 0 ? 'done' : 'todo');
+    if(filter !== 'all' && filter !== st) return;
+    var left = r.q - t;
+    h += '<div class="row '+(st==='todo'?'':st)+'" data-i="'+r.id+'"><div class="info" data-edit="1"><div class="nm">'+esc(r.n)+'</div><div class="meta">'
+      + (r.a ? 'арт. '+esc(r.a)+' · ' : '') + (r.b ? 'ШК '+esc(r.b) : 'нет штрих-кода') + '</div></div>'
+      + '<div><div class="qty"><button data-d="-1">−</button><input type="text" inputmode="decimal" value="'+fmt(inBox(r.id))+'" data-e="1"><button data-d="1">+</button></div>'
+      + '<div class="plan">план '+fmt(r.q)+' · '+(left>0?'осталось '+fmt(left):(left<0?'лишних '+fmt(-left):'готово'))+'</div></div></div>';
+  });
+  $('list').innerHTML = h || '<p class="sub" style="text-align:center;margin-top:30px">Нет строк</p>';
+}
+
+// ——— окна ———
+function dlgOpen(html){ $('dlg').innerHTML = html; $('dlgbg').style.display = 'flex'; }
+function dlgClose(){ $('dlgbg').style.display = 'none'; $('dlg').innerHTML = ''; }
+$('dlgbg').addEventListener('click', function(e){ if(e.target === this) dlgClose(); });
+
+// правка строки: название, артикул, штрих-код, план; удаление
+function editRow(id, prefillBarcode){
+  var r = id ? rowById(id) : {id:0, n:'', a:'', b:prefillBarcode||'', q:0};
+  dlgOpen('<h3>'+(id?'Строка':'Новый товар')+'</h3>'
+    + '<label>Название</label><input id="eN" value="'+esc(r.n)+'">'
+    + '<label>Артикул</label><input id="eA" value="'+esc(r.a)+'">'
+    + '<label>Штрих-код</label><input id="eB" inputmode="numeric" value="'+esc(r.b)+'">'
+    + '<label>План (сколько нужно)</label><input id="eQ" inputmode="decimal" value="'+fmt(r.q)+'">'
+    + '<div class="btns"><button class="sec" id="eX">Отмена</button>'
+    + (id?'<button class="bad" id="eD">Удалить</button>':'') + '<button id="eS">Сохранить</button></div>');
+  $('eX').onclick = dlgClose;
+  $('eS').onclick = function(){
+    var n = $('eN').value.trim();
+    if(!n){ say('Введите название', false); return; }
+    var q = parseFloat($('eQ').value.replace(',', '.')); if(isNaN(q) || q < 0) q = 0;
+    var b = $('eB').value.replace(/\s+/g,'');
+    var o = r;
+    if(!id){ o = {id:++state.nid}; state.rows.push(o); }
+    o.n = n; o.a = $('eA').value.trim(); o.b = b; o.q = q;
+    save(); render(); dlgClose();
+    if(!id) say('Добавлено: ' + n, true);
+  };
+  if(id) $('eD').onclick = function(){
+    if(!confirm('Удалить строку «'+r.n+'»? Её количество в коробках тоже пропадёт.')) return;
+    state.rows = state.rows.filter(function(x){ return x.id !== id; });
+    delete state.fact[id];
+    state.boxes.forEach(function(b){ b.items = b.items.filter(function(it){ return it.id !== id; }); });
+    save(); render(); dlgClose();
+  };
+}
+// штрих-кода нет в списке: привязать к существующему товару или создать новый
+function unknown(code){
+  function list(txt){
+    var m = txt ? byText(txt) : state.rows.slice(0, 30);
+    return m.slice(0, 30).map(function(r){
+      return '<div class="li"><div class="t"><b>'+esc(r.n)+'</b><div class="meta">'+(r.b?'ШК '+esc(r.b):'нет штрих-кода')+'</div></div><button data-l="'+r.id+'">Привязать</button></div>';
+    }).join('');
+  }
+  dlgOpen('<h3>Нет в списке</h3><div class="sub">Код: <b>'+esc(code)+'</b></div>'
+    + '<div class="btns"><button id="uNew">Новый товар</button></div>'
+    + '<label>Или привязать код к товару из списка (найти):</label><input id="uQ" placeholder="название или артикул">'
+    + '<div id="uL">'+list('')+'</div><div class="btns"><button class="sec" id="uX">Закрыть</button></div>');
+  $('uX').onclick = dlgClose;
+  $('uNew').onclick = function(){ dlgClose(); editRow(0, code); };
+  $('uQ').oninput = function(){ $('uL').innerHTML = list(this.value); };
+  $('uL').onclick = function(e){
+    var b = e.target.closest('button[data-l]'); if(!b) return;
+    var r = rowById(parseInt(b.getAttribute('data-l'), 10));
+    if(r.b && !confirm('У «'+r.n+'» уже есть штрих-код ' + r.b + '. Заменить на ' + code + '?')) return;
+    r.b = code; save(); dlgClose(); add(r.id, 1);
+  };
+}
+
+// ——— печать ———
+function ean13(code){
+  var L=['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+  var G=['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+  var PAR=['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
+  var d = code.split('').map(Number), p = PAR[d[0]], bits = '101', i;
+  for(i=1;i<=6;i++) bits += (p[i-1]==='L' ? L : G)[d[i]];
+  bits += '01010';
+  for(i=7;i<=12;i++) bits += L[d[i]].split('').map(function(c){ return c==='1'?'0':'1'; }).join('');
+  bits += '101';
+  var x = 0, rects = '';
+  for(i=0;i<bits.length;i++){ if(bits[i]==='1'){ var s=i; while(i+1<bits.length && bits[i+1]==='1') i++; rects += '<rect x="'+(s+5)+'" y="0" width="'+(i-s+1)+'" height="40"/>'; } }
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 105 40" preserveAspectRatio="none">'+rects+'</svg>';
+}
+function codeCell(b){
+  b = String(b||'').replace(/\s+/g,'');
+  return /^\d{13}$/.test(b) ? ean13(b) + '<div style="font-size:11px">'+esc(b)+'</div>' : esc(b);
+}
+function boxDoc(bx){
+  var h = '<h2>' + esc(title) + ' — коробка №' + bx.n + '</h2><div class="m">' + new Date(bx.at||Date.now()).toLocaleString('ru-RU') + '</div>';
+  h += '<table><tr><th>№</th><th>Артикул</th><th>Название товара</th><th>Штрих-код</th><th>Кол-во</th></tr>';
+  var sum = 0, k = 0;
+  bx.items.forEach(function(it){
+    var r = rowById(it.id); if(!r) return;
+    sum += it.q; k++;
+    h += '<tr><td>'+k+'</td><td>'+esc(r.a)+'</td><td>'+esc(r.n)+'</td><td>'+codeCell(r.b)+'</td><td class="c">'+fmt(it.q)+'</td></tr>';
+  });
+  h += '<tr><td colspan="4" style="text-align:right"><b>Итого</b></td><td class="c">'+fmt(sum)+'</td></tr></table>';
+  return h;
+}
+function sumDoc(){
+  var h = '<h2>' + esc(title) + ' — итог</h2><div class="m">Коробок: ' + state.boxes.length + ' · ' + new Date().toLocaleString('ru-RU') + '</div>';
+  h += '<table><tr><th>№</th><th>Артикул</th><th>Название товара</th><th>Штрих-код</th><th>План</th><th>Факт</th><th>Разн.</th></tr>';
+  var tp = 0, tf = 0;
+  state.rows.forEach(function(r, k){
+    var f = inClosed(r.id), d = f - r.q; tp += r.q; tf += f;
+    h += '<tr><td>'+(k+1)+'</td><td>'+esc(r.a)+'</td><td>'+esc(r.n)+'</td><td>'+esc(r.b)+'</td><td class="c">'+fmt(r.q)+'</td><td class="c">'+fmt(f)+'</td><td class="c'+(d<0?' neg':'')+'">'+(d===0?'':(d>0?'+':'')+fmt(d))+'</td></tr>';
+  });
+  h += '<tr><td colspan="4" style="text-align:right"><b>Итого</b></td><td class="c">'+fmt(tp)+'</td><td class="c">'+fmt(tf)+'</td><td></td></tr></table>';
+  return h;
+}
+function printHtml(h){ $('doc').innerHTML = h; setTimeout(function(){ window.print(); }, 60); }
+function currentBox(){
+  var items = [];
+  state.rows.forEach(function(r){ if(inBox(r.id) > 0) items.push({id:r.id, q:inBox(r.id)}); });
+  return items;
+}
+function closeBoxAndPrint(){
+  var items = currentBox();
+  if(!items.length){ say('В коробке пока пусто', false); return; }
+  if(!confirm('Напечатать коробку №' + state.box + ' и перейти к следующей?')) return;
+  var bx = {n:state.box, at:Date.now(), items:items};
+  state.boxes.push(bx); state.box += 1; state.fact = {};
+  save(); render();
+  printHtml(boxDoc(bx));
+  say('Коробка №' + bx.n + ' закрыта. Теперь коробка №' + state.box, true);
+}
+function boxesDlg(){
+  var h = '<h3>Коробки</h3>';
+  if(!state.boxes.length) h += '<div class="sub">Закрытых коробок пока нет.</div>';
+  state.boxes.slice().reverse().forEach(function(b){
+    var s = 0; b.items.forEach(function(it){ s += it.q; });
+    h += '<div class="li"><div class="t"><b>Коробка №'+b.n+'</b><div class="meta">позиций: '+b.items.length+' · штук: '+fmt(s)+'</div></div><button data-p="'+b.n+'">Печать</button></div>';
+  });
+  h += '<div class="btns"><button class="sec" id="bS">Печать итога</button><button class="sec" id="bC">Таблица (CSV)</button></div>'
+     + '<div class="btns"><button class="bad" id="bR">Начать заново</button><button id="bX">Закрыть</button></div>';
+  dlgOpen(h);
+  $('bX').onclick = dlgClose;
+  $('bS').onclick = function(){ dlgClose(); printHtml(sumDoc()); };
+  $('bC').onclick = csv;
+  $('bR').onclick = function(){
+    if(!confirm('Обнулить все коробки и счёт? Список товаров останется.')) return;
+    state.boxes = []; state.fact = {}; state.box = 1; save(); render(); dlgClose();
+  };
+  $('dlg').onclick = function(e){
+    var b = e.target.closest('button[data-p]'); if(!b) return;
+    var n = parseInt(b.getAttribute('data-p'), 10);
+    state.boxes.forEach(function(x){ if(x.n === n){ dlgClose(); printHtml(boxDoc(x)); } });
+  };
+}
+function csv(){
+  function q(v){ return '"' + String(v).replace(/"/g,'""') + '"'; }
+  var out = '\uFEFF№;Артикул;Название;Штрих-код;План;Факт\n';
+  state.rows.forEach(function(r, k){ out += (k+1)+';'+q(r.a)+';'+q(r.n)+';'+q(r.b)+';'+fmt(r.q)+';'+fmt(total(r.id))+'\n'; });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([out], {type:'text/csv;charset=utf-8'})); a.download = 'sborka_' + CODE + '.csv';
+  document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
+// ——— камера: встроенный сканер браузера, а на iPhone — библиотека ZXing ———
+var stream = null, timer = 0, det = null, zx = null, lastCode = '', lastAt = 0;
+function onCode(code){
+  var now = Date.now();
+  if(code === lastCode && now - lastAt < 1800) return;
+  lastCode = code; lastAt = now;
+  var r = byCode(code);
+  if(r){ $('camT').textContent = r.n; add(r.id, 1); }
+  else { beep(false); camClose(); unknown(code); }
+}
+function camShow(){ $('cam').style.display = 'flex'; }
+function camOpen(){
+  if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){ say('Камера недоступна — используйте сканер или поиск', false); return; }
+  if('BarcodeDetector' in window){
+    var v = $('vid');
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false}).then(function(s){
+      stream = s; v.srcObject = s; v.play(); camShow();
+      det = det || new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf']});
+      timer = setInterval(function(){
+        if(v.readyState < 2) return;
+        det.detect(v).then(function(c){ if(c.length) onCode(c[0].rawValue); }).catch(function(){});
+      }, 220);
+    }).catch(function(){ say('Нет доступа к камере — разрешите её в настройках браузера', false); });
+    return;
+  }
+  function start(){
+    try{
+      zx = new ZXing.BrowserMultiFormatReader(); camShow();
+      zx.decodeFromConstraints({video:{facingMode:{ideal:'environment'}}, audio:false}, 'vid', function(res){ if(res) onCode(res.getText()); })
+        .catch(function(){ camClose(); say('Нет доступа к камере — разрешите её в настройках браузера', false); });
+    }catch(e){ say('Сканер камеры не запустился — используйте поиск', false); }
+  }
+  if(window.ZXing){ start(); return; }
+  var s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+  s.onload = start;
+  s.onerror = function(){ say('Сканер камеры не загрузился (нужен интернет)', false); };
+  document.head.appendChild(s);
+}
+function camClose(){
+  clearInterval(timer); timer = 0;
+  if(zx){ try{ zx.reset(); }catch(e){} zx = null; }
+  if(stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+  $('cam').style.display = 'none';
+}
+
+// ——— события ———
+$('q').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); submit(this.value); } });
+$('q').addEventListener('input', function(){
+  var v = this.value.trim();
+  if(!state || v.length < 2 || isCode(v)){ $('sug').style.display = 'none'; return; }
+  var m = byText(v);
+  if(m.length) showSug(m); else $('sug').style.display = 'none';
+});
+$('sug').addEventListener('click', function(e){
+  var d = e.target.closest('[data-s]'); if(!d) return;
+  add(parseInt(d.getAttribute('data-s'), 10), 1); hideSug();
+});
+$('list').addEventListener('click', function(e){
+  if(!state) return;
+  var b = e.target.closest('button[data-d]');
+  var row = e.target.closest('.row'); if(!row) return;
+  var id = parseInt(row.getAttribute('data-i'), 10);
+  if(b){ add(id, parseInt(b.getAttribute('data-d'), 10), true); return; }
+  if(e.target.closest('[data-edit]')) editRow(id);
+});
+$('list').addEventListener('change', function(e){
+  if(!e.target.matches('input[data-e]')) return;
+  var id = parseInt(e.target.closest('.row').getAttribute('data-i'), 10);
+  var v = parseFloat(String(e.target.value).replace(',', '.')); if(isNaN(v) || v < 0) v = 0;
+  if(v) state.fact[id] = v; else delete state.fact[id];
+  save(); render();
+});
+$('chips').addEventListener('click', function(e){
+  var b = e.target.closest('button[data-f]'); if(!b) return;
+  filter = b.getAttribute('data-f');
+  Array.prototype.forEach.call($('chips').children, function(c){ c.className = c === b ? 'on' : ''; });
+  render();
+});
+$('printBtn').addEventListener('click', function(){ if(state) closeBoxAndPrint(); });
+$('boxBtn').addEventListener('click', function(){ if(state) boxesDlg(); });
+$('addBtn').addEventListener('click', function(){ if(state) editRow(0); });
+$('camBtn').addEventListener('click', function(){ if(state) camOpen(); });
+$('camClose').addEventListener('click', camClose);
+})();
+</script>
+</body>
+</html>

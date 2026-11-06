@@ -134,6 +134,9 @@ internal fun batchQty(s: String): String {
 object BatchShare {
     private const val TAG = "#lager="
 
+    /** Адрес страницы «Сборка» на GitHub Pages (файл docs/index.html в репозитории). Там камера в браузере работает. */
+    private const val WEB = "https://das-web-hh.github.io/Lager/"
+
     fun json(b: Batch): String {
         val rs = JSONArray()
         b.rows.toList().forEach { r ->
@@ -165,7 +168,8 @@ object BatchShare {
         val code = b.code
         val base = DriveCfg.url(app)
         // «#lager=код» в конце — по нему приложение Lager узнаёт партию при сканировании QR
-        val link = base + (if (base.contains('?')) "&" else "?") + "action=app&code=" + code + TAG + code
+        // Страница лежит на GitHub Pages (камера работает), данные партии она берёт у скрипта Диска по коду (action=batch)
+        val link = WEB + "?c=" + code + "&s=" + java.net.URLEncoder.encode(base, "UTF-8") + TAG + code
         val data = json(b).toByteArray(Charsets.UTF_8)
         val page = html(app, b, link).toByteArray(Charsets.UTF_8)
         for (n in listOf("BATCH_$code.json", "BATCHPAGE_$code.html")) try { DriveApi.delete(app, n) } catch (e: Exception) { }
