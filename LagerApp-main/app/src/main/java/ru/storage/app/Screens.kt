@@ -98,6 +98,8 @@ fun OtherScreen(prefs: Prefs) {
             Spacer(Modifier.height(16.dp))
             TileGrid(
                 listOf(
+                    TileSpec("Партии", Icons.Default.Add) { section = "Партии" },
+                    TileSpec("Сборка", Icons.Default.ShoppingCart) { section = "Сборка" },
                     TileSpec("Шаблоны накладных", Icons.Default.Edit, InvoiceProfiles.newCount) { section = "Шаблоны накладных" },
                     TileSpec("Каталог товаров", Icons.Default.Menu) { section = "Каталог товаров" },
                     TileSpec("История", Icons.Default.DateRange) { section = "История" },
@@ -108,9 +110,7 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Bluetooth", Icons.Default.Settings) { section = "Bluetooth" },
                     TileSpec("Рабочее время", Icons.Default.LocationOn) { section = "Рабочее время" },
                     TileSpec("Фото по QR", Icons.Default.Info) { section = "Фото по QR" },
-                    TileSpec("Итог приёма", Icons.Default.Check) { section = "Итог приёма" },
-                    TileSpec("Партии", Icons.Default.Add) { section = "Партии" },
-                    TileSpec("Сборка", Icons.Default.ShoppingCart) { section = "Сборка" }
+                    TileSpec("Итог приёма", Icons.Default.Check) { section = "Итог приёма" }
                 )
             )
         }
