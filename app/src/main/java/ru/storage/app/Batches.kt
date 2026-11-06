@@ -135,7 +135,7 @@ object BatchShare {
     private const val TAG = "#lager="
 
     /** Адрес страницы «Сборка» на GitHub Pages (файл docs/index.html в репозитории). Там камера в браузере работает. */
-    private const val WEB = "https://das-web-hh.github.io/Lager/"
+    private const val WEB = "https://das-web-hh.github.io/LagerApp/"
 
     fun json(b: Batch): String {
         val rs = JSONArray()
