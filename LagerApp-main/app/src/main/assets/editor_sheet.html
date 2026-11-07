@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+:root{--bg:#eef1f7;--bar:#ffffff;--bd:#d5dbe8;--fg:#0f172a;--ac:#016afd;--acbg:#d9e5ff;--grid:#d9dde6;--hd:#f1f3f8;--cell:#fff;--cfg:#111}
+:root.dark{--bg:#14171d;--bar:#1e222b;--bd:#343a47;--fg:#e8ecf4;--ac:#7fb0ff;--acbg:#27406e;--grid:#3a4150;--hd:#262b36;--cell:#1b1f27;--cfg:#e8ecf4}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:Roboto,Arial,sans-serif;overflow:hidden}
+#bar{position:fixed;top:0;left:0;right:0;z-index:5;background:var(--bar);border-bottom:1px solid var(--bd)}
+#tools{display:flex;overflow-x:auto;gap:2px;padding:4px 6px;-webkit-overflow-scrolling:touch}
+#tools::-webkit-scrollbar{display:none}
+.g{display:flex;gap:2px;align-items:center;padding-right:6px;margin-right:4px;border-right:1px solid var(--bd);flex:none}
+.g:last-child{border-right:none}
+button{flex:none;min-width:38px;height:38px;border:none;border-radius:8px;background:transparent;color:var(--fg);font-size:15px;padding:0 8px;font-family:inherit;white-space:nowrap}
+button.on{background:var(--acbg);color:var(--ac)}
+button:active{background:var(--acbg)}
+.sw{display:inline-block;width:20px;height:20px;border-radius:50%;border:1px solid var(--bd);vertical-align:middle}
+#fxrow{display:flex;gap:6px;align-items:center;padding:4px 8px 6px}
+#nm{flex:none;min-width:46px;text-align:center;font-weight:600;font-size:14px;color:var(--ac)}
+#fx{flex:1;min-width:0;height:36px;border:1px solid var(--bd);border-radius:8px;padding:0 10px;font-size:16px;background:var(--cell);color:var(--cfg)}
+#ok{min-width:36px;background:var(--ac);color:#fff}
+#pal{position:fixed;z-index:9;left:8px;right:8px;top:98px;background:var(--bar);border:1px solid var(--bd);border-radius:12px;padding:10px;display:none;flex-wrap:wrap;gap:10px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+#pal b{width:34px;height:34px;border-radius:50%;border:1px solid var(--bd);display:block}
+#sc{position:fixed;top:94px;left:0;right:0;bottom:0;overflow:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:15px}
+th{position:sticky;top:0;z-index:2;background:var(--hd);color:var(--fg);font-weight:500;border-right:1px solid var(--grid);border-bottom:1px solid var(--grid);height:30px;font-size:13px}
+th.rh{position:sticky;left:0;z-index:3;width:38px;min-width:38px}
+th.sel{background:var(--acbg);color:var(--ac)}
+td{height:34px;padding:0 6px;border-right:1px solid var(--grid);border-bottom:1px solid var(--grid);background:var(--cell);color:var(--cfg);overflow:hidden;white-space:nowrap;text-overflow:clip}
+td.rh{position:sticky;left:0;z-index:1;background:var(--hd);text-align:center;font-size:13px;padding:0}
+td.rh.sel{background:var(--acbg);color:var(--ac)}
+td.bd{border:1.5px solid #000 !important}
+td.rg{outline:1px solid var(--ac);outline-offset:-1px;background-image:linear-gradient(rgba(1,106,253,.12),rgba(1,106,253,.12))}
+td.cur{outline:2.5px solid var(--ac);outline-offset:-2px;z-index:1}
+td.er{color:#d32f2f}
+</style></head><body>
+<div id="bar">
+ <div id="tools">
+  <div class="g"><button id="undo">↶</button><button id="redo">↷</button></div>
+  <div class="g"><button id="b_b"><b>Ж</b></button><button id="b_i"><i>К</i></button></div>
+  <div class="g"><button id="a_l">⯇≡</button><button id="a_c">≡</button><button id="a_r">≡⯈</button></div>
+  <div class="g"><button id="fc"><span class="sw" style="background:#d32f2f"></span></button><button id="bg"><span class="sw" style="background:#ffeb3b"></span></button><button id="bd">▦</button></div>
+  <div class="g"><button id="sum">Σ</button><button id="rng">⬚ Диапазон</button></div>
+  <div class="g"><button id="ir">+строка</button><button id="ic">+столбец</button><button id="dr">−строка</button><button id="dc">−столбец</button></div>
+  <div class="g"><button id="wm">◂ узк.</button><button id="wp">шир. ▸</button></div>
+  <div class="g"><button id="clr">Очистить</button></div>
+ </div>
+ <div id="fxrow"><div id="nm">A1</div><input id="fx" type="text" autocomplete="off" autocapitalize="off" placeholder="Значение или =формула"><button id="ok">✓</button></div>
+</div>
+<div id="pal"></div>
+<div id="sc"><table id="tb"></table></div>
+<script>
+var D=null,hist=[],redo=[],cache={},ar=0,ac=0,fr=0,fcc=0,extend=false,timer=null,editing=false,palMode='';
+var COLORS=['#000000','#444444','#888888','#d32f2f','#f57c00','#fbc02d','#388e3c','#0097a7','#1976d2','#7b1fa2','#c2185b','#ffffff'];
+var BACKS=['','#fff59d','#ffe0b2','#ffcdd2','#c8e6c9','#b3e5fc','#d1c4e9','#f8bbd0','#e0e0e0','#bdbdbd'];
+function fresh(){var w=[];for(var i=0;i<12;i++)w.push(96);return{rows:60,cols:12,w:w,cells:{}}}
+function K(r,c){return r+','+c}
+function colName(c){var s='';c++;while(c>0){var m=(c-1)%26;s=String.fromCharCode(65+m)+s;c=Math.floor((c-1)/26)}return s}
+function colIdx(s){var n=0;for(var i=0;i<s.length;i++)n=n*26+(s.charCodeAt(i)-64);return n-1}
+function cell(r,c){return D.cells[K(r,c)]}
+function raw(r,c){var x=D.cells[K(r,c)];return x&&x.v!=null?String(x.v):''}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+/* ---------- формулы ---------- */
+function E(code){var e=new Error(code);e.cellErr=code;return e}
+function numOf(raw){var m=/^\s*(-?\d+(?:[.,]\d+)?)\s*$/.exec(raw);return m?parseFloat(m[1].replace(',','.')):null}
+function cellVal(r,c,stack){
+  if(r<0||c<0||r>=D.rows||c>=D.cols)throw E('#ССЫЛ!');
+  var k=K(r,c);
+  if(k in cache){var v=cache[k];if(v&&v.cellErr)throw E(v.cellErr);return v}
+  if(stack.indexOf(k)>=0)throw E('#ЦИКЛ!');
+  var s=raw(r,c),v;
+  if(s.charAt(0)==='='){
+    stack.push(k);
+    try{v=evalFormula(s.slice(1),stack)}
+    catch(e){stack.pop();if(e.cellErr){cache[k]={cellErr:e.cellErr};throw e}
+      cache[k]={cellErr:'#ОШИБКА!'};throw E('#ОШИБКА!')}
+    stack.pop();
+    if(Array.isArray(v))v=v.length?v[0]:0;
+  }else{var n=numOf(s);v=(n===null)?s:n}
+  cache[k]=v;return v;
+}
+function tokenize(src){
+  var t=[],i=0,m;
+  while(i<src.length){
+    var ch=src.charAt(i);
+    if(/\s/.test(ch)){i++;continue}
+    if(ch==='"'){var j=src.indexOf('"',i+1);if(j<0)throw E('#ОШИБКА!');t.push({t:'s',v:src.slice(i+1,j)});i=j+1;continue}
+    m=/^\d+(?:\.\d+)?/.exec(src.slice(i));if(m){t.push({t:'n',v:parseFloat(m[0])});i+=m[0].length;continue}
+    m=/^\$?[A-Za-z]{1,2}\$?\d+(?![A-Za-zА-Яа-я0-9_(])/.exec(src.slice(i));
+    if(m){var mm=/^\$?([A-Za-z]{1,2})\$?(\d+)$/.exec(m[0]);t.push({t:'r',c:colIdx(mm[1].toUpperCase()),r:parseInt(mm[2],10)-1});i+=m[0].length;continue}
+    m=/^[A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё_0-9.]*/.exec(src.slice(i));if(m){t.push({t:'f',v:m[0].toUpperCase()});i+=m[0].length;continue}
+    m=/^(<>|<=|>=|[-+*\/^&=<>(),;:%])/.exec(src.slice(i));if(m){t.push({t:'o',v:m[0]});i+=m[0].length;continue}
+    throw E('#ОШИБКА!');
+  }
+  return t;
+}
+function toNum(v){
+  if(typeof v==='number')return v;
+  if(v===''||v==null)return 0;
+  var n=numOf(String(v));if(n===null)throw E('#ЗНАЧ!');return n;
+}
+function flat(args){var o=[];args.forEach(function(a){if(Array.isArray(a))a.forEach(function(x){o.push(x)});else o.push(a)});return o}
+function nums(args,strict){
+  var o=[];
+  args.forEach(function(a){
+    if(Array.isArray(a)){a.forEach(function(x){if(typeof x==='number')o.push(x)})}   // в диапазоне текст пропускается
+    else o.push(toNum(a));
+  });
+  return o;
+}
+var FN={
+  'SUM':function(a){return nums(a).reduce(function(x,y){return x+y},0)},
+  'AVERAGE':function(a){var n=nums(a);if(!n.length)throw E('#ДЕЛ/0!');return n.reduce(function(x,y){return x+y},0)/n.length},
+  'MIN':function(a){var n=nums(a);return n.length?Math.min.apply(null,n):0},
+  'MAX':function(a){var n=nums(a);return n.length?Math.max.apply(null,n):0},
+  'COUNT':function(a){var c=0;flat(a).forEach(function(x){if(typeof x==='number')c++});return c},
+  'PRODUCT':function(a){return nums(a).reduce(function(x,y){return x*y},1)},
+  'ABS':function(a){return Math.abs(toNum(a[0]))},
+  'SQRT':function(a){var x=toNum(a[0]);if(x<0)throw E('#ЧИСЛО!');return Math.sqrt(x)},
+  'ROUND':function(a){var d=a.length>1?toNum(a[1]):0,p=Math.pow(10,d);return Math.round((toNum(a[0])+Number.EPSILON)*p)/p},
+  'IF':function(a){return truthy(a[0])?(a.length>1?a[1]:true):(a.length>2?a[2]:false)}
+};
+var ALIAS={'СУММ':'SUM','СРЗНАЧ':'AVERAGE','МИН':'MIN','МАКС':'MAX','СЧЁТ':'COUNT','СЧЕТ':'COUNT','ПРОИЗВЕД':'PRODUCT','ОКРУГЛ':'ROUND','ЕСЛИ':'IF','ABS':'ABS','КОРЕНЬ':'SQRT'};
+function truthy(v){if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;return v!==''&&v!=null}
+function cmp(a,b){
+  var an=(typeof a==='number'),bn=(typeof b==='number');
+  if(!an&&a!==''&&numOf(String(a))!==null){a=numOf(String(a));an=true}
+  if(!bn&&b!==''&&numOf(String(b))!==null){b=numOf(String(b));bn=true}
+  if(an&&bn)return a<b?-1:a>b?1:0;
+  a=String(a).toLowerCase();b=String(b).toLowerCase();return a<b?-1:a>b?1:0;
+}
+function evalFormula(src,stack){
+  var t=tokenize(src),p=0;
+  function peek(){return t[p]}
+  function isOp(v){return t[p]&&t[p].t==='o'&&t[p].v===v}
+  function expect(v){if(!isOp(v))throw E('#ОШИБКА!');p++}
+  function scalar(v){if(Array.isArray(v)){if(v.length!==1)throw E('#ЗНАЧ!');return v[0]}return v}
+  function comparison(){
+    var l=concat();
+    while(t[p]&&t[p].t==='o'&&/^(=|<>|<=|>=|<|>)$/.test(t[p].v)){
+      var op=t[p++].v,r=concat(),c=cmp(scalar(l),scalar(r));
+      l=op==='='?c===0:op==='<>'?c!==0:op==='<'?c<0:op==='>'?c>0:op==='<='?c<=0:c>=0;
+    }
+    return l;
+  }
+  function concat(){var l=add();while(isOp('&')){p++;var r=add();l=String(scalar(l))+String(scalar(r))}return l}
+  function add(){
+    var l=mul();
+    while(isOp('+')||isOp('-')){var op=t[p++].v,r=mul();l=op==='+'?toNum(scalar(l))+toNum(scalar(r)):toNum(scalar(l))-toNum(scalar(r))}
+    return l;
+  }
+  function mul(){
+    var l=pow();
+    while(isOp('*')||isOp('/')){
+      var op=t[p++].v,r=pow();
+      if(op==='*')l=toNum(scalar(l))*toNum(scalar(r));
+      else{var d=toNum(scalar(r));if(d===0)throw E('#ДЕЛ/0!');l=toNum(scalar(l))/d}
+    }
+    return l;
+  }
+  function pow(){var l=unary();while(isOp('^')){p++;var r=unary();l=Math.pow(toNum(scalar(l)),toNum(scalar(r)))}return l}
+  function unary(){
+    if(isOp('-')){p++;return -toNum(scalar(unary()))}
+    if(isOp('+')){p++;return unary()}
+    var v=primary();
+    while(isOp('%')){p++;v=toNum(scalar(v))/100}
+    return v;
+  }
+  function primary(){
+    var k=t[p];if(!k)throw E('#ОШИБКА!');
+    if(k.t==='n'){p++;return k.v}
+    if(k.t==='s'){p++;return k.v}
+    if(k.t==='o'&&k.v==='('){p++;var v=comparison();expect(')');return v}
+    if(k.t==='r'){
+      p++;
+      if(isOp(':')){
+        p++;var k2=t[p];if(!k2||k2.t!=='r')throw E('#ОШИБКА!');p++;
+        var r1=Math.min(k.r,k2.r),r2=Math.max(k.r,k2.r),c1=Math.min(k.c,k2.c),c2=Math.max(k.c,k2.c),out=[];
+        if((r2-r1+1)*(c2-c1+1)>20000)throw E('#ОШИБКА!');
+        for(var r=r1;r<=r2;r++)for(var c=c1;c<=c2;c++){
+          var x;try{x=cellVal(r,c,stack)}catch(e){if(e.cellErr==='#ССЫЛ!')throw e;throw e}
+          out.push(x);
+        }
+        return out;
+      }
+      return cellVal(k.r,k.c,stack);
+    }
+    if(k.t==='f'){
+      p++;var name=ALIAS[k.v]||k.v;
+      if(k.v==='TRUE'||k.v==='ИСТИНА')return true;
+      if(k.v==='FALSE'||k.v==='ЛОЖЬ')return false;
+      if(!FN[name])throw E('#ИМЯ?');
+      expect('(');var args=[];
+      if(!isOp(')')){
+        for(;;){args.push(comparison());if(isOp(',')||isOp(';')){p++;continue}break}
+      }
+      expect(')');
+      return FN[name](args);
+    }
+    throw E('#ОШИБКА!');
+  }
+  var res=comparison();
+  if(p<t.length)throw E('#ОШИБКА!');
+  return res;
+}
+function fmtNum(n){
+  if(!isFinite(n))return '#ЧИСЛО!';
+  var s=String(Number(n.toPrecision(12)));
+  return s.replace('.',',');
+}
+function shown(r,c){          // {text, err, num}
+  var s=raw(r,c);
+  if(s.charAt(0)!=='=')return{text:s,err:false,num:numOf(s)!==null};
+  try{
+    var v=cellVal(r,c,[]);
+    if(typeof v==='number')return{text:fmtNum(v),err:false,num:true};
+    if(typeof v==='boolean')return{text:v?'ИСТИНА':'ЛОЖЬ',err:false,num:false};
+    return{text:String(v),err:false,num:false};
+  }catch(e){return{text:e.cellErr||'#ОШИБКА!',err:true,num:false}}
+}
+
+/* ---------- сдвиг ссылок при вставке/удалении ---------- */
+function adjustFormula(f,axis,idx,delta){
+  // axis 'r'|'c'; delta +1 вставка перед idx, -1 удаление idx
+  var parts=f.split('"');
+  for(var i=0;i<parts.length;i+=2){
+    parts[i]=parts[i].replace(/(\$?)([A-Za-z]{1,2})(\$?)(\d+)(?![A-Za-zА-Яа-я0-9_(])/g,function(m,d1,cl,d2,rw){
+      var c=colIdx(cl.toUpperCase()),r=parseInt(rw,10)-1;
+      if(axis==='r'){
+        if(delta>0){if(r>=idx)r++}
+        else{if(r===idx)return '#ССЫЛ!';if(r>idx)r--}
+      }else{
+        if(delta>0){if(c>=idx)c++}
+        else{if(c===idx)return '#ССЫЛ!';if(c>idx)c--}
+      }
+      return d1+colName(c)+d2+(r+1);
+    });
+  }
+  return parts.join('"');
+}
+function shiftCells(axis,idx,delta){
+  var nc={};
+  Object.keys(D.cells).forEach(function(k){
+    var a=k.split(','),r=+a[0],c=+a[1],x=D.cells[k];
+    if(axis==='r'){
+      if(delta<0&&r===idx)return;
+      if(r>=idx&&!(delta<0&&r===idx))r+=delta;
+    }else{
+      if(delta<0&&c===idx)return;
+      if(c>=idx)c+=delta;
+    }
+    nc[K(r,c)]=x;
+  });
+  Object.keys(nc).forEach(function(k){
+    var x=nc[k];
+    if(x.v!=null&&String(x.v).charAt(0)==='=')x.v=adjustFormula(String(x.v),axis,idx,delta);
+  });
+  D.cells=nc;
+}
+
+/* ---------- состояние ---------- */
+function snap(){hist.push(JSON.stringify(D));if(hist.length>60)hist.shift();redo=[]}
+function changed(){
+  cache={};
+  clearTimeout(timer);
+  timer=setTimeout(function(){if(window.Host&&Host.onChange)Host.onChange(JSON.stringify(D))},500);
+}
+function rect(){return{r1:Math.min(ar,fr),r2:Math.max(ar,fr),c1:Math.min(ac,fcc),c2:Math.max(ac,fcc)}}
+function eachSel(fn){var q=rect();for(var r=q.r1;r<=q.r2;r++)for(var c=q.c1;c<=q.c2;c++)fn(r,c)}
+function getCell(r,c,make){var k=K(r,c),x=D.cells[k];if(!x&&make){x=D.cells[k]={v:''}}return x}
+function setRaw(r,c,v){
+  var x=getCell(r,c,true);x.v=v;
+  if(v===''&&!x.b&&!x.i&&!x.al&&!x.fc&&!x.bg&&!x.bd)delete D.cells[K(r,c)];
+}
+function styleSel(fn){snap();eachSel(function(r,c){var x=getCell(r,c,true);fn(x);
+  if((x.v===''||x.v==null)&&!x.b&&!x.i&&!x.al&&!x.fc&&!x.bg&&!x.bd)delete D.cells[K(r,c)]});changed();render()}
+
+/* ---------- отрисовка ---------- */
+function render(){
+  cache={};
+  var q=rect(),h='<tr><th class="rh"></th>';
+  for(var c=0;c<D.cols;c++)h+='<th style="width:'+D.w[c]+'px;min-width:'+D.w[c]+'px" class="'+((c>=q.c1&&c<=q.c2)?'sel':'')+'">'+colName(c)+'</th>';
+  h+='</tr>';
+  for(var r=0;r<D.rows;r++){
+    h+='<tr><td class="rh'+((r>=q.r1&&r<=q.r2)?' sel':'')+'">'+(r+1)+'</td>';
+    for(var c2=0;c2<D.cols;c2++){
+      var x=cell(r,c2),s=shown(r,c2),cls='',st='';
+      if(x){
+        if(x.b)st+='font-weight:700;';if(x.i)st+='font-style:italic;';
+        if(x.fc)st+='color:'+x.fc+';';if(x.bg)st+='background:'+x.bg+';';
+        if(x.bd)cls+=' bd';
+      }
+      var al=(x&&x.al)||(s.num?'r':'l');st+='text-align:'+(al==='c'?'center':al==='r'?'right':'left')+';';
+      if(s.err)cls+=' er';
+      if(r>=q.r1&&r<=q.r2&&c2>=q.c1&&c2<=q.c2)cls+=' rg';
+      if(r===fr&&c2===fcc)cls+=' cur';
+      h+='<td data-r="'+r+'" data-c="'+c2+'" class="'+cls+'" style="'+st+'">'+esc(s.text)+'</td>';
+    }
+    h+='</tr>';
+  }
+  var tot=38;for(var k=0;k<D.cols;k++)tot+=D.w[k];
+  document.getElementById('tb').style.width=tot+'px';
+  document.getElementById('tb').innerHTML=h;
+  syncBar();
+}
+function syncBar(){
+  document.getElementById('nm').textContent=(ar===fr&&ac===fcc)?colName(fcc)+(fr+1):colName(Math.min(ac,fcc))+(Math.min(ar,fr)+1)+':'+colName(Math.max(ac,fcc))+(Math.max(ar,fr)+1);
+  if(!editing)document.getElementById('fx').value=raw(fr,fcc);
+  var x=cell(fr,fcc)||{};
+  document.getElementById('b_b').classList.toggle('on',!!x.b);
+  document.getElementById('b_i').classList.toggle('on',!!x.i);
+  var al=x.al||'';
+  document.getElementById('a_l').classList.toggle('on',al==='l');
+  document.getElementById('a_c').classList.toggle('on',al==='c');
+  document.getElementById('a_r').classList.toggle('on',al==='r');
+  document.getElementById('bd').classList.toggle('on',!!x.bd);
+  document.getElementById('rng').classList.toggle('on',extend);
+}
+
+/* ---------- ввод ---------- */
+var fx=document.getElementById('fx'),editR=0,editC=0;
+function commit(){
+  if(!editing)return;
+  editing=false;
+  var v=fx.value;
+  if(v!==raw(editR,editC)){snap();setRaw(editR,editC,v);changed()}
+  render();
+}
+fx.addEventListener('focus',function(){editing=true;editR=fr;editC=fcc;document.getElementById('pal').style.display='none'});
+fx.addEventListener('blur',function(){commit()});
+fx.addEventListener('keydown',function(e){
+  if(e.key==='Enter'||e.keyCode===13){
+    e.preventDefault();commit();fx.blur();
+    if(fr<D.rows-1){fr++;ar=fr;render();scrollToCell(fr,fcc)}
+  }
+});
+document.getElementById('ok').addEventListener('click',function(){commit();fx.blur()});
+document.getElementById('tb').addEventListener('click',function(e){
+  var td=e.target.closest('td[data-r]');if(!td)return;
+  var r=+td.getAttribute('data-r'),c=+td.getAttribute('data-c');
+  if(editing){commit();fx.blur()}
+  document.getElementById('pal').style.display='none';
+  if(extend){fr=r;fcc=c}
+  else{
+    var again=(ar===fr&&ac===fcc&&fr===r&&fcc===c);
+    ar=fr=r;ac=fcc=c;
+    if(again){render();fx.focus();return}
+  }
+  render();
+});
+function scrollToCell(r,c){
+  var sc=document.getElementById('sc'),td=document.querySelector('td[data-r="'+r+'"][data-c="'+c+'"]');
+  if(!td)return;
+  var tr=td.getBoundingClientRect(),sr=sc.getBoundingClientRect();
+  if(tr.bottom>sr.bottom)sc.scrollTop+=tr.bottom-sr.bottom+10;
+  if(tr.top<sr.top+30)sc.scrollTop-=sr.top+30-tr.top+10;
+}
+document.getElementById('bar').addEventListener('mousedown',function(e){if(e.target!==fx)e.preventDefault()});
+document.getElementById('pal').addEventListener('mousedown',function(e){e.preventDefault()});
+document.getElementById('tb').addEventListener('mousedown',function(e){e.preventDefault()});
+
+/* ---------- кнопки ---------- */
+function $(id){return document.getElementById(id)}
+$('undo').onclick=function(){if(!hist.length)return;redo.push(JSON.stringify(D));D=JSON.parse(hist.pop());clampSel();changed();render()};
+$('redo').onclick=function(){if(!redo.length)return;hist.push(JSON.stringify(D));D=JSON.parse(redo.pop());clampSel();changed();render()};
+function clampSel(){ar=Math.min(ar,D.rows-1);fr=Math.min(fr,D.rows-1);ac=Math.min(ac,D.cols-1);fcc=Math.min(fcc,D.cols-1)}
+$('b_b').onclick=function(){var on=!(cell(fr,fcc)||{}).b;styleSel(function(x){x.b=on?1:0})};
+$('b_i').onclick=function(){var on=!(cell(fr,fcc)||{}).i;styleSel(function(x){x.i=on?1:0})};
+function align(a){var cur=(cell(fr,fcc)||{}).al;styleSel(function(x){x.al=(cur===a)?'':a})}
+$('a_l').onclick=function(){align('l')};$('a_c').onclick=function(){align('c')};$('a_r').onclick=function(){align('r')};
+$('bd').onclick=function(){var on=!(cell(fr,fcc)||{}).bd;styleSel(function(x){x.bd=on?1:0})};
+function showPal(mode){
+  var pal=$('pal');
+  if(palMode===mode&&pal.style.display==='flex'){pal.style.display='none';return}
+  palMode=mode;pal.innerHTML='';
+  (mode==='fc'?COLORS:BACKS).forEach(function(c){
+    var d=document.createElement('b');d.style.background=c||'repeating-linear-gradient(45deg,#fff,#fff 4px,#ddd 4px,#ddd 8px)';
+    d.onclick=function(){pal.style.display='none';styleSel(function(x){if(mode==='fc')x.fc=c;else x.bg=c})};
+    pal.appendChild(d);
+  });
+  pal.style.display='flex';
+}
+$('fc').onclick=function(){showPal('fc')};$('bg').onclick=function(){showPal('bg')};
+$('rng').onclick=function(){extend=!extend;if(!extend){ar=fr;ac=fcc}render()};
+$('clr').onclick=function(){snap();eachSel(function(r,c){delete D.cells[K(r,c)]});changed();render()};
+$('sum').onclick=function(){
+  // автосумма: сумма чисел над ячейкой, а если над ней пусто — слева
+  var r=fr,c=fcc,top=r;
+  while(top>0&&typeof valOrNull(top-1,c)==='number')top--;
+  var f=null;
+  if(top<r)f='=SUM('+colName(c)+(top+1)+':'+colName(c)+r+')';
+  else{var left=c;while(left>0&&typeof valOrNull(r,left-1)==='number')left--;
+    if(left<c)f='=SUM('+colName(left)+(r+1)+':'+colName(c-1)+(r+1)+')';}
+  if(f===null)f='=SUM()';
+  snap();setRaw(r,c,f);changed();render();
+};
+function valOrNull(r,c){var s=raw(r,c);if(s==='')return null;if(s.charAt(0)==='='){try{return cellVal(r,c,[])}catch(e){return null}}var n=numOf(s);return n===null?s:n}
+$('ir').onclick=function(){snap();var q=rect();shiftCells('r',q.r1,1);D.rows++;changed();render()};
+$('dr').onclick=function(){if(D.rows<=1)return;snap();var q=rect();shiftCells('r',q.r1,-1);D.rows--;clampSel();changed();render()};
+$('ic').onclick=function(){snap();var q=rect();shiftCells('c',q.c1,1);D.cols++;D.w.splice(q.c1,0,96);changed();render()};
+$('dc').onclick=function(){if(D.cols<=1)return;snap();var q=rect();shiftCells('c',q.c1,-1);D.cols--;D.w.splice(q.c1,1);clampSel();changed();render()};
+$('wm').onclick=function(){snap();var q=rect();for(var c=q.c1;c<=q.c2;c++)D.w[c]=Math.max(40,D.w[c]-16);changed();render()};
+$('wp').onclick=function(){snap();var q=rect();for(var c=q.c1;c<=q.c2;c++)D.w[c]=Math.min(400,D.w[c]+16);changed();render()};
+// дорисовка строк при прокрутке до конца
+$('sc').addEventListener('scroll',function(){
+  var sc=$('sc');
+  if(sc.scrollTop+sc.clientHeight>=sc.scrollHeight-40&&D.rows<1000){D.rows+=20;changed();var t=sc.scrollTop;render();sc.scrollTop=t}
+});
+
+/* ---------- API для приложения ---------- */
+window.setDoc=function(json,dark){
+  document.documentElement.classList.toggle('dark',!!dark);
+  try{D=json?JSON.parse(json):fresh()}catch(e){D=fresh()}
+  if(!D||!D.cells||!D.w){D=fresh()}
+  while(D.w.length<D.cols)D.w.push(96);
+  hist=[];redo=[];ar=fr=ac=fcc=0;render();
+};
+window.getDoc=function(){return JSON.stringify(D)};
+window.getPrintHtml=function(title){
+  var maxR=-1,maxC=-1;
+  Object.keys(D.cells).forEach(function(k){
+    var a=k.split(','),x=D.cells[k];
+    if((x.v!=null&&String(x.v)!=='')||x.bg||x.bd){maxR=Math.max(maxR,+a[0]);maxC=Math.max(maxC,+a[1])}
+  });
+  if(maxR<0){maxR=0;maxC=0}
+  cache={};
+  var total=0,h='<table><colgroup>';
+  for(var c=0;c<=maxC;c++){h+='<col style="width:'+D.w[c]+'px">';total+=D.w[c]}
+  h+='</colgroup>';
+  for(var r=0;r<=maxR;r++){
+    h+='<tr>';
+    for(var c2=0;c2<=maxC;c2++){
+      var x=cell(r,c2),s=shown(r,c2),st='';
+      if(x){
+        if(x.b)st+='font-weight:700;';if(x.i)st+='font-style:italic;';
+        if(x.fc)st+='color:'+x.fc+';';if(x.bg)st+='background:'+x.bg+';';
+        if(x.bd)st+='border:1px solid #000;';
+      }
+      var al=(x&&x.al)||(s.num?'r':'l');st+='text-align:'+(al==='c'?'center':al==='r'?'right':'left')+';';
+      h+='<td style="'+st+'">'+esc(s.text)+'</td>';
+    }
+    h+='</tr>';
+  }
+  h+='</table>';
+  var land=total>700;
+  var css='@page{size:A4 '+(land?'landscape':'portrait')+';margin:12mm}body{font-family:Roboto,Arial,sans-serif;font-size:14px;color:#000;margin:0}'+
+    'table{border-collapse:collapse;table-layout:fixed}td{padding:3px 6px;height:22px;border:1px solid transparent;overflow:hidden;white-space:nowrap}';
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title||'')+'</title><style>'+css+'</style></head><body>'+h+'</body></html>';
+};
+D=fresh();render();
+</script></body></html>
