@@ -293,12 +293,13 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
     // свой цвет и рамка — чтобы окно подсказок отличалось от основного списка
     Card(
         modifier.fillMaxWidth().heightIn(max = maxH),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            contentColor = MaterialTheme.colorScheme.onSurface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.tertiary)
+        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+        border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
     ) {
         if (hits.isEmpty()) {
             Text("Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
@@ -337,7 +338,7 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
                         }.joinToString(" · ")
                         Text(info, style = MaterialTheme.typography.bodySmall)
                     }
-                    if (i < hits.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f))
+                    if (i < hits.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                 }
             }
         }
@@ -1291,7 +1292,9 @@ private fun RowEditDialog(row: ItemRow, catalogSync: Boolean, onDismiss: () -> U
     val ctx = LocalContext.current
     var name by remember { mutableStateOf(row.name) }
     var plan by remember { mutableStateOf(row.qty) }
-    var article by remember { mutableStateOf(ArticleLookup.find(row)) }
+    // в поле — только свой артикул; запасной с сайта показан в подписи и «своим» не становится
+    var article by remember { mutableStateOf(ArticleLookup.findOwn(row)) }
+    val webArt = remember { ArticleLookup.findWeb(row) }
     var barcode by remember { mutableStateOf(row.barcode) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1300,7 +1303,7 @@ private fun RowEditDialog(row: ItemRow, catalogSync: Boolean, onDismiss: () -> U
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = germanKeys(it) }, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
-                    article, { article = it }, label = { Text("Номер артикула") }, singleLine = true,
+                    article, { article = it }, label = { Text(if (article.isBlank() && webArt.isNotBlank()) "Номер артикула (с сайта: $webArt)" else "Номер артикула") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(

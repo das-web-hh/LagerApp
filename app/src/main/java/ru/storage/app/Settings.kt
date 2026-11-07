@@ -142,6 +142,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Вибрация" -> VibrationSettings { section = null }
         "Просмотр накладных" -> ViewerSettings { section = null }
         "Рабочее время" -> WorkSettingsScreen { section = null }
+        "Доступ по месту и времени" -> AccessSettingsScreen { section = null }
         else -> SettingsHome(onBack) { section = it }
     }
 }
@@ -162,8 +163,11 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Голос и подсчёт" to "Крупная цифра, голос: выбор, скорость, тембр, громкость, пауза",
         "Вибрация" to "Тап и прокрутка: сила и длительность",
         "Просмотр накладных" to "Листать сверху вниз или слева направо",
-        "Рабочее время" to "Учёт по геолокации, зона подхода, полные и короткие дни"
-    ).filter { Session.isAdmin || it.first != "Google Диск" && it.first != "Распознавание документов" && it.first != "Подключения" }
+        "Рабочее время" to "Учёт по геолокации, зона подхода, полные и короткие дни",
+        "Доступ по месту и времени" to "Рабочая точка, радиус (5 км) и часы, вне которых у сотрудников приложение закрыто"
+    ).filter {
+        Session.isAdmin || it.first !in setOf("Google Диск", "Распознавание документов", "Подключения", "Доступ по месту и времени")
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))

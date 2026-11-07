@@ -78,8 +78,20 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        AppGuard.onResume(applicationContext)
+        Cloud.startPeriodic(applicationContext)
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        AppLock.touch()
+    }
+
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
-        if (BtScan.onKey(this, event)) return true
+        AppLock.touch()
+        if (!AppGuard.blocked && BtScan.onKey(this, event)) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -221,10 +233,15 @@ fun AppRoot() {
     if (loggedIn) {
         val receiver = "${profile.firstName} ${profile.lastName}".trim()
         AutoReceiveHolder.receiver = receiver
-        MainScreen(prefs = prefs, profile = profile, onLogout = {
+        val doLogout = {
             Journal.log("Система", "Выход из аккаунта")
             saveUser(null)
-        })
+        }
+        current?.let { cu ->
+            AppGate(user = cu, onLogout = doLogout) {
+                MainScreen(prefs = prefs, profile = profile, onLogout = doLogout)
+            }
+        }
         Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }
     } else if (current != null) {
         // зарегистрировался, но админ ещё не назначил должность и не подтвердил
@@ -247,6 +264,7 @@ fun AppRoot() {
         WelcomeSplash(
             onCovered = {
                 pendingUser?.let {
+                    AppLock.unlockedNow()
                     saveUser(it)
                     Journal.log("Система", "Вход в аккаунт")
                 }

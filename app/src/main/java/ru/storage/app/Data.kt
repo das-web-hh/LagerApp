@@ -24,8 +24,16 @@ data class Product(
     /** Общий код группы: товары с одинаковым кодом — один и тот же товар под разными названиями ("" — товар сам по себе). */
     val groupId: String = "",
     /** Товары, от которых этот отделили вручную: автоматически они больше не объединяются. */
-    val apart: List<String> = emptyList()
-)
+    val apart: List<String> = emptyList(),
+    /**
+     * Артикул со stroeh.de — ВТОРОЙ уровень. Используется только пока нет своего артикула (article):
+     * введённого вручную, отсканированного, из накладной или Excel. Появился свой — он главнее, этот остаётся запасным.
+     */
+    val webArticle: String = ""
+) {
+    /** Артикул для показа и печати: свой, а если его нет — с сайта. */
+    val shownArticle: String get() = article.trim().ifEmpty { webArticle.trim() }
+}
 
 /** qty — фактическое количество; plan — по документу ("" если плана нет), defect — брак ("" если нет). */
 data class ReceiptItem(
@@ -109,7 +117,7 @@ fun jsonToItems(s: String?): List<ReceiptItem> {
 }
 
 class ProductDb private constructor(context: Context) :
-    SQLiteOpenHelper(context, "catalog.db", null, 5) {
+    SQLiteOpenHelper(context, "catalog.db", null, 6) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -119,7 +127,8 @@ class ProductDb private constructor(context: Context) :
                 "weight TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '', " +
                 "pack TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT '', " +
                 "photos TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, " +
-                "group_id TEXT NOT NULL DEFAULT '', apart TEXT NOT NULL DEFAULT '')"
+                "group_id TEXT NOT NULL DEFAULT '', apart TEXT NOT NULL DEFAULT '', " +
+                "web_article TEXT NOT NULL DEFAULT '')"
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name_lc)")
         createExtra(db)
@@ -147,6 +156,9 @@ class ProductDb private constructor(context: Context) :
             db.execSQL("ALTER TABLE products ADD COLUMN apart TEXT NOT NULL DEFAULT ''")
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_group ON products(group_id)")
         }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE products ADD COLUMN web_article TEXT NOT NULL DEFAULT ''")
+        }
     }
 
     private fun createExtra(db: SQLiteDatabase) {
@@ -165,7 +177,7 @@ class ProductDb private constructor(context: Context) :
 
     // ---------- товары ----------
 
-    private val pcols = "id, name, article, barcode, weight, unit, pack, manufacturer, photos, updated_at, group_id, apart"
+    private val pcols = "id, name, article, barcode, weight, unit, pack, manufacturer, photos, updated_at, group_id, apart, web_article"
 
     private fun readProducts(sql: String, args: Array<String>): List<Product> =
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -176,7 +188,7 @@ class ProductDb private constructor(context: Context) :
                         c.getString(0), c.getString(1), c.getString(2), c.getString(3),
                         c.getString(4), c.getString(5), c.getString(6), c.getString(7),
                         jsonToList(c.getString(8)), c.getLong(9),
-                        c.getString(10), jsonToList(c.getString(11))
+                        c.getString(10), jsonToList(c.getString(11)), c.getString(12)
                     )
                 )
             }
@@ -204,7 +216,8 @@ class ProductDb private constructor(context: Context) :
                     put("article", p.article)
                     put("barcode", p.barcode)
                     put("name_lc", p.name.lowercase())
-                    put("search_lc", "${p.name} ${p.article} ${p.barcode}".lowercase())
+                    put("search_lc", "${p.name} ${p.article} ${p.webArticle} ${p.barcode}".lowercase())
+                    put("web_article", p.webArticle)
                     put("weight", p.weight)
                     put("unit", p.unit)
                     put("pack", p.pack)
@@ -242,8 +255,10 @@ class ProductDb private constructor(context: Context) :
     fun findByName(name: String): Product? =
         readProducts("SELECT $pcols FROM products WHERE name_lc = ? LIMIT 1", arrayOf(name.trim().lowercase())).firstOrNull()
 
+    /** Сначала по своему артикулу (первый уровень), затем по артикулу с сайта (второй). */
     fun findByArticle(article: String): Product? =
         readProducts("SELECT $pcols FROM products WHERE article = ? LIMIT 1", arrayOf(article)).firstOrNull()
+            ?: readProducts("SELECT $pcols FROM products WHERE web_article = ? AND article = '' LIMIT 1", arrayOf(article)).firstOrNull()
 
     /** Все названия одного и того же товара (с общим кодом группы). */
     fun byGroup(groupId: String): List<Product> =

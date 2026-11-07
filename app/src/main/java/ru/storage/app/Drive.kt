@@ -100,6 +100,28 @@ object DriveApi {
         return r
     }
 
+    class StrohHit(val name: String, val url: String)
+
+    private fun strohCheck(r: JSONObject): JSONObject {
+        if (!r.optBoolean("ok") && r.optString("error").startsWith("Неизвестное действие")) {
+            throw RuntimeException("Скрипт Диска устарел: обновите Code.gs и выпустите новую версию")
+        }
+        return check(r)
+    }
+
+    /** Поиск товара на stroeh.de (через ваш скрипт). Только по нажатию кнопки. */
+    fun strohSearch(ctx: Context, q: String): List<StrohHit> {
+        val r = strohCheck(http(query(ctx, "stroehsearch", "q" to q), null))
+        val a = r.optJSONArray("items") ?: return emptyList()
+        return (0 until a.length()).map { val o = a.getJSONObject(it); StrohHit(o.optString("name"), o.optString("url")) }
+    }
+
+    /** Название и артикул со страницы товара stroeh.de. */
+    fun strohArticle(ctx: Context, url: String): Pair<String, String> {
+        val r = strohCheck(http(query(ctx, "stroehart", "url" to url), null))
+        return r.optString("name") to r.optString("article")
+    }
+
     fun ping(ctx: Context): String {
         val r = check(http(query(ctx, "ping"), null))
         return r.optString("folderName")

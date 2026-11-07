@@ -54,6 +54,9 @@ function doGet(e) {
     if (String(params.action || '').toLowerCase() === 'counts') return getCounts_(params.code);
     checkToken_(params.token);
     var action = String(params.action || 'ping').toLowerCase();
+    // Поиск артикула на stroeh.de (второй уровень артикула). Папка Диска не нужна.
+    if (action === 'stroehsearch') return json_(stroehSearch_(params.q));
+    if (action === 'stroehart') return json_(stroehArticle_(params.url));
     var folder = getFolder_(params.folderId);
 
     if (action === 'ping') {
@@ -429,4 +432,102 @@ function authorize_() {
   DriveApp.getRootFolder();
   UrlFetchApp.fetch('https://www.googleapis.com/discovery/v1/apis/drive/v3/rest');
   return 'ok';
+}
+
+
+// ───────────── stroeh.de: поиск и артикул ─────────────
+// Запросы только по нажатию кнопки в приложении (один поиск + одна страница товара), результат кэшируется на 6 часов.
+
+var STROEH_HOST_ = 'https://www.stroeh.de';
+
+function stroehGet_(url) {
+  var r = UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    followRedirects: true,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+      'Accept-Language': 'de-DE,de;q=0.9'
+    }
+  });
+  var code = r.getResponseCode();
+  if (code !== 200) throw new Error('stroeh.de ответил HTTP ' + code);
+  return r.getContentText('UTF-8');
+}
+
+function decodeEntities_(s) {
+  var named = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', auml: 'ä', ouml: 'ö', uuml: 'ü',
+    Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü', szlig: 'ß', euro: '€', ndash: '–', mdash: '—'};
+  return String(s || '')
+    .replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace(/&#(\d+);/g, function (m, d) { return String.fromCharCode(parseInt(d, 10)); })
+    .replace(/&([a-zA-Z]+);/g, function (m, n) { return named.hasOwnProperty(n) ? named[n] : m; });
+}
+
+function stripTags_(s) {
+  var t = String(s || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  return decodeEntities_(t).replace(/\s+/g, ' ').trim();
+}
+
+function cacheKey_(prefix, value) {
+  var d = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, String(value));
+  return prefix + Utilities.base64EncodeWebSafe(d);
+}
+
+function stroehSearch_(q) {
+  q = String(q || '').trim().slice(0, 80);
+  if (q.length < 2) throw new Error('Слишком короткий запрос');
+  var cache = CacheService.getScriptCache();
+  var key = cacheKey_('sts_', q.toLowerCase());
+  var hit = cache.get(key);
+  if (hit) return {ok: true, items: JSON.parse(hit)};
+
+  var html = stroehGet_(STROEH_HOST_ + '/shop/suche/' + encodeURIComponent(q));
+  var items = [], seen = {};
+  var re = /<a\b[^>]*?href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, m;
+  while ((m = re.exec(html)) && items.length < 40) {
+    var href = decodeEntities_(m[1]);
+    if (href.indexOf('/') === 0) href = STROEH_HOST_ + href;
+    var mm = href.match(/^https:\/\/www\.stroeh\.de\/shop\/([^?#]+)$/);
+    if (!mm) continue;
+    var path = mm[1];
+    if (/\/$/.test(path)) continue;          // разделы каталога кончаются «/», товары — нет
+    if (path.split('/').length < 3) continue; // служебные страницы (agb.php, Lieferkosten…)
+    var text = stripTags_(m[2]);
+    if (!text) continue;
+    var e = seen[href];
+    if (!e) { e = {name: text, url: href}; seen[href] = e; items.push(e); }
+    else if (text.length < e.name.length) e.name = text; // название короче описания
+  }
+  if (items.length) cache.put(key, JSON.stringify(items), 6 * 3600);
+  return {ok: true, items: items};
+}
+
+function stroehArticle_(url) {
+  url = String(url || '').trim();
+  if (!/^https:\/\/www\.stroeh\.de\/shop\/[^\s]+$/.test(url)) throw new Error('Допустимы только адреса stroeh.de');
+  var cache = CacheService.getScriptCache();
+  var key = cacheKey_('sta_', url);
+  var hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+
+  var html = stroehGet_(url);
+  var h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  var name = h1 ? stripTags_(h1[1]) : '';
+  // Первое «Artikelnr.» на странице — основной товар; реклама («Hier geht's oft günstiger…») стоит ниже и не берётся.
+  var text = stripTags_(html);
+  var m = text.match(/Artikelnr\.?\s*:?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]{2,19})/);
+  if (!m) throw new Error('Артикул на странице не найден');
+  var res = {ok: true, name: name, article: m[1].replace(/[\.\/\-]+$/, ''), url: url};
+  cache.put(key, JSON.stringify(res), 6 * 3600);
+  return res;
+}
+
+// Проверка из редактора Apps Script: Run → testStroeh_ → View → Logs. Покажет, находит ли разбор товары и артикул.
+function testStroeh_() {
+  var r = stroehSearch_('Agrobs Kraftpaket');
+  Logger.log('Найдено: ' + r.items.length + ' ' + JSON.stringify(r.items.slice(0, 3)));
+  if (r.items.length) Logger.log(JSON.stringify(stroehArticle_(r.items[0].url)));
 }

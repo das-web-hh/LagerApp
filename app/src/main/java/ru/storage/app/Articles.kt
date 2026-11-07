@@ -29,8 +29,12 @@ object ArticleLookup {
                 ?: (if (ownCode.isNotEmpty()) db.findByBarcode(ownCode) else null)
             // карточка строки — первой, затем остальные названия того же товара
             val cards = if (p == null) emptyList() else listOf(p) + ProductGroups.membersOf(db, p).filter { it.id != p.id }
+            // 1-й уровень: артикул строки, затем свой артикул карточек; 2-й уровень: артикул с сайта — только если своего нет нигде
             Info(
-                article = own.ifEmpty { cards.firstOrNull { it.article.isNotBlank() }?.article.orEmpty().trim() },
+                article = own.ifEmpty {
+                    cards.firstOrNull { it.article.isNotBlank() }?.article.orEmpty().trim()
+                        .ifEmpty { cards.firstOrNull { it.webArticle.isNotBlank() }?.webArticle.orEmpty().trim() }
+                },
                 barcode = ownCode.ifEmpty { cards.firstOrNull { it.barcode.isNotBlank() }?.barcode.orEmpty().trim() },
                 weight = cards.map { weightOf(it) }.firstOrNull { it.isNotEmpty() }.orEmpty()
             )
@@ -47,6 +51,32 @@ object ArticleLookup {
     fun find(r: ItemRow): String {
         if (r.article.isNotBlank()) return r.article.trim()
         return info(r).article
+    }
+
+    /** Только свой артикул (без запасного с сайта): для окон правки, чтобы сайтовый номер не записался как свой. */
+    fun findOwn(r: ItemRow): String {
+        if (r.article.isNotBlank()) return r.article.trim()
+        val c = app ?: return ""
+        val db = ProductDb.get(c)
+        return try {
+            val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null)
+                ?: db.findByName(r.name.trim())
+                ?: (if (r.barcode.isNotBlank()) db.findByBarcode(r.barcode.trim()) else null)
+            if (p == null) "" else (listOf(p) + ProductGroups.membersOf(db, p).filter { it.id != p.id })
+                .firstOrNull { it.article.isNotBlank() }?.article.orEmpty().trim()
+        } catch (e: Exception) { "" }
+    }
+
+    /** Артикул с сайта (запасной) для подсказки в окне правки. */
+    fun findWeb(r: ItemRow): String {
+        val c = app ?: return ""
+        val db = ProductDb.get(c)
+        return try {
+            val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null)
+                ?: db.findByName(r.name.trim())
+                ?: (if (r.barcode.isNotBlank()) db.findByBarcode(r.barcode.trim()) else null)
+            p?.webArticle.orEmpty().trim()
+        } catch (e: Exception) { "" }
     }
 
     fun barcode(r: ItemRow): String = info(r).barcode

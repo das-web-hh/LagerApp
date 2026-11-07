@@ -252,15 +252,19 @@ internal fun invText(j: InvJob, now: Long, title: String = "Инвентариз
 /**
  * Штрихкоды и артикулы из инвентаризации попадают в каталог — и в телефон (SQLite), и в облако (Firebase):
  * Cloud.saveProduct пишет в обе базы. Новые товары заводятся с весом/упаковкой из названия;
- * у уже имеющегося товара по «Сохранить» обновляются артикул и штрих-код, исправленные в инвентаризации (до этого правка меняет только строку).
+ * у уже имеющегося товара обновляются артикул и штрих-код, исправленные в инвентаризации (до этого правка меняет только строку).
+ * Вызывается сразу по «Далее» (и повторно по «Сохранить»): название, артикул и штрих-код уходят в каталог телефона и в Firebase —
+ * там их можно поправить или дополнить, а остальные телефоны получат новый товар при проверке каталога.
  */
-internal fun invSaveBarcodes(ctx: Context, j: InvJob) {
+private val invSaveLock = Any()
+
+internal fun invSaveBarcodes(ctx: Context, j: InvJob) = synchronized(invSaveLock) {
     val db = ProductDb.get(ctx)
     j.rows.toList().forEach { r ->
         val code = r.barcode.trim()
         val art = r.article.trim()
         val name = r.name.trim()
-        if (code.isEmpty() && art.isEmpty()) return@forEach
+        if (name.isEmpty() && code.isEmpty() && art.isEmpty()) return@forEach
         try {
             val p = (if (r.productId.isNotEmpty()) db.getProduct(r.productId) else null)
                 ?: (if (name.isNotEmpty()) db.findByName(name) else null)
@@ -565,7 +569,14 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
             )
             Spacer(Modifier.width(8.dp))
             Button(
-                onClick = { error = ""; InventoryStore.save(ctx); job.step = 1 },
+                onClick = {
+                    error = ""
+                    InventoryStore.save(ctx)
+                    // сразу в каталог и в Firebase (не ждём «Сохранить»): новые товары, исправленные артикулы и штрих-коды
+                    val app = ctx.applicationContext
+                    scope.launch(Dispatchers.IO) { try { invSaveBarcodes(app, job) } catch (e: Exception) { } }
+                    job.step = 1
+                },
                 enabled = job.rows.isNotEmpty(),
                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
                 modifier = Modifier.height(36.dp)

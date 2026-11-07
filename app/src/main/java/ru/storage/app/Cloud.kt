@@ -9,6 +9,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -41,7 +42,7 @@ class Dup(
 
 /*
  * Firestore:
- *  products/{id}: name, article, barcode, weight, unit, pack, manufacturer, photos[], groupId, apart[], updatedAt, deleted
+ *  products/{id}: name, article, barcode, weight, unit, pack, manufacturer, photos[], groupId, apart[], webArticle, updatedAt, deleted
  *  receipts/{id}: sender, orderNo, receivedAt, receiver, items[{productId,name,qty}], photos[], invoices[], updatedAt, deleted
  * Файлы фото/накладных: Firebase Storage, путь media/<имя файла>
  */
@@ -67,6 +68,7 @@ object Cloud {
         "photos" to p.photos,
         "groupId" to p.groupId,
         "apart" to p.apart,
+        "webArticle" to p.webArticle,
         "updatedAt" to p.updatedAt,
         "deleted" to false
     )
@@ -206,7 +208,8 @@ object Cloud {
             photos = strList(get("photos")),
             updatedAt = getLong("updatedAt") ?: 0L,
             groupId = get("groupId")?.toString() ?: "",
-            apart = strList(get("apart"))
+            apart = strList(get("apart")),
+            webArticle = get("webArticle")?.toString() ?: ""
         )
     }
 
@@ -305,6 +308,26 @@ object Cloud {
             "Нет доступа к Firebase (проверьте правила Firestore)"
         else if (e is FirebaseFirestoreException) "Нет связи с Firebase: ${e.code}"
         else "Ошибка синхронизации: ${e.message}"
+
+    private const val CATALOG_CHECK_MS = 30 * 60 * 1000L
+    private val periodicStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val bgSync = SyncState()
+
+    /**
+     * Пока приложение работает, каталог проверяется на Firebase каждые 30 минут: новые и изменённые товары
+     * (добавленные на других телефонах) скачиваются в телефон. Запускается один раз.
+     */
+    fun startPeriodic(app: android.content.Context) {
+        if (!periodicStarted.compareAndSet(false, true)) return
+        val db = ProductDb.get(app)
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO).launch {
+            while (true) {
+                kotlinx.coroutines.delay(CATALOG_CHECK_MS)
+                if (Session.user == null) continue
+                try { runProducts(db, bgSync, true) } catch (e: Exception) { }
+            }
+        }
+    }
 
     suspend fun runProducts(db: ProductDb, st: SyncState, force: Boolean) {
         if (st.busy) return

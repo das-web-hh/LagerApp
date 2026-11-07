@@ -365,6 +365,8 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
     var original by remember { mutableStateOf<Product?>(null) }
     var name by remember { mutableStateOf("") }
     var article by remember { mutableStateOf("") }
+    var webArticle by remember { mutableStateOf("") }
+    var strohDialog by remember { mutableStateOf(false) }
     var barcode by remember { mutableStateOf("") }
     var weight by remember { mutableStateOf("") }
     var unit by remember { mutableStateOf("кг") }
@@ -394,7 +396,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
             val p = withContext(Dispatchers.IO) { db.getProduct(id) }
             if (p != null) {
                 original = p
-                name = p.name; article = p.article; barcode = p.barcode
+                name = p.name; article = p.article; webArticle = p.webArticle; barcode = p.barcode
                 weight = p.weight; unit = p.unit.ifBlank { "кг" }
                 pack = p.pack; manufacturer = p.manufacturer
                 photos.clear(); photos.addAll(p.photos)
@@ -473,6 +475,28 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(article, { article = it }, label = { Text("Артикул") }, readOnly = !canEdit,
             singleLine = true, modifier = Modifier.fillMaxWidth())
+        // второй уровень: артикул с сайта stroeh.de. Свой артикул (поле выше: ввод, скан, накладная) всегда главнее.
+        if (webArticle.isNotBlank()) {
+            Text(
+                "Артикул с сайта stroeh.de: $webArticle — " +
+                    if (article.isBlank()) "используется, пока нет своего артикула" else "запасной, главнее свой артикул",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        if (canEdit) Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { strohDialog = true }, modifier = Modifier.weight(1f)) {
+                Text(if (webArticle.isBlank()) "🔎 Найти артикул на stroeh.de" else "🔎 Найти другой на stroeh.de")
+            }
+            if (webArticle.isNotBlank()) TextButton(onClick = { webArticle = "" }) { Text("Убрать") }
+        }
+        if (strohDialog) {
+            StrohSearchDialog(
+                initialQuery = name,
+                onPick = { webArticle = it; strohDialog = false },
+                onDismiss = { strohDialog = false }
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(barcode, { barcode = it }, label = { Text("Штрих-код") }, readOnly = !canEdit,
@@ -528,7 +552,8 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
                         id = old?.id ?: UUID.randomUUID().toString(),
                         name = name.trim(), article = article.trim(), barcode = barcode.trim(),
                         weight = weight.trim().replace(',', '.'), unit = unit, pack = pack.trim(),
-                        manufacturer = manufacturer.trim(), photos = cur, updatedAt = 0L
+                        manufacturer = manufacturer.trim(), photos = cur, updatedAt = 0L,
+                        webArticle = webArticle.trim()
                     )
                     scope.launch(Dispatchers.IO) {
                         // группа могла измениться кнопками «Объединить»/«Отделить» уже после открытия карточки — берём свежую
@@ -620,7 +645,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
                                 }.padding(vertical = 6.dp)
                             ) {
                                 Text(c.name)
-                                val sub = listOf(c.article, c.barcode).filter { it.isNotBlank() }.joinToString(" · ")
+                                val sub = listOf(c.shownArticle, c.barcode).filter { it.isNotBlank() }.joinToString(" · ")
                                 if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
                             }
                             HorizontalDivider()

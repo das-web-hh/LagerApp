@@ -80,6 +80,17 @@ fun ProfileScreen(profile: UserProfile, prefs: Prefs, onLogout: () -> Unit, onBa
         }
 
         Spacer(Modifier.height(20.dp))
+        Text("Защита приложения", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "PIN-код, графический ключ, отпечаток. Приложение блокируется после 30 минут без действий.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { AppGuard.setupRequest = true }, enabled = me != null, modifier = Modifier.fillMaxWidth()) {
+            Text("Изменить PIN-код и ключ")
+        }
+
+        Spacer(Modifier.height(20.dp))
         Text("Быстрый вход", style = MaterialTheme.typography.titleMedium)
         Text(
             "Пароль хранится на этом телефоне в защищённом хранилище Android.",
