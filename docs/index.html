@@ -341,7 +341,7 @@ function printRep(){const mhd=v=>{const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec((v|
  'th,td{border:.35mm solid #000;text-align:center;vertical-align:middle;padding:0}th{background:#e6e6e6;font-size:9.5pt;height:9.5mm;font-weight:700}td{height:17.8mm}'+
  'td.n{font-size:13pt}td.a{font-size:11pt}td.t{text-align:left;font-size:10.5pt;line-height:1.25;padding:1.5mm 2.5mm;word-wrap:break-word;overflow-wrap:anywhere}td.q{font-size:13pt}td.m{font-size:11pt}'+
  '</style>'+
- '<h1>'+esc(S.name)+'</h1><div class=sub>'+dt+(USER?' · '+esc(USER):'')+'</div><table><thead><tr><th style="width:7.8%">Nr.</th><th style="width:14.9%">Artikel-Nr.</th><th style="width:23.9%">Artikelbezeichnung</th><th style="width:26.7%">EAN / Strichcode</th><th style="width:10%">Stück</th><th style="width:16.7%">MHD</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+ '<h1>'+esc(S.name)+'</h1><div class=sub>'+dt+(USER?' · '+esc(USER):'')+'</div><table><thead><tr><th style="width:7.8%">Nr.</th><th style="width:14.9%">Artikel-Nr.</th><th style="width:23.9%">Artikelbezeichnung</th><th style="width:26.7%">EAN</th><th style="width:10%">Stück</th><th style="width:16.7%">MHD</th></tr></thead><tbody>'+rows+'</tbody></table>'+
  ''+'</html>';
  const f=E('iframe');f.style.cssText='position:fixed;width:0;height:0;border:0';document.body.appendChild(f);f.srcdoc=h;f.onload=()=>{f.contentWindow.print();setTimeout(()=>f.remove(),60000)}}
 
