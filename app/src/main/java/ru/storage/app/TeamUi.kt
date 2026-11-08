@@ -207,6 +207,32 @@ private fun Conversation(me: AppUser, peer: AppUser, onBack: () -> Unit) {
     val list = remember(Live.msgs) { Live.msgs.filter { it.chatId == cid }.sortedBy { it.ts } }
     var text by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
+    var editFor by remember { mutableStateOf<ChatMsg?>(null) }
+    var editText by remember { mutableStateOf("") }
+    // администратор правит любое сообщение; автор — своё в течение 3 минут (сервер проверяет это сам)
+    fun canEdit(m: ChatMsg) = me.isAdmin || (m.from == me.login && System.currentTimeMillis() - m.ts < 3 * 60_000L - 5_000L)
+    if (Security.notice.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = { Security.notice = "" },
+            title = { Text("Внимание") },
+            text = { Text(Security.notice) },
+            confirmButton = { TextButton(onClick = { Security.notice = "" }) { Text("Понятно") } }
+        )
+    }
+    editFor?.let { m ->
+        AlertDialog(
+            onDismissRequest = { editFor = null },
+            title = { Text("Изменить сообщение") },
+            text = { OutlinedTextField(value = editText, onValueChange = { editText = it }, maxLines = 5) },
+            confirmButton = { TextButton(onClick = { if (Chat.edit(m.id, editText)) editFor = null }) { Text("Сохранить") } },
+            dismissButton = {
+                Row {
+                    if (me.isAdmin) TextButton(onClick = { Chat.delete(m.id); editFor = null }) { Text("Удалить") }
+                    TextButton(onClick = { editFor = null }) { Text("Отмена") }
+                }
+            }
+        )
+    }
 
     DisposableEffect(peer.login) {
         Chat.activePeer = peer.login
@@ -262,7 +288,7 @@ private fun Conversation(me: AppUser, peer: AppUser, onBack: () -> Unit) {
                         Surface(
                             shape = RoundedCornerShape(18.dp, 18.dp, if (mine) 4.dp else 18.dp, if (mine) 18.dp else 4.dp),
                             color = if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.widthIn(max = 290.dp)
+                            modifier = Modifier.widthIn(max = 290.dp).clickable(enabled = canEdit(m)) { editText = m.text; editFor = m }
                         ) {
                             Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
                                 Text(
@@ -292,8 +318,7 @@ private fun Conversation(me: AppUser, peer: AppUser, onBack: () -> Unit) {
                 onClick = {
                     val t = text.trim()
                     if (t.isNotEmpty()) {
-                        Chat.send(me, peer, t)
-                        text = ""
+                        if (Chat.send(me, peer, t)) text = ""
                     }
                 },
                 enabled = text.isNotBlank(),

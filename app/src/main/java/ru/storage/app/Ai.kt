@@ -84,6 +84,14 @@ object AiKeys {
 
     fun list(ctx: Context): List<AiKey> {
         migrate(ctx)
+        // у работников ключей ИИ на телефоне быть не должно: всё, что осталось от старых версий, стирается
+        if (Session.user != null && !Session.isAdmin) {
+            val p = sp(ctx)
+            if (p.getString("keys", "[]") != "[]" || p.contains("key")) {
+                p.edit().putString("keys", "[]").putString("active", "").remove("key").apply()
+            }
+            return emptyList()
+        }
         return fromJson(sp(ctx).getString("keys", "[]"))
     }
 
@@ -138,7 +146,7 @@ object AiCfg {
     fun attempts(ctx: Context): Int = sp(ctx).getInt("attempts", 3)
     fun rawModel(ctx: Context): String = (AiKeys.active(ctx)?.model ?: "").trim()
     fun model(ctx: Context): String = rawModel(ctx).ifBlank { defaultModel(provider(ctx)) }
-    fun ready(ctx: Context): Boolean = key(ctx).isNotEmpty()
+    fun ready(ctx: Context): Boolean = if (Session.isAdmin) key(ctx).isNotEmpty() else AiProxy.ready(ctx)
 
     fun defaultModel(provider: String): String = when (provider) {
         "gemini" -> "gemini-2.5-flash"
@@ -229,6 +237,8 @@ object Ai {
 
     /** Один запрос к ИИ: текст + (необязательно) картинка. Возвращает текст ответа. */
     fun call(ctx: Context, prompt: String, png: ByteArray?, json: Boolean = png != null): String {
+        // работники обращаются к ИИ только через Google-скрипт: ключа ИИ на их телефоне нет
+        if (!Session.isAdmin) return AiProxy.call(ctx, prompt, png, json)
         val provider = AiCfg.provider(ctx)
         val key = AiCfg.key(ctx)
         val model = AiCfg.model(ctx)

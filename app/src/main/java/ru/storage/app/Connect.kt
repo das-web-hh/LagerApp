@@ -176,8 +176,8 @@ object ConnCfg {
             "drive",
             JSONObject().put("url", DriveCfg.url(ctx)).put("folder", DriveCfg.folder(ctx)).put("token", DriveCfg.token(ctx))
         )
-        val ai = JSONObject().put("keys", JSONArray(AiKeys.toJson(AiKeys.list(ctx))))
-            .put("active", AiKeys.activeId(ctx))
+        // ключи ИИ в файл настроек не попадают (работники ходят к ИИ через скрипт)
+        val ai = JSONObject()
             .put("timeout", AiCfg.timeoutSec(ctx)).put("attempts", AiCfg.attempts(ctx))
             .put("template", AiCfg.templateMode(ctx))
         o.put("ai", ai)
@@ -219,8 +219,6 @@ object ConnCfg {
         }
         o.optJSONObject("drive")?.let { DriveCfg.save(ctx, it.optString("url"), it.optString("folder"), it.optString("token")) }
         o.optJSONObject("ai")?.let { ai ->
-            val keys = AiKeys.fromJson(ai.optJSONArray("keys")?.toString())
-            if (keys.isNotEmpty()) AiKeys.replaceAll(ctx, keys, ai.optString("active"))
             AiCfg.saveCommon(ctx, ai.optInt("timeout", AiCfg.timeoutSec(ctx)), ai.optInt("attempts", AiCfg.attempts(ctx)))
             if (ai.has("template")) AiCfg.setTemplateMode(ctx, ai.optBoolean("template", false))
         }

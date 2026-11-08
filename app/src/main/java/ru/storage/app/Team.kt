@@ -22,11 +22,12 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Transaction
 import java.security.MessageDigest
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 /*
  * Firestore:
- *  users/{email}: name, login, email, position, role (admin|worker), status (pending|active), passHash, createdAt
+ *  users/{email}: name, login, email, position, role (admin|worker), status (pending|active), createdAt, strikes (нарушения: 2 = блок)
  *  config/admin: login (email администратора), createdAt — есть документ = одноразовый вход admin/admin уже удалён
  *  tasks/{id}: title, text, type (app|text|approve), action (receive|paket|wagen), assignee, assigneeName, assigneePos,
  *              createdBy, createdByName, createdAt, status (open|done), doneAt, doneAuto, doneByName, target
@@ -66,43 +67,6 @@ object Users {
 
     fun key(login: String): String = login.trim().lowercase().replace('/', '_')
 
-    /** Старый формат (SHA-256 без соли и повторов) — только для проверки уже сохранённых паролей. */
-    private fun legacyHash(login: String, pw: String): String {
-        val d = MessageDigest.getInstance("SHA-256").digest("lager:${key(login)}:$pw".toByteArray(Charsets.UTF_8))
-        return d.joinToString("") { "%02x".format(it) }
-    }
-
-    private const val PBKDF2_ITER = 120_000
-
-    private fun pbkdf2(pw: String, salt: ByteArray, iter: Int): ByteArray =
-        javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-            .generateSecret(javax.crypto.spec.PBEKeySpec(pw.toCharArray(), salt, iter, 256)).encoded
-
-    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
-    private fun unhex(s: String) = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
-
-    /** Новый хэш пароля: PBKDF2-HMAC-SHA256, случайная соль, формат «p1$повторы$соль$хэш». */
-    fun hash(login: String, pw: String): String {
-        val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-        return "p1$$PBKDF2_ITER$${hex(salt)}$${hex(pbkdf2(pw, salt, PBKDF2_ITER))}"
-    }
-
-    private fun verifyOne(login: String, pw: String, stored: String?): Boolean {
-        if (stored.isNullOrEmpty()) return false
-        if (stored.startsWith("p1$")) {
-            val p = stored.split('$')
-            if (p.size != 4) return false
-            return try {
-                MessageDigest.isEqual(pbkdf2(pw, unhex(p[2]), p[1].toInt()), unhex(p[3]))
-            } catch (e: Exception) { false }
-        }
-        return MessageDigest.isEqual(stored.toByteArray(), legacyHash(login, pw).toByteArray())
-    }
-
-    /** Проверка пароля (с пробелами и без) по новому или старому формату хэша. */
-    fun verify(login: String, pw: String, stored: String?): Boolean =
-        verifyOne(login, pw, stored) || verifyOne(login, pw.trim(), stored)
-
     fun validEmail(e: String): Boolean = Regex("^[^@\\s/]+@[^@\\s/]+\\.[^@\\s/]{2,}$").matches(e.trim())
 
     private fun DocumentSnapshot.toUser(): AppUser? {
@@ -115,7 +79,7 @@ object Users {
             status = getString("status") ?: "pending",
             email = getString("email") ?: if (id.contains('@')) id else "",
             sess = getLong("sess") ?: 0L,
-            blocked = getBoolean("blocked") ?: false
+            blocked = (getBoolean("blocked") ?: false) || (getLong("strikes") ?: 0L) >= 2L
         )
     }
 
@@ -136,9 +100,7 @@ object Users {
     }
 
     /**
-     * Вход. Пароли хранит Firebase Authentication, а не наша база.
-     * Работник, который ещё не переведён со старой схемы (users.passHash), проверяется по старому хэшу
-     * один раз и получает аккаунт Firebase с тем же паролем.
+     * Вход. Пароли хранит только Firebase Authentication. Хэшей паролей в нашей базе и на телефоне нет.
      */
     suspend fun signIn(login: String, pw: String): AuthResult {
         val k = key(login)
@@ -154,7 +116,7 @@ object Users {
             } catch (e: com.google.firebase.auth.FirebaseAuthInvalidCredentialsException) {
                 null
             }
-            if (signed != null) afterAuth(k, signed) else migrateLegacy(k, p)
+            if (signed != null) afterAuth(k, signed) else AuthResult.Fail("Неверный пароль или Email")
         } catch (e: Exception) {
             AuthResult.Fail(authText(e))
         }
@@ -173,14 +135,12 @@ object Users {
         val ref = fs.collection("users").document(k)
         val snap = ref.get().awaitIt()
         if (!snap.exists()) return createProfile(k, u)
-        if (snap.getBoolean("blocked") == true) {
+        if (snap.getBoolean("blocked") == true || (snap.getLong("strikes") ?: 0L) >= 2L) {
             fa.signOut()
-            return AuthResult.Fail("Доступ заблокирован администратором")
+            return AuthResult.Fail("Доступ заблокирован. Обратитесь к администратору")
         }
-        // старый хэш пароля больше не нужен — удаляем из базы
-        if (snap.contains("passHash")) {
-            try { ref.update("passHash", FieldValue.delete()).awaitIt() } catch (e: Exception) { }
-        }
+        // администратор при входе вычищает остатки старых хэшей паролей из базы
+        if (snap.getString("role") == "admin") purgeLegacyHashes()
         return AuthResult.Ok(snap.toUser()!!)
     }
 
@@ -199,33 +159,6 @@ object Users {
         ).awaitIt()
         if (admin != null) Tasks.createApproval(k, n, now, admin)
         return AuthResult.Ok(AppUser(k, n, "", "worker", "pending"))
-    }
-
-    /** Старая схема: пароль проверяется по users.passHash, затем аккаунт переносится в Firebase Auth с тем же паролем. */
-    private suspend fun migrateLegacy(k: String, p: String): AuthResult {
-        val snap = try {
-            fs.collection("users").document(k).get().awaitIt()
-        } catch (e: com.google.firebase.firestore.FirebaseFirestoreException) {
-            // переходный период закончен (правила закрыты): старой схемы больше нет
-            if (e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED)
-                return AuthResult.Fail("Неверный пароль или Email")
-            throw e
-        }
-        if (!snap.exists()) return AuthResult.Fail("Аккаунт «$k» не найден. Проверьте Email или зарегистрируйтесь")
-        val stored = snap.getString("passHash")
-        if (stored.isNullOrEmpty() || !verify(k, p, stored)) return AuthResult.Fail("Неверный пароль")
-        if (snap.getBoolean("blocked") == true) return AuthResult.Fail("Доступ заблокирован администратором")
-        if (p.length < 6) return AuthResult.Fail("Пароль короче 6 символов: новая система входа его не принимает. Обратитесь к администратору")
-        return try {
-            val created = fa.createUserWithEmailAndPassword(k, p).awaitIt().user ?: return AuthResult.Fail(NO_NET)
-            try { created.sendEmailVerification().awaitIt() } catch (e: Exception) { }
-            fa.signOut()
-            AuthResult.Notice("Ваш аккаунт переведён на новую систему входа. Мы отправили письмо со ссылкой на $k — откройте её и войдите снова тем же паролем")
-        } catch (e: com.google.firebase.auth.FirebaseAuthUserCollisionException) {
-            // аккаунт Firebase уже есть, но пароль не подошёл: письмо для установки пароля заодно подтверждает Email
-            try { fa.sendPasswordResetEmail(k).awaitIt() } catch (e2: Exception) { }
-            AuthResult.Notice("Мы отправили письмо со ссылкой для установки пароля на $k. Откройте её и войдите с новым паролем")
-        }
     }
 
     /** Шаг 1 регистрации: формат Email. Занят ли он, выяснится при создании аккаунта. */
@@ -333,8 +266,24 @@ object Users {
     }
 
     /** Заблокировать / разблокировать: заблокированный сразу выходит и не может войти. */
+    /** Удаляет поле passHash у всех профилей (только администратор). Хэши паролей не должны лежать в базе. */
+    private suspend fun purgeLegacyHashes() {
+        try {
+            val all = fs.collection("users").get().awaitIt()
+            for (d in all.documents) {
+                if (d.contains("passHash")) {
+                    try { d.reference.update("passHash", FieldValue.delete()).awaitIt() } catch (e: Exception) { }
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
     fun setBlocked(login: String, blocked: Boolean) {
-        fs.collection("users").document(login).update(mapOf("blocked" to blocked, "sess" to FieldValue.increment(1)))
+        val m = hashMapOf<String, Any>("blocked" to blocked, "sess" to FieldValue.increment(1))
+        // снять блок может только администратор: заодно обнуляется счётчик нарушений
+        if (!blocked) { m["strikes"] = 0L; m["lastStrike"] = "" }
+        fs.collection("users").document(login).update(m)
         Journal.log("Система", (if (blocked) "Заблокирован: " else "Разблокирован: ") + login)
     }
 }
@@ -480,16 +429,33 @@ object Chat {
 
     fun chatId(a: String, b: String): String = listOf(a, b).sorted().joinToString("|")
 
-    fun send(me: AppUser, peer: AppUser, text: String) {
+    /** true — сообщение отправлено; false — текст не принят (причина в Security.notice). */
+    fun send(me: AppUser, peer: AppUser, text: String): Boolean {
+        val t = Security.checkText(text) ?: return false
         val id = UUID.randomUUID().toString()
         fs.collection("chat").document(id).set(
             hashMapOf<String, Any>(
                 "chatId" to chatId(me.login, peer.login),
                 "participants" to listOf(me.login, peer.login),
                 "from" to me.login, "fromName" to me.name, "to" to peer.login,
-                "text" to text, "ts" to System.currentTimeMillis()
+                "text" to t, "ts" to System.currentTimeMillis(),
+                // время ставит сервер: по нему правила проверяют «правка в течение 3 минут»
+                "createdAt" to FieldValue.serverTimestamp()
             )
         )
+        return true
+    }
+
+    /** Правка текста: администратор — всегда, автор — только первые 3 минуты (проверяют правила Firestore). */
+    fun edit(id: String, text: String): Boolean {
+        val t = Security.checkText(text) ?: return false
+        fs.collection("chat").document(id).update(mapOf("text" to t, "editedAt" to FieldValue.serverTimestamp()))
+        return true
+    }
+
+    /** Удаление сообщения — только администратор. */
+    fun delete(id: String) {
+        fs.collection("chat").document(id).delete()
     }
 
     private fun DocumentSnapshot.toMsg(): ChatMsg = ChatMsg(
@@ -513,6 +479,62 @@ object Chat {
     fun markRead(ctx: Context, peer: String) {
         sp(ctx).edit().putLong("${Session.user?.login}_$peer", System.currentTimeMillis() + 1000L).apply()
         Live.readVersion++
+    }
+}
+
+/**
+ * Защита записи: принимается только текст. Подозрительный ввод (управляющие/бинарные символы) не записывается:
+ * первый раз — предупреждение, второй раз — профиль блокируется (правила Firestore перестают пускать его к данным),
+ * оба случая уходят администратору задачей «Безопасность». Снять блок может только администратор.
+ */
+object Security {
+    var notice by mutableStateOf("")
+    const val MAX_TEXT = 2000
+
+    /** Очищенный текст или null (тогда в notice — причина). */
+    fun checkText(raw: String): String? {
+        val t = raw.trim()
+        if (t.isEmpty()) return null
+        if (t.length > MAX_TEXT) {
+            notice = "Сообщение слишком длинное (максимум $MAX_TEXT символов)."
+            return null
+        }
+        if (t.any { it.isISOControl() && it != '\n' && it != '\r' && it != '\t' }) {
+            strike("Попытка записать не-текст (управляющие символы)")
+            return null
+        }
+        return t
+    }
+
+    /** Фиксирует нарушение. Не вызывать для обычных сетевых ошибок и отказов правил. */
+    fun strike(reason: String) {
+        val me = Session.user ?: return
+        val fs = FirebaseFirestore.getInstance()
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO).launch {
+            try {
+                val ref = fs.collection("users").document(me.login)
+                val n = (ref.get().awaitIt().getLong("strikes") ?: 0L) + 1L
+                val now = System.currentTimeMillis()
+                val admin = fs.collection("config").document("admin").get().awaitIt().getString("login")
+                // сначала сообщение администратору (пока профиль ещё активен), потом счётчик
+                if (admin != null) {
+                    fs.collection("tasks").document("sec_${me.login}_$now").set(
+                        hashMapOf<String, Any>(
+                            "title" to "Безопасность: ${me.name}",
+                            "text" to "$reason. Нарушение №$n" + if (n >= 2) " — профиль заблокирован" else " — предупреждение",
+                            "type" to "security", "action" to "",
+                            "assignee" to admin, "assigneeName" to Users.ADMIN_NAME, "assigneePos" to Users.ADMIN_NAME,
+                            "createdBy" to me.login, "createdByName" to me.name, "createdAt" to now,
+                            "status" to "open", "doneAt" to 0L, "doneAuto" to false, "doneByName" to "", "target" to me.login
+                        )
+                    ).awaitIt()
+                }
+                ref.update(mapOf("strikes" to n, "lastStrike" to reason.take(200))).awaitIt()
+                notice = if (n >= 2L) "Ваш профиль заблокирован за повторную подозрительную запись. Администратор уведомлён. Снять блок может только администратор."
+                else "Предупреждение: записать можно только текст. При повторе профиль будет заблокирован, администратор уже уведомлён."
+            } catch (e: Exception) {
+            }
+        }
     }
 }
 

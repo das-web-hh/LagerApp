@@ -93,6 +93,7 @@ object CloudSettings {
             } catch (e: Exception) {
             }
         }
+        if (!Session.isAdmin) AiProxy.pull(ctx)
         val snap = docRef().get().awaitIt()
         val local = sp(ctx).getLong("updated", 0L)
         if (!snap.exists()) {
@@ -540,6 +541,23 @@ fun AiSettings(onBack: () -> Unit) {
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("＋ Добавить ключ") }
+
+        Spacer(Modifier.height(16.dp))
+        Text("ИИ для работников", style = MaterialTheme.typography.titleMedium)
+        var proxyUrl by remember { mutableStateOf(AiProxy.url(ctx)) }
+        OutlinedTextField(
+            proxyUrl, { proxyUrl = it.trim() }, singleLine = true,
+            label = { Text("Адрес Google-скрипта ИИ (…/exec)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            "Работники отправляют запросы ИИ через этот скрипт. Ключ ИИ хранится только в скрипте и на телефоны работников не попадает.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        OutlinedButton(
+            onClick = { AiProxy.publish(ctx, proxyUrl); msg = "Адрес скрипта сохранён для работников" },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Сохранить адрес для работников") }
 
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
