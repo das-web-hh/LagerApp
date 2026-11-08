@@ -68,6 +68,7 @@ object CloudSettings {
             "dateSimple" to DateCfg.simple,
             "autoPaused" to AutoPause.paused,
             "fileSwipe" to FileNavCfg.dir.toLong(),
+            "articlePriority" to SiteCfg.code,
             "updatedAt" to ts
         )
         // Google Диск настраивает только администратор; у остальных этих полей в аккаунте нет
@@ -117,6 +118,7 @@ object CloudSettings {
             DateCfg.applyCloud(ctx, snap.getBoolean("dateSimple"))
             AutoPause.applyCloud(ctx, snap.getBoolean("autoPaused"))
             FileNavCfg.applyCloud(ctx, snap.getLong("fileSwipe"))
+            SiteCfg.applyCloud(ctx, snap.getString("articlePriority"))
             sp(ctx).edit().putLong("updated", remote).apply()
             return true
         }
@@ -135,6 +137,8 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Сканер" -> ScannerSettings(prefs) { section = null }
         "Сканер документов" -> DocScanSettings { section = null }
         "Google Диск" -> DriveSettings(prefs) { section = null }
+        "Артикулы и сайт" -> SiteSettings(prefs) { section = null }
+        "Порядок данных" -> OrganizerSettings { section = null }
         "Подключения" -> ConnectionSettings { section = null }
         "Чтение Excel" -> ExcelSettings { section = null }
         "Распознавание документов" -> AiSettings { section = null }
@@ -157,6 +161,8 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Сканер" to "Камера, типы штрих-кодов",
         "Сканер документов" to "Снимок листов: сканер Google или наш (для сшитых листов)",
         "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
+        "Артикулы и сайт" to "Приоритетный артикул: с сайта stroeh.de или из системы",
+        "Порядок данных" to "Разложить данные и файлы по своим папкам и базам, убрать дубли",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
         "Подключения" to "Firebase, EmailJS, сохранить и загрузить все настройки файлом",
         "Чтение Excel" to "Как находить столбцы названия и количества: приложение само или ИИ",
@@ -166,7 +172,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Рабочее время" to "Учёт по геолокации, зона подхода, полные и короткие дни",
         "Доступ по месту и времени" to "Рабочая точка, радиус (5 км) и часы, вне которых у сотрудников приложение закрыто"
     ).filter {
-        Session.isAdmin || it.first !in setOf("Google Диск", "Распознавание документов", "Подключения", "Доступ по месту и времени")
+        Session.isAdmin || it.first !in setOf("Google Диск", "Распознавание документов", "Подключения", "Доступ по месту и времени", "Порядок данных")
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
@@ -308,6 +314,97 @@ private fun ScannerSettings(prefs: Prefs, onBack: () -> Unit) {
                 )
                 Text(name)
             }
+        }
+    }
+}
+
+
+/** Переключатель «Приоритетный артикул»: с сайта stroeh.de или из системы. */
+@Composable
+private fun SiteSettings(prefs: Prefs, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    BackHandler(onBack = onBack)
+    LaunchedEffect(Unit) {
+        try { CloudSettings.pull(ctx, prefs) } catch (e: Exception) { }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Артикулы и сайт", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "У одного товара может быть свой артикул (из системы: ввод, скан, накладная, Excel) и артикул с сайта stroeh.de. " +
+                "Здесь выбирается, какой из них главный — он показывается в подсказках, списках и печати. Если главного нет, берётся второй.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Приоритетный артикул", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (SiteCfg.siteFirst) "Сейчас: с сайта stroeh.de" else "Сейчас: из системы",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Switch(checked = SiteCfg.siteFirst, onCheckedChange = {
+                SiteCfg.set(ctx, it)
+                CloudSettings.save(ctx, prefs)
+            })
+        }
+        Text(
+            "Выключено — из системы · Включено — с сайта",
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp)
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Если артикулы товара в каталоге и на сайте совпали, в окне подсказок они показываются одной строкой с одним именем " +
+                "(при «с сайта» — имя с сайта, при «из системы» — имя из каталога) и запоминаются как связанные. " +
+                "Свайп по подсказке слева направо открывает фото товара, справа налево — закрывает.",
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+/** «Порядок данных»: один проход по базе, файлам телефона и папкам Google Диска. */
+@Composable
+private fun OrganizerSettings(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var step by remember { mutableStateOf("") }
+    var report by remember { mutableStateOf(emptyList<String>()) }
+    BackHandler(enabled = !busy, onBack = onBack)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Text("Порядок данных", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Приложение само раскладывает по своим местам: карточки товаров (без лишних пробелов, одинаковые артикулы привязаны), " +
+                "очередь отправки и лишние файлы на телефоне, а на Google Диске — файлы по папкам без перемешивания:",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(6.dp))
+        Organizer.FOLDERS.forEach { (_, folder) -> Text("• $folder", style = MaterialTheme.typography.bodySmall) }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Новые файлы сразу попадают в свою папку (нужен обновлённый Code.gs). Дубли с одинаковым именем уходят в корзину Диска, " +
+                "ничего не стирается насовсем.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(enabled = !busy, onClick = {
+            busy = true; report = emptyList(); step = "Начинаю…"
+            scope.launch {
+                report = try { Organizer.run(ctx) { step = it } } catch (e: Exception) { listOf("Ошибка: ${e.message}") }
+                busy = false; step = ""
+            }
+        }) { Text(if (busy) "Работаю…" else "Навести порядок") }
+        if (busy) {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text(step, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+        }
+        if (report.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text("Готово:", style = MaterialTheme.typography.titleSmall)
+            report.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
         }
     }
 }

@@ -205,7 +205,34 @@ object ProductGroups {
             }
         }
         if (changed > 0) Journal.log("Каталог", "Объединены одинаковые товары, изменено карточек: $changed")
-        return changed
+        return changed + linkByArticle(db)
+    }
+
+    /**
+     * Совпал артикул (свой или с сайта, без учёта регистра, пробелов и дефисов) — это один товар: названия привязываются друг к другу.
+     * Не склеиваем: вручную отделённые («apart») и товары с разным весом/объёмом упаковки. Возвращает, сколько карточек затронуто.
+     */
+    fun linkByArticle(db: ProductDb): Int {
+        val all = db.allProducts()
+        if (all.size < 2) return 0
+        val byArt = HashMap<String, MutableList<Product>>()
+        for (p in all) {
+            listOf(p.article, p.webArticle).map { SiteSearch.norm(it) }.filter { it.length >= 3 }.distinct()
+                .forEach { byArt.getOrPut(it) { mutableListOf() }.add(p) }
+        }
+        var touched = 0
+        for ((_, list) in byArt) {
+            val uniq = list.distinctBy { it.id }
+            if (uniq.size < 2) continue
+            if (uniq.any { x -> uniq.any { y -> y.id in x.apart } }) continue
+            val sizes = uniq.mapNotNull { ProductMatch.sigOfProduct(it).size }.distinct()
+            if (sizes.size > 1) continue
+            val groups = uniq.map { it.groupId }.distinct()
+            if (groups.size == 1 && groups[0].isNotBlank()) continue
+            merge(db, uniq.map { it.id })
+            touched += uniq.size
+        }
+        return touched
     }
 
     // ---------- ручные действия ----------

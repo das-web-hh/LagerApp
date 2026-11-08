@@ -292,7 +292,7 @@ private fun ListSearchField(
 @Composable
 private fun SuggestionsCard(
     hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier, maxH: Dp = 280.dp, compact: Boolean = false,
-    products: List<Product> = emptyList(), onPickProduct: (Product) -> Unit = {}
+    products: List<Suggest> = emptyList(), siteBusy: Boolean = false, onPickProduct: (Suggest) -> Unit = {}
 ) {
     // свой цвет и рамка — чтобы окно подсказок отличалось от основного списка
     Card(
@@ -306,7 +306,7 @@ private fun SuggestionsCard(
         border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
     ) {
         if (hits.isEmpty() && products.isEmpty()) {
-            Text("Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+            Text(if (siteBusy) "Ищу на stroeh.de…" else "Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
         } else {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 hits.forEachIndexed { i, r ->
@@ -347,22 +347,14 @@ private fun SuggestionsCard(
                 if (products.isNotEmpty()) {
                     if (hits.isNotEmpty()) HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                     Text(
-                        "Из каталога", Modifier.padding(start = 14.dp, top = 8.dp), style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        "Каталог и сайт stroeh.de (свайп вправо — фото)", Modifier.padding(start = 14.dp, top = 8.dp),
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary
                     )
-                    products.forEachIndexed { i, p ->
-                        Column(
-                            Modifier.fillMaxWidth().clickable { onPickProduct(p) }.padding(horizontal = 14.dp, vertical = 10.dp)
-                        ) {
-                            Text(p.name, fontWeight = FontWeight.Medium, fontSize = 16.sp, lineHeight = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            val sub = listOf(
-                                if (p.article.isNotBlank()) "арт. ${p.article}" else "",
-                                if (p.barcode.isNotBlank()) "ШК ${p.barcode}" else ""
-                            ).filter { it.isNotEmpty() }.joinToString(" · ")
-                            if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
-                        }
+                    products.forEachIndexed { i, sg ->
+                        SuggestRow(sg, onClick = { onPickProduct(sg) })
                         if (i < products.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                     }
+                    SiteBusyLine(siteBusy)
                 }
             }
         }
@@ -518,6 +510,13 @@ fun CountWheelList(
         }.filter { p ->
             rows.none { r -> (r.productId.isNotEmpty() && r.productId == p.id) || r.name.trim().equals(p.name.trim(), true) }
         }
+    }
+
+    // сайт stroeh.de по названию и артикулу; совпал артикул с каталогом — одна подсказка с одним именем
+    val siteSug = rememberSiteSuggest(query, catHits, enabled = onPickProduct != null && nameMode)
+    val siteScope = rememberCoroutineScope()
+    val suggestItems = siteSug.items.filter { sg ->
+        rows.none { r -> (sg.product != null && r.productId.isNotEmpty() && r.productId == sg.product.id) || r.name.trim().equals(sg.name.trim(), true) }
     }
 
     // ---- внешний сканер, который «печатает» в поле поиска: быстрые символы подряд ----
@@ -771,14 +770,29 @@ fun CountWheelList(
             }
             // «Приём по имени»: подсказки появляются с третьей буквы и остаются, пока есть похожие названия
             // или пока не нажали на название (в подсказках или в списке); без совпадений окно скрывается
-            val showSuggestions = if (nameMode) query.trim().length >= 3 && (hits.isNotEmpty() || catHits.isNotEmpty()) else query.isNotBlank()
+            val showSuggestions = if (nameMode) query.trim().length >= 3 && (hits.isNotEmpty() || catHits.isNotEmpty() || suggestItems.isNotEmpty() || siteSug.busy) else query.isNotBlank()
             if (showSuggestions) {
                 SuggestionsCard(
                     hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter),
                     maxH = if (nameMode) 336.dp else 280.dp, compact = nameMode,
-                    products = catHits,
-                    onPickProduct = { p ->
-                        onPickProduct?.invoke(p)
+                    products = suggestItems,
+                    siteBusy = siteSug.busy,
+                    onPickProduct = { sg ->
+                        val p = sg.product
+                        if (p != null) {
+                            siteScope.launch(Dispatchers.IO) { SiteSearch.bind(appCtx, sg) }
+                            onPickProduct?.invoke(p)
+                        } else siteScope.launch {
+                            // товар только с сайта: название и артикул со страницы товара (без записи в каталог)
+                            val info = SiteSearch.infoOf(appCtx, sg)
+                            val n = (info?.name ?: "").ifBlank { sg.hit?.name.orEmpty() }.trim()
+                            if (n.isNotEmpty()) {
+                                val known = withContext(Dispatchers.IO) { ProductDb.get(appCtx).findByName(n) }
+                                onPickProduct?.invoke(
+                                    known ?: Product("", n, "", "", "", "", "", "", emptyList(), 0L, webArticle = info?.article.orEmpty())
+                                )
+                            }
+                        }
                         query = ""
                         focusManager.clearFocus()
                         keyboard?.hide()

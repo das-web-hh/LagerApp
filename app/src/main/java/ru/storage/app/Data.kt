@@ -31,8 +31,8 @@ data class Product(
      */
     val webArticle: String = ""
 ) {
-    /** Артикул для показа и печати: свой, а если его нет — с сайта. */
-    val shownArticle: String get() = article.trim().ifEmpty { webArticle.trim() }
+    /** Артикул для показа и печати: по настройке «Приоритетный артикул» — из системы или с сайта; нет главного — второй. */
+    val shownArticle: String get() = SiteCfg.pick(article, webArticle)
 }
 
 /** qty — фактическое количество; plan — по документу ("" если плана нет), defect — брак ("" если нет). */

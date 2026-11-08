@@ -64,6 +64,7 @@ function doGet(e) {
     if (action === 'stroehsearch') return json_(stroehSearch_(params.q));
     if (action === 'stroehart') return json_(stroehArticle_(params.url));
     var folder = getFolder_(params.folderId);
+    if (action === 'organize') return organize_(params);
 
     if (action === 'ping') {
       return json_({
@@ -88,7 +89,8 @@ function doGet(e) {
     // Android: страница списка файлов, новые сверху (pageSize, pageToken)
     if (action === 'page') {
       var size = Math.min(Math.max(parseInt(params.pageSize, 10) || 10, 1), 200);
-      var q = "'" + folder.getId() + "' in parents and trashed=false" +
+      var parents = treeFolders_(folder).map(function (f) { return "'" + f.getId() + "' in parents"; });
+      var q = '(' + parents.join(' or ') + ') and trashed=false' +
         " and mimeType != 'application/vnd.google-apps.folder'";
       var url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) +
         '&orderBy=' + encodeURIComponent('createdTime desc') +
@@ -110,9 +112,8 @@ function doGet(e) {
     if (action === 'get') {
       var name = String(params.name || '').trim();
       if (!name) throw new Error('Не указано имя файла.');
-      var found = folder.getFilesByName(name);
-      if (!found.hasNext()) return json_({ok: false, error: 'not_found'});
-      var f = found.next();
+      var f = findOne_(folder, name);
+      if (!f) return json_({ok: false, error: 'not_found'});
       return json_({
         ok: true,
         name: f.getName(),
@@ -125,9 +126,8 @@ function doGet(e) {
     if (action === 'getchunk') {
       var cname = String(params.name || '').trim();
       if (!cname) throw new Error('Не указано имя файла.');
-      var cfound = folder.getFilesByName(cname);
-      if (!cfound.hasNext()) return json_({ok: false, error: 'not_found'});
-      var cfile = cfound.next();
+      var cfile = findOne_(folder, cname);
+      if (!cfile) return json_({ok: false, error: 'not_found'});
       var csize = cfile.getSize();
       var offset = Math.max(parseInt(params.offset, 10) || 0, 0);
       var length = Math.min(Math.max(parseInt(params.length, 10) || 1048576, 1), 2097152);
@@ -153,6 +153,120 @@ function doGet(e) {
   } catch (error) {
     return json_({ok: false, error: errorMessage_(error)});
   }
+}
+
+
+// ───────────── порядок на Диске: каждому виду файлов — своя папка ─────────────
+// Файл попадает в подпапку рабочей папки по началу имени. Имена приложение не меняет, поэтому поиск, скачивание и удаление
+// по имени работают как раньше: сначала в корне, затем во всех подпапках. Старый Code.gs без этого блока тоже работает (плоская папка).
+var FOLDER_RULES_ = [
+  {prefix: 'PR-S', path: ['Товары', 'Фото с сайта']},
+  {prefix: 'PR-', path: ['Товары', 'Фото']},
+  {prefix: 'RC-', path: ['Приёмки']},
+  {prefix: 'IN-', path: ['Накладные']},
+  {prefix: 'BW-', path: ['B-Ware']},
+  {prefix: 'BATCH', path: ['Партии']},
+  {prefix: 'CATALOG', path: ['Партии']}
+];
+
+function folderPathFor_(fileName) {
+  var n = String(fileName || '');
+  for (var i = 0; i < FOLDER_RULES_.length; i++) {
+    if (n.indexOf(FOLDER_RULES_[i].prefix) === 0) return FOLDER_RULES_[i].path;
+  }
+  return null; // прочее остаётся в корне
+}
+
+function childFolder_(parent, name) {
+  var it = parent.getFoldersByName(name);
+  while (it.hasNext()) {
+    var f = it.next();
+    if (!f.isTrashed()) return f;
+  }
+  return parent.createFolder(name);
+}
+
+// Папка, куда кладётся файл с таким именем (создаётся при первой загрузке).
+function targetFolder_(root, fileName) {
+  var path = folderPathFor_(fileName);
+  if (!path) return root;
+  var f = root;
+  for (var i = 0; i < path.length; i++) f = childFolder_(f, path[i]);
+  return f;
+}
+
+// Все папки, где ищем файлы: корень и подпапки из правил (до 2 уровней), без служебных QR-папок.
+function treeFolders_(root) {
+  var out = [root];
+  var seen = {};
+  seen[root.getId()] = true;
+  var it = root.getFolders();
+  while (it.hasNext()) {
+    var f = it.next();
+    if (f.isTrashed() || f.getName().indexOf('QR-') === 0) continue;
+    if (seen[f.getId()]) continue;
+    seen[f.getId()] = true;
+    out.push(f);
+    var it2 = f.getFolders();
+    while (it2.hasNext()) {
+      var g = it2.next();
+      if (g.isTrashed() || seen[g.getId()]) continue;
+      seen[g.getId()] = true;
+      out.push(g);
+    }
+  }
+  return out;
+}
+
+// Файл по имени: сначала корень, затем подпапки. null — нет.
+function findOne_(root, name) {
+  var folders = treeFolders_(root);
+  for (var i = 0; i < folders.length; i++) {
+    var it = folders[i].getFilesByName(name);
+    while (it.hasNext()) {
+      var f = it.next();
+      if (!f.isTrashed()) return f;
+    }
+  }
+  return null;
+}
+
+// Android: разложить файлы корня по подпапкам и убрать дубли с одинаковым именем (в корзину).
+// За вызов — не больше 120 файлов; приложение вызывает, пока left > 0.
+function organize_(payload) {
+  var root = getFolder_(payload.folderId);
+  var moved = 0, dups = 0, left = 0, budget = 120;
+  var made = {};
+  var it = root.getFiles();
+  var rootNames = {};
+  var pending = [];
+  while (it.hasNext()) {
+    var f = it.next();
+    if (f.isTrashed()) continue;
+    pending.push(f);
+  }
+  for (var i = 0; i < pending.length; i++) {
+    var file = pending[i];
+    var name = file.getName();
+    var path = folderPathFor_(name);
+    if (!path) continue;
+    if (budget <= 0) { left++; continue; }
+    var target = targetFolder_(root, name);
+    made[target.getId()] = true;
+    // такой файл уже лежит в своей папке — это дубль
+    var same = target.getFilesByName(name);
+    var dupFound = false;
+    while (same.hasNext()) {
+      var other = same.next();
+      if (!other.isTrashed() && other.getId() !== file.getId()) { dupFound = true; break; }
+    }
+    if (dupFound) { file.setTrashed(true); dups++; budget--; continue; }
+    file.moveTo(target);
+    moved++; budget--;
+  }
+  var folders = 0;
+  for (var k in made) folders++;
+  return json_({ok: true, moved: moved, dups: dups, left: left, folders: folders});
 }
 
 function readBatch_(code) {
@@ -328,27 +442,28 @@ function doPost(e) {
     if (action === 'delete') return deleteByName_(payload);
     if (action === 'init') return initResumable_(payload);
     if (action === 'mkshare') return makeShare_(payload);
+    if (action === 'organize') return organize_(payload);
     if (action !== 'upload') {
       return json_({ok: false, error: 'Неизвестное действие: ' + action});
     }
 
-    var folder = getFolder_(payload.folderId);
+    var root = getFolder_(payload.folderId);
     var fileName = safeFileName_(payload.fileName);
     var mimeType = String(payload.mimeType || 'application/octet-stream');
     var base64 = String(payload.contentBase64 || '');
     if (!base64) throw new Error('Пустое содержимое файла.');
 
-    // Повторная отправка того же файла (например, после обрыва связи) не создаёт дубль
+    // Повторная отправка того же файла (например, после обрыва связи) не создаёт дубль — ни в корне, ни в подпапках
     if (payload.skipIfExists === true || String(payload.skipIfExists).toLowerCase() === 'true') {
-      var existing = folder.getFilesByName(fileName);
-      if (existing.hasNext()) {
-        return json_({ok: true, file: fileInfo_(existing.next()), message: 'Файл уже есть.'});
+      var existing = findOne_(root, fileName);
+      if (existing) {
+        return json_({ok: true, file: fileInfo_(existing), message: 'Файл уже есть.'});
       }
     }
 
     var bytes = Utilities.base64Decode(base64);
     var blob = Utilities.newBlob(bytes, mimeType, fileName);
-    var file = folder.createFile(blob);
+    var file = targetFolder_(root, fileName).createFile(blob); // своя папка по виду файла
 
     if (payload.makePublic === true || String(payload.makePublic).toLowerCase() === 'true') {
       try {
@@ -386,15 +501,16 @@ function makeShare_(payload) {
 // сами данные телефон отправляет в Google напрямую кусками по 4 МБ (с докачкой при обрыве) —
 // ни тело запроса, ни память скрипта, ни память телефона размером файла не ограничены.
 function initResumable_(payload) {
-  var folder = getFolder_(payload.folderId);
+  var root = getFolder_(payload.folderId);
   var fileName = safeFileName_(payload.fileName);
+  var folder = targetFolder_(root, fileName); // своя папка по виду файла
   var mimeType = String(payload.mimeType || 'application/octet-stream');
   var size = parseInt(payload.size, 10) || 0;
 
   if (payload.skipIfExists === true || String(payload.skipIfExists).toLowerCase() === 'true') {
-    var existing = folder.getFilesByName(fileName);
-    if (existing.hasNext()) {
-      return json_({ok: true, exists: true, file: fileInfo_(existing.next()), message: 'Файл уже есть.'});
+    var existing = findOne_(root, fileName);
+    if (existing) {
+      return json_({ok: true, exists: true, file: fileInfo_(existing), message: 'Файл уже есть.'});
     }
   }
 
@@ -426,13 +542,16 @@ function initResumable_(payload) {
 
 // Android: удалить (в корзину) файл по имени из настроенной папки
 function deleteByName_(payload) {
-  var folder = getFolder_(payload.folderId);
+  var root = getFolder_(payload.folderId);
   var name = safeFileName_(payload.fileName);
-  var it = folder.getFilesByName(name);
   var n = 0;
-  while (it.hasNext()) {
-    it.next().setTrashed(true);
-    n++;
+  var folders = treeFolders_(root);
+  for (var i = 0; i < folders.length; i++) {
+    var it = folders[i].getFilesByName(name);
+    while (it.hasNext()) {
+      it.next().setTrashed(true);
+      n++;
+    }
   }
   return json_({ok: true, deleted: n});
 }
@@ -467,11 +586,14 @@ function getFolder_(folderId) {
 
 function findFilesByKey_(folder, key) {
   var files = [];
-  var iterator = folder.getFiles();
-  while (iterator.hasNext()) {
-    var file = iterator.next();
-    if (file.getName().indexOf(key) !== -1) {
-      files.push(fileInfo_(file));
+  var folders = treeFolders_(folder);
+  for (var i = 0; i < folders.length; i++) {
+    var iterator = folders[i].getFiles();
+    while (iterator.hasNext()) {
+      var file = iterator.next();
+      if (!file.isTrashed() && file.getName().indexOf(key) !== -1) {
+        files.push(fileInfo_(file));
+      }
     }
   }
   files.sort(function(a, b) {
@@ -571,7 +693,32 @@ function stroehSearch_(q) {
   var hit = cache.get(key);
   if (hit) return {ok: true, items: JSON.parse(hit)};
 
-  var html = stroehGet_(STROEH_HOST_ + '/shop/suche/' + encodeURIComponent(q));
+  var searchUrl = STROEH_HOST_ + '/shop/suche/' + encodeURIComponent(q);
+  // Поиск по точному артикулу магазин может сразу перенаправить на страницу товара: тогда это единственный результат.
+  try {
+    var first = UrlFetchApp.fetch(searchUrl, {
+      muteHttpExceptions: true,
+      followRedirects: false,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+        'Accept-Language': 'de-DE,de;q=0.9'
+      }
+    });
+    var fc = first.getResponseCode();
+    if (fc >= 300 && fc < 400) {
+      var hdr = first.getHeaders();
+      var loc = String(hdr['Location'] || hdr['location'] || '');
+      if (loc.indexOf('/') === 0) loc = STROEH_HOST_ + loc;
+      if (/^https:\/\/www\.stroeh\.de\/shop\/[^?#\s]+[^\/?#\s]$/.test(loc)) {
+        var one = stroehArticle_(loc);
+        var direct = [{name: one.name || q, url: loc}];
+        cache.put(key, JSON.stringify(direct), 6 * 3600);
+        return {ok: true, items: direct};
+      }
+    }
+  } catch (ignore) { /* обычный поиск ниже */ }
+
+  var html = stroehGet_(searchUrl);
   var items = [], seen = {};
   var re = /<a\b[^>]*?href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, m;
   while ((m = re.exec(html)) && items.length < 40) {
@@ -608,7 +755,7 @@ function stroehArticle_(url) {
   url = String(url || '').trim();
   if (!/^https:\/\/www\.stroeh\.de\/shop\/[^\s]+$/.test(url)) throw new Error('Допустимы только адреса stroeh.de');
   var cache = CacheService.getScriptCache();
-  var key = cacheKey_('sta_', url);
+  var key = cacheKey_('sta2_', url);
   var hit = cache.get(key);
   if (hit) return JSON.parse(hit);
 
@@ -619,7 +766,23 @@ function stroehArticle_(url) {
   var text = stripTags_(html);
   var m = text.match(/Artikelnr\.?\s*:?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]{2,19})/);
   if (!m) throw new Error('Артикул на странице не найден');
-  var res = {ok: true, name: name, article: m[1].replace(/[\.\/\-]+$/, ''), url: url};
+  // Фото товара: og:image, иначе первая подходящая картинка на странице (без логотипов и значков)
+  var im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
+    html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+  var img = im ? decodeEntities_(im[1]) : '';
+  if (!img) {
+    var re2 = /<img\b[^>]+src=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/gi, mi;
+    while ((mi = re2.exec(html))) {
+      var u = decodeEntities_(mi[1]);
+      if (/logo|icon|sprite|payment|paypal|badge|flag|banner/i.test(u)) continue;
+      img = u; break;
+    }
+  }
+  if (img.indexOf('//') === 0) img = 'https:' + img;
+  else if (img.indexOf('/') === 0) img = STROEH_HOST_ + img;
+  if (!/^https:\/\//.test(img)) img = '';
+  var res = {ok: true, name: name, article: m[1].replace(/[\.\/\-]+$/, ''), url: url, image: img};
   cache.put(key, JSON.stringify(res), 6 * 3600);
   return res;
 }

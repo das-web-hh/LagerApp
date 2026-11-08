@@ -75,7 +75,7 @@ fun StrohSearchDialog(initialQuery: String, onPick: (String) -> Unit, onDismiss:
                     Text(f.first, fontWeight = FontWeight.SemiBold)
                     Text("Артикул: ${f.second}", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Проверьте, что вес и название совпадают. Этот номер будет запасным: свой артикул (ввод, скан, накладная) всегда главнее.",
+                        "Проверьте, что вес и название совпадают. Какой артикул главный — свой или с сайта — выбирается в Настройках → «Артикулы и сайт».",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }

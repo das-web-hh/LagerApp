@@ -111,6 +111,7 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     var results by remember { mutableStateOf(emptyList<HistoryHit>()) }   // строки истории для товаров, которых нет в каталоге
     var prodHits by remember { mutableStateOf(emptyList<ProdHit>()) }      // подсказки из каталога
     var openProductId by rememberSaveable { mutableStateOf<String?>(null) }
+    var siteHit by remember { mutableStateOf<DriveApi.StrohHit?>(null) }          // открыта карточка товара с сайта
     var openReceiptId by rememberSaveable { mutableStateOf<String?>(null) }
     var section by rememberSaveable { mutableStateOf<String?>(null) }
     val startDocScan = rememberDocScanner()
@@ -120,6 +121,8 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     var all by remember { mutableStateOf(emptyList<Receipt>()) }
     var productCount by remember { mutableIntStateOf(0) }
     val enough = query.trim().length >= MIN_SEARCH_CHARS
+    // сайт stroeh.de по названию и артикулу; совпал артикул с каталогом — одна строка с одним именем
+    val siteSug = rememberSiteSuggest(query, prodHits.map { it.product }, enabled = enough)
     SideEffect { TabRoot.set(0, !scanning && openProductId == null && openReceiptId == null && section == null && browseQuery == null && query.isEmpty()) }
 
     LaunchedEffect(Unit) {
@@ -177,6 +180,13 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
     }
     if (scanning) {
         ScannerScreen(prefs = prefs, onResult = { query = it; scanning = false }, onClose = { scanning = false })
+        return
+    }
+    siteHit?.let { h ->
+        ProductCardScreen(null, prefs, site = h) {
+            siteHit = null
+            sync.version++
+        }
         return
     }
     val pid = openProductId
@@ -276,6 +286,9 @@ fun HomeScreen(prefs: Prefs, userName: String, onOpenTab: (Int) -> Unit) {
                 receiptHits = receiptHits,
                 fileHits = fileHits,
                 onOpenProduct = { openProductId = it },
+                site = siteSug.items,
+                siteBusy = siteSug.busy,
+                onOpenSite = { siteHit = it.hit },
                 onOpen = { openReceiptId = it },
                 onOpenFiles = { browseQuery = query.trim() }
             )
@@ -374,6 +387,9 @@ private fun SearchResultsList(
     receiptHits: List<ReceiptHit>,
     fileHits: List<FolderFile>,
     onOpenProduct: (String) -> Unit,
+    site: List<Suggest>,
+    siteBusy: Boolean,
+    onOpenSite: (Suggest) -> Unit,
     onOpen: (String) -> Unit,
     onOpenFiles: () -> Unit
 ) {
@@ -431,11 +447,12 @@ private fun SearchResultsList(
             }
         }
         items(prodHits, key = { "p" + it.product.id }) { h ->
+            // тот же товар на сайте (совпал артикул) — одна строка с одним именем; свайп вправо — фото
+            val sg = site.firstOrNull { it.product?.id == h.product.id } ?: Suggest(h.product, h.members, null, null)
+            PhotoSwipeBox(sg, Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth().clickable { onOpenProduct(h.product.id) }.padding(vertical = 6.dp)) {
-                Text(h.product.name, fontWeight = FontWeight.Medium)
-                val article = h.members.firstOrNull { it.article.isNotBlank() }?.article ?: ""
-                val barcode = h.members.firstOrNull { it.barcode.isNotBlank() }?.barcode ?: ""
-                val sub = listOf(article, barcode).filter { it.isNotBlank() }.joinToString(" · ")
+                Text(sg.name, fontWeight = FontWeight.Medium)
+                val sub = listOf(sg.article, sg.barcode, if (sg.linked) "🔗 связан с сайтом" else "").filter { it.isNotBlank() }.joinToString(" · ")
                 if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
                 val others = h.members.filter { it.id != h.product.id }
                 if (others.isNotEmpty()) Text(
@@ -451,7 +468,21 @@ private fun SearchResultsList(
                     style = MaterialTheme.typography.bodySmall
                 )
             }
+            }
             HorizontalDivider()
+        }
+        val siteOnly = site.filter { it.product == null }
+        if (siteOnly.isNotEmpty() || siteBusy) {
+            item(key = "shdr") {
+                Text(
+                    if (siteBusy && siteOnly.isEmpty()) "Ищу на stroeh.de…" else "С сайта stroeh.de (нажмите — карточка; свайп вправо — фото)",
+                    style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
+                )
+            }
+            items(siteOnly, key = { it.key }) { sg ->
+                SuggestRow(sg, onClick = { onOpenSite(sg) })
+                HorizontalDivider()
+            }
         }
         if (results.isNotEmpty()) {
             item(key = "hdr") {

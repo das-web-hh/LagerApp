@@ -1478,7 +1478,16 @@ private fun ColumnScope.NameModeMain(
         searchText = searchText, searchTick = searchTick,
         idleKeyboard = true,
         idleBlock = scanFor != null || conflict != null || editDoc || retryDlg,
-        onScanCode = { c -> countRef.value(c, true) }
+        onScanCode = { c -> countRef.value(c, true) },
+        // мини-окно подсказок: товары каталога и сайта stroeh.de (по названию и артикулу), совпавшие артикулы — одной строкой
+        onPickProduct = { p ->
+            val row = ItemRow(p.name, "0", extra = true, productId = p.id).also {
+                it.barcode = p.barcode
+                if (p.id.isEmpty() && p.webArticle.isNotBlank()) it.article = p.webArticle.trim()
+            }
+            job.items.add(row)
+            jump(row)
+        }
     )
     }
     if (editable && job.items.isNotEmpty()) {
@@ -1578,10 +1587,12 @@ private fun AddItemDialog(
     initialPid: String = "",
     barcode: String = "",
     onDismiss: () -> Unit,
-    onAdd: (String, String, String) -> Unit
+    onAdd: (String, String, String, String) -> Unit
 ) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val db = remember { ProductDb.get(ctx) }
+    var siteArticle by remember { mutableStateOf("") } // артикул со страницы товара сайта, если название выбрано с сайта
     var photo by remember { mutableStateOf("") }
     var added by remember { mutableStateOf(false) }
     // закрыли окно без добавления — снятое фото не нужно
@@ -1594,6 +1605,8 @@ private fun AddItemDialog(
         sugg = if (name.trim().length < MIN_SEARCH_CHARS || pid.isNotEmpty()) emptyList()
         else withContext(Dispatchers.IO) { db.search(name, 6) }
     }
+    // сайт stroeh.de по названию и артикулу; совпал артикул с каталогом — одна подсказка с одним именем
+    val siteSug = rememberSiteSuggest(name, sugg, enabled = pid.isEmpty() && siteArticle.isEmpty())
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1609,7 +1622,7 @@ private fun AddItemDialog(
                     )
                 }
                 OutlinedTextField(
-                    name, { name = germanKeys(it); pid = "" }, label = { Text("Название товара") },
+                    name, { name = germanKeys(it); pid = ""; siteArticle = "" }, label = { Text("Название товара") },
                     singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
                 Text(
@@ -1617,16 +1630,28 @@ private fun AddItemDialog(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp)
                 )
-                sugg.forEach { p ->
-                    Text(
-                        p.name,
-                        Modifier.fillMaxWidth().clickable {
-                            name = p.name
-                            pid = p.id
-                            sugg = emptyList()
-                        }.padding(vertical = 10.dp)
-                    )
-                    HorizontalDivider()
+                if (pid.isEmpty() && siteArticle.isEmpty()) {
+                    Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                        siteSug.items.forEach { sg ->
+                            SuggestRow(sg, onClick = {
+                                val p = sg.product
+                                if (p != null) {
+                                    name = p.name
+                                    pid = p.id
+                                    scope.launch(Dispatchers.IO) { SiteSearch.bind(ctx, sg) }
+                                } else scope.launch {
+                                    val info = SiteSearch.infoOf(ctx, sg)
+                                    val n = (info?.name ?: "").ifBlank { sg.hit?.name.orEmpty() }.trim()
+                                    name = n
+                                    siteArticle = info?.article.orEmpty()
+                                    pid = withContext(Dispatchers.IO) { db.findByName(n)?.id } ?: ""
+                                }
+                                sugg = emptyList()
+                            })
+                            HorizontalDivider()
+                        }
+                        SiteBusyLine(siteSug.busy)
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
                 Text("Фото товара (печатается на последнем листе документа)", style = MaterialTheme.typography.bodySmall)
@@ -1644,7 +1669,7 @@ private fun AddItemDialog(
             }
         },
         confirmButton = {
-            Button(enabled = name.isNotBlank(), onClick = { added = true; onAdd(name.trim(), pid, photo) }) { Text("Добавить") }
+            Button(enabled = name.isNotBlank(), onClick = { added = true; onAdd(name.trim(), pid, photo, siteArticle) }) { Text("Добавить") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
     )
@@ -1970,8 +1995,11 @@ fun AutoReceiveScreen(f: IncomingFile, receiver: String, mode: String, onClose: 
             initialPid = pf?.second ?: "",
             barcode = pf?.third ?: "",
             onDismiss = { showAdd = false; addPrefill = null },
-            onAdd = { name, pid, photo ->
-                job.items.add(ItemRow(name, "0", extra = true, productId = pid).also { it.barcode = pf?.third ?: ""; it.photo = photo })
+            onAdd = { name, pid, photo, art ->
+                job.items.add(ItemRow(name, "0", extra = true, productId = pid).also {
+                    it.barcode = pf?.third ?: ""; it.photo = photo
+                    if (art.isNotBlank()) it.article = art
+                })
                 addTick++
                 showAdd = false
                 addPrefill = null

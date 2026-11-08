@@ -122,6 +122,25 @@ object DriveApi {
         return r.optString("name") to r.optString("article")
     }
 
+    class StrohInfo(val name: String, val article: String, val image: String)
+
+    /** Название, артикул и адрес фото со страницы товара stroeh.de. */
+    fun strohDetail(ctx: Context, url: String): StrohInfo {
+        val r = strohCheck(http(query(ctx, "stroehart", "url" to url), null))
+        return StrohInfo(r.optString("name"), r.optString("article"), r.optString("image"))
+    }
+
+    class OrganizeResult(val moved: Int, val left: Int, val dups: Int, val folders: Int)
+
+    /**
+     * Раскладывает файлы по папкам Диска (Товары, Приёмки, Накладные, B-Ware, Партии…) и убирает дубли с одинаковым именем.
+     * За один вызов обрабатывается ограниченное число файлов — вызывать, пока left > 0. Нужен обновлённый Code.gs.
+     */
+    fun organize(ctx: Context): OrganizeResult {
+        val r = strohCheck(http(query(ctx, "organize"), null))
+        return OrganizeResult(r.optInt("moved"), r.optInt("left"), r.optInt("dups"), r.optInt("folders"))
+    }
+
     fun ping(ctx: Context): String {
         val r = check(http(query(ctx, "ping"), null))
         return r.optString("folderName")

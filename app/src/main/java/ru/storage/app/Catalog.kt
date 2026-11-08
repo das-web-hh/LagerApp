@@ -69,6 +69,10 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         else withContext(Dispatchers.IO) { db.search(query, 2000) }
     }
 
+    // сайт stroeh.de по названию и артикулу; совпал артикул — одна строка с одним именем, свайп вправо — фото
+    val siteSug = rememberSiteSuggest(query, (found ?: emptyList()).take(12), enabled = query.trim().length >= MIN_SEARCH_CHARS)
+    var siteCard by remember { mutableStateOf<DriveApi.StrohHit?>(null) }
+
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { Media.uploadPending(ctx, db) }
         DriveSync.start(ctx, false)
@@ -158,6 +162,13 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         }
         return
     }
+    siteCard?.let { h ->
+        ProductCardScreen(null, prefs, site = h) {
+            siteCard = null
+            sync.version++
+        }
+        return
+    }
 
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -206,11 +217,27 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
             items(found ?: list, key = { it.id }) { p ->
-                Text(
-                    (if (p.groupId.isNotBlank()) "🔗 " else "") + p.name,
-                    modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 7.dp)
-                )
+                val sg = siteSug.items.firstOrNull { it.product?.id == p.id }
+                PhotoSwipeBox(sg ?: Suggest(p, listOf(p), null, null), Modifier.fillMaxWidth()) {
+                    Text(
+                        (if (p.groupId.isNotBlank() || sg?.linked == true) "🔗 " else "") + (sg?.name ?: p.name),
+                        modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 7.dp)
+                    )
+                }
                 HorizontalDivider()
+            }
+            val siteOnly = siteSug.items.filter { it.product == null }
+            if (siteOnly.isNotEmpty() || (siteSug.busy && query.trim().length >= MIN_SEARCH_CHARS)) {
+                item(key = "shdr") {
+                    Text(
+                        if (siteSug.busy && siteOnly.isEmpty()) "Ищу на stroeh.de…" else "С сайта stroeh.de (нажмите — карточка; свайп вправо — фото)",
+                        style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
+                    )
+                }
+                items(siteOnly, key = { it.key }) { sg ->
+                    SuggestRow(sg, onClick = { siteCard = sg.hit })
+                    HorizontalDivider()
+                }
             }
         }
     }
@@ -357,7 +384,7 @@ fun ImportDialog(
 }
 
 @Composable
-fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
+fun ProductCardScreen(id: String?, prefs: Prefs, site: DriveApi.StrohHit? = null, onClose: () -> Unit) {
     val canEdit = Session.isAdmin
     val ctx = LocalContext.current
     val db = remember { ProductDb.get(ctx) }
@@ -383,6 +410,42 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
     var mergeDialog by remember { mutableStateOf(false) }
     var mergeQuery by remember { mutableStateOf("") }
     var splitAsk by remember { mutableStateOf<Product?>(null) }
+    var siteBusy by remember { mutableStateOf(false) }
+    var savedCard by remember { mutableStateOf(false) }
+
+    // Карточка из поиска на сайте: название, артикул и фото подставляются со страницы товара stroeh.de
+    LaunchedEffect(site) {
+        if (site != null && id == null) {
+            siteBusy = true
+            name = site.name
+            try {
+                val info = withContext(Dispatchers.IO) { DriveApi.strohDetail(ctx, site.url) }
+                if (info.name.isNotBlank()) name = info.name
+                webArticle = info.article
+                withContext(Dispatchers.IO) { ProductParse.parseLocal(listOf(name)).firstOrNull() }?.let { l ->
+                    if (weight.isBlank()) weight = l.size
+                    if (l.unit.isNotBlank()) unit = l.unit
+                    if (pack.isBlank()) pack = l.pack
+                    if (manufacturer.isBlank()) manufacturer = l.manufacturer
+                }
+                if (info.image.isBlank()) error = "На странице товара фото не найдено"
+                else {
+                    // одно и то же фото сайта хранится один раз (имя PR-S<артикул>.jpg): на телефоне и на Диске в «Товары / Фото с сайта»
+                    val n = withContext(Dispatchers.IO) { SiteSearch.photoName(ctx, info) }
+                    if (n != null) photos.add(n) else error = "Фото скачать не удалось"
+                }
+            } catch (e: Exception) {
+                error = e.message ?: "Не удалось загрузить данные с сайта"
+            } finally {
+                siteBusy = false
+            }
+        }
+    }
+    // закрыли без «Сохранить» — скачанное с сайта фото не остаётся лишним файлом
+    val closeCard: () -> Unit = {
+        if (site != null && !savedCard) scope.launch(Dispatchers.IO) { Media.discard(ctx, db, photos.toList()) }
+        onClose()
+    }
 
     LaunchedEffect(id, groupTick) {
         groupMembers = if (id == null) emptyList() else withContext(Dispatchers.IO) {
@@ -413,12 +476,16 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         return
     }
 
-    BackHandler(onBack = onClose)
+    BackHandler(onBack = closeCard)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text(
-            if (id == null) "Новый товар" else "Карточка товара",
+            if (id == null) (if (site != null) "Товар с сайта stroeh.de" else "Новый товар") else "Карточка товара",
             style = MaterialTheme.typography.headlineSmall
         )
+        if (siteBusy) {
+            Text("Загружаю название, артикул и фото с сайта…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
+        }
         if (id != null) {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { showHistory = true }, modifier = Modifier.fillMaxWidth()) {
@@ -475,11 +542,12 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(article, { article = it }, label = { Text("Артикул") }, readOnly = !canEdit,
             singleLine = true, modifier = Modifier.fillMaxWidth())
-        // второй уровень: артикул с сайта stroeh.de. Свой артикул (поле выше: ввод, скан, накладная) всегда главнее.
+        // артикул с сайта stroeh.de; какой главный (свой или с сайта) — Настройки → «Артикулы и сайт»
         if (webArticle.isNotBlank()) {
+            val webMain = SiteCfg.siteFirst || article.isBlank()
             Text(
                 "Артикул с сайта stroeh.de: $webArticle — " +
-                    if (article.isBlank()) "используется, пока нет своего артикула" else "запасной, главнее свой артикул",
+                    if (webMain) "главный (настройка «с сайта» или своего артикула нет)" else "запасной, главный — свой артикул",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
             )
@@ -555,6 +623,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, onClose: () -> Unit) {
                         manufacturer = manufacturer.trim(), photos = cur, updatedAt = 0L,
                         webArticle = webArticle.trim()
                     )
+                    savedCard = true
                     scope.launch(Dispatchers.IO) {
                         // группа могла измениться кнопками «Объединить»/«Отделить» уже после открытия карточки — берём свежую
                         val fresh = old?.let { db.getProduct(it.id) }

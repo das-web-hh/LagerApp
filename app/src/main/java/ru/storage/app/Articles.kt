@@ -30,11 +30,11 @@ object ArticleLookup {
             // карточка строки — первой, затем остальные названия того же товара
             val cards = if (p == null) emptyList() else listOf(p) + ProductGroups.membersOf(db, p).filter { it.id != p.id }
             // 1-й уровень: артикул строки, затем свой артикул карточек; 2-й уровень: артикул с сайта — только если своего нет нигде
+            // настройка «Приоритетный артикул»: из системы (как раньше) или с сайта
+            val sysArt = own.ifEmpty { cards.firstOrNull { it.article.isNotBlank() }?.article.orEmpty().trim() }
+            val webArt = cards.firstOrNull { it.webArticle.isNotBlank() }?.webArticle.orEmpty().trim()
             Info(
-                article = own.ifEmpty {
-                    cards.firstOrNull { it.article.isNotBlank() }?.article.orEmpty().trim()
-                        .ifEmpty { cards.firstOrNull { it.webArticle.isNotBlank() }?.webArticle.orEmpty().trim() }
-                },
+                article = SiteCfg.pick(sysArt, webArt),
                 barcode = ownCode.ifEmpty { cards.firstOrNull { it.barcode.isNotBlank() }?.barcode.orEmpty().trim() },
                 weight = cards.map { weightOf(it) }.firstOrNull { it.isNotEmpty() }.orEmpty()
             )
@@ -49,7 +49,7 @@ object ArticleLookup {
     }
 
     fun find(r: ItemRow): String {
-        if (r.article.isNotBlank()) return r.article.trim()
+        if (r.article.isNotBlank() && !SiteCfg.siteFirst) return r.article.trim()
         return info(r).article
     }
 

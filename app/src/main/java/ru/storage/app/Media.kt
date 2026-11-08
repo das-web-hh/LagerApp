@@ -138,6 +138,48 @@ object Media {
         }
     }
 
+    /** Фото по https-адресу (страница товара сайта) → файл в приложении, в очередь на Диск. Вызывать не в главном потоке. null — не вышло. */
+    fun importUrl(ctx: Context, url: String, db: ProductDb, kind: String): String? =
+        importUrlAs(ctx, url, db, newPhotoName(kind))
+
+    /**
+     * То же, но с заданным именем файла: одно и то же фото с сайта всегда получает одно имя —
+     * на телефоне и на Диске оно хранится один раз. Файл уже есть — повторно не скачивается и не отправляется.
+     */
+    fun importUrlAs(ctx: Context, url: String, db: ProductDb, name: String): String? {
+        if (!url.startsWith("https://")) return null
+        val target = file(ctx, name)
+        if (target.exists() && target.length() > 0) return name
+        return try {
+            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = 15000; c.readTimeout = 20000
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) LagerApp")
+            if (c.responseCode !in 200..299) { c.disconnect(); return null }
+            val mime = c.contentType.orEmpty()
+            if (mime.isNotEmpty() && !mime.startsWith("image/")) { c.disconnect(); return null }
+            var total = 0L
+            c.inputStream.use { i -> target.outputStream().use { o ->
+                val buf = ByteArray(16 * 1024)
+                while (true) {
+                    val n = i.read(buf); if (n < 0) break
+                    total += n
+                    if (total > 10_000_000L) throw RuntimeException("слишком большой файл")
+                    o.write(buf, 0, n)
+                }
+            } }
+            c.disconnect()
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(target.path, bounds)
+            if (bounds.outWidth <= 0) { target.delete(); return null }
+            shrink(target)
+            db.addUpload(name)
+            name
+        } catch (e: Exception) {
+            target.delete()
+            null
+        }
+    }
+
     fun cameraTarget(ctx: Context, kind: String): Pair<String, Uri> {
         val name = newPhotoName(kind)
         val f = file(ctx, name)
@@ -205,6 +247,8 @@ object Media {
         val app = ctx.applicationContext
         val pending = db.pendingUploads().toSet()
         for (n in names) {
+            // фото с сайта (PR-S…) — общий кэш на Диске: одно на товар, при закрытии карточки не удаляется
+            if (n.startsWith("PR-S")) continue
             file(app, n).delete()
             DocCam.drop(app, n)
             db.removeUpload(n)

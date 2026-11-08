@@ -129,6 +129,27 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         else withContext(Dispatchers.IO) { db.search(query, 8) }
     }
 
+    // сайт stroeh.de по названию и артикулу; совпал артикул с каталогом — одна подсказка с одним именем
+    val siteSug = rememberSiteSuggest(query, suggestions)
+
+    // товар только с сайта: строка в списке с названием и артикулом со страницы товара
+    fun addSite(sg: Suggest) {
+        scope.launch {
+            val info = SiteSearch.infoOf(ctx, sg)
+            val name = (info?.name ?: "").ifBlank { sg.hit?.name.orEmpty() }.trim()
+            if (name.isEmpty()) return@launch
+            val known = withContext(Dispatchers.IO) { db.findByName(name) }
+            if (known != null) { addRow(known); return@launch }
+            val existing = rows.firstOrNull { it.name.trim().equals(name, true) }
+            if (existing != null) focusTarget = existing
+            else {
+                rows.add(ItemRow(name, "", extra = true).also { r -> r.article = info?.article.orEmpty() })
+                focusTarget = null
+            }
+            addTick++
+        }
+    }
+
     if (scanning) {
         ScannerScreen(prefs = prefs, onResult = { query = it; scanning = false }, onClose = { scanning = false })
         return
@@ -171,30 +192,26 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         val head = listOf(metaSender, metaOrder, metaStamp).filter { it.isNotBlank() }.joinToString(" · ")
         if (head.isNotEmpty()) Text(head, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
 
-        if (suggestions.isNotEmpty()) {
+        if (siteSug.items.isNotEmpty()) {
             Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Column {
-                    suggestions.forEachIndexed { i, p ->
-                        Column(
-                            Modifier.fillMaxWidth()
-                                .clickable {
-                                    addRow(p)
-                                    query = ""
-                                    message = ""
-                                }
-                                .padding(12.dp)
-                        ) {
-                            Text(p.name, fontWeight = FontWeight.Medium)
-                            val sub = listOf(
-                                if (p.article.isNotBlank()) "арт. ${p.article}" else "",
-                                if (p.barcode.isNotBlank()) "ШК ${p.barcode}" else ""
-                            ).filter { it.isNotEmpty() }.joinToString(" · ")
-                            if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (i < suggestions.lastIndex) HorizontalDivider()
+                    siteSug.items.forEachIndexed { i, sg ->
+                        SuggestRow(sg, onClick = {
+                            val p = sg.product
+                            if (p != null) {
+                                scope.launch(Dispatchers.IO) { SiteSearch.bind(ctx, sg) }
+                                addRow(p)
+                            } else addSite(sg)
+                            query = ""
+                            message = ""
+                        })
+                        if (i < siteSug.items.lastIndex) HorizontalDivider()
                     }
+                    SiteBusyLine(siteSug.busy)
                 }
             }
+        } else if (query.isNotBlank() && siteSug.busy) {
+            SiteBusyLine(true)
         } else if (query.isNotBlank() && !sync.busy) {
             Text("Ничего не найдено", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
         }
