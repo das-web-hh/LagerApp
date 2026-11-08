@@ -3,6 +3,9 @@ package ru.storage.app
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,7 +21,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -227,6 +236,35 @@ object SiteSearch {
         return got
     }
 
+    private val bigCache = android.util.LruCache<String, Bitmap>(4)
+
+    /** Уже загруженное большое фото (для мгновенного открытия панели). */
+    fun cached(s: Suggest): Bitmap? = bigCache.get(s.key)
+
+    /**
+     * Фото для карточки товара: своё первое фото; если его нет — фото с сайта по артикулу
+     * (артикул на странице должен совпасть, чтобы не показать чужой товар). В карточку не записывается.
+     */
+    suspend fun cardPhoto(ctx: Context, article: String, own: List<String>): Bitmap? = withContext(Dispatchers.IO) {
+        try {
+            val mine = own.firstOrNull { Media.isImage(it) }
+            if (mine != null) return@withContext Media.load(ctx, mine)?.let { Media.thumb(it, 1200) }
+            val q = article.trim()
+            if (!eligible(q)) return@withContext null
+            val hit = search(ctx, q, 3).firstOrNull() ?: return@withContext null
+            val info = detail(ctx, hit) ?: return@withContext null
+            if (norm(info.article) != norm(q)) return@withContext null
+            val n = photoName(ctx, info) ?: return@withContext null
+            Media.thumb(Media.file(ctx, n), 1200)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        } catch (e: OutOfMemoryError) {
+            null
+        }
+    }
+
     /** Картинка для большой панели: у связанных и сайтовых — с сайта (и сохраняется на Диск), иначе первое фото карточки. */
     suspend fun bigPhoto(ctx: Context, s: Suggest): Bitmap? = withContext(Dispatchers.IO) {
         try {
@@ -236,11 +274,11 @@ object SiteSearch {
                 if (i == null) lastPhotoNote = "страницу товара на сайте открыть не удалось"
                 if (i != null) {
                     val n = photoName(ctx, i)
-                    if (n != null) Media.thumb(Media.file(ctx, n), 1600)?.let { return@withContext it }
+                    if (n != null) Media.thumb(Media.file(ctx, n), 1600)?.let { bigCache.put(s.key, it); return@withContext it }
                 }
             }
             val local = s.members.flatMap { it.photos }.firstOrNull()
-            if (local != null) Media.load(ctx, local)?.let { return@withContext Media.thumb(it, 1600) }
+            if (local != null) Media.load(ctx, local)?.let { b -> return@withContext Media.thumb(b, 1600)?.also { bigCache.put(s.key, it) } }
             null
         } catch (e: CancellationException) {
             throw e
@@ -300,50 +338,81 @@ fun rememberSiteSuggest(query: String, products: List<Product>, enabled: Boolean
     return st
 }
 
+/** Какая подсказка показывалась последней (фото или карточка): её строка остаётся с фоном. */
+object PhotoMark {
+    var key by mutableStateOf("")
+    fun mark(s: Suggest?) { if (s != null) key = s.key }
+}
+
 /**
- * Обёртка строки подсказки: свайп слева направо (даже чуть-чуть) открывает фото товара большой панелью слева;
- * свайп справа налево (тоже чуть-чуть) или тап по свободным 20% справа — панель уходит обратно.
+ * Обёртка строки подсказки: свайп слева направо (даже чуть-чуть) открывает фото товара панелью слева
+ * (пока фото грузится — анимация ожидания); свайп справа налево или тап по свободным 20% справа — панель уходит.
+ * Если фото у товара нет совсем, строка тянется «резинкой» и пружинит назад. Строка последнего показанного товара подсвечена.
  */
 @Composable
 fun PhotoSwipeBox(s: Suggest?, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     var open by remember { mutableStateOf(false) }
     val can = s != null && (s.hit != null || s.members.any { it.photos.isNotEmpty() })
+    val sNow by rememberUpdatedState(s)
+    val pull = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val marked = s != null && PhotoMark.key == s.key
     Box(
-        modifier.pointerInput(can) {
-            if (!can) return@pointerInput
-            var acc = 0f
-            var fired = false
-            val trigger = 6.dp.toPx()
-            detectHorizontalDragGestures(
-                onDragStart = { acc = 0f; fired = false },
-                onDragEnd = { acc = 0f },
-                onDragCancel = { acc = 0f }
-            ) { change, dx ->
-                acc += dx
-                if (!fired && acc > trigger) {
-                    fired = true
-                    change.consume()
-                    open = true
+        modifier
+            .then(if (marked) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)) else Modifier)
+            .pointerInput(can) {
+                var acc = 0f
+                var fired = false
+                val trigger = 6.dp.toPx()
+                val maxPull = 56.dp.toPx()
+                val back: () -> Unit = {
+                    acc = 0f
+                    scope.launch { pull.animateTo(0f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium)) }
+                }
+                detectHorizontalDragGestures(
+                    onDragStart = { acc = 0f; fired = false },
+                    onDragEnd = { back() },
+                    onDragCancel = { back() }
+                ) { change, dx ->
+                    acc += dx
+                    if (can) {
+                        if (!fired && acc > trigger) {
+                            fired = true
+                            change.consume()
+                            PhotoMark.mark(sNow)
+                            open = true
+                        }
+                    } else {
+                        change.consume()
+                        val x = maxPull * (1f - exp(-abs(acc) / (maxPull * 2f)))
+                        scope.launch { pull.snapTo(if (acc < 0) -x else x) }
+                    }
                 }
             }
-        }
-    ) { content() }
+    ) {
+        Box(Modifier.offset { IntOffset(pull.value.roundToInt(), 0) }) { content() }
+    }
     if (open && s != null) SitePhotoPanel(s) { open = false }
 }
 
-/** Фото слева на 80% ширины и 30% высоты экрана (верх на месте, низ поднят); справа 20% свободно. */
+/**
+ * Фото слева на 80% ширины; высота подстраивается под фото (в среднем около трети экрана), верх на месте.
+ * Под фото — название и артикул (всегда видны). Пока фото грузится — анимация ожидания.
+ */
 @Composable
 fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var shown by remember { mutableStateOf(false) }
-    var bmp by remember { mutableStateOf<Bitmap?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var bmp by remember { mutableStateOf(SiteSearch.cached(s)) }
+    var loading by remember { mutableStateOf(bmp == null) }
     var note by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { shown = true }
     LaunchedEffect(s.key) {
-        bmp = SiteSearch.bigPhoto(ctx.applicationContext, s)
-        note = SiteSearch.lastPhotoNote
+        if (bmp == null) {
+            bmp = SiteSearch.bigPhoto(ctx.applicationContext, s)
+            note = SiteSearch.lastPhotoNote
+        }
         loading = false
     }
     val close: () -> Unit = { scope.launch { shown = false; delay(200); onClose() } }
@@ -351,17 +420,18 @@ fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
         onDismissRequest = close,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        Box(
+        BoxWithConstraints(
             Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { close() } }
         ) {
+            val screenH = maxHeight
             AnimatedVisibility(
                 visible = shown,
                 modifier = Modifier.align(Alignment.TopStart),
                 enter = slideInHorizontally(tween(160)) { -it } + fadeIn(tween(100)),
                 exit = slideOutHorizontally(tween(160)) { -it } + fadeOut(tween(100))
             ) {
-                Box(
-                    Modifier.fillMaxHeight(0.3f).fillMaxWidth(0.8f).clipToBounds()
+                Column(
+                    Modifier.fillMaxWidth(0.8f).heightIn(min = screenH * 0.22f, max = screenH * 0.36f).clipToBounds()
                         .background(Color(0xF2101010))
                         .pointerInput(Unit) { detectTapGestures { } }
                         .pointerInput(Unit) {
@@ -383,18 +453,24 @@ fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
                         }
                 ) {
                     val b = bmp
-                    when {
-                        b != null -> Image(
-                            b.asImageBitmap(), contentDescription = s.name,
-                            modifier = Modifier.fillMaxSize().padding(bottom = 56.dp), contentScale = ContentScale.Fit
-                        )
-                        loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                        else -> Column(Modifier.align(Alignment.Center).padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Фото не найдено", color = Color.White)
-                            if (note.isNotBlank()) Text(note, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                    Box(
+                        Modifier.fillMaxWidth().weight(1f, fill = b == null),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        when {
+                            b != null -> Image(
+                                b.asImageBitmap(), contentDescription = s.name,
+                                modifier = Modifier.aspectRatio(b.width.toFloat() / b.height.toFloat()),
+                                contentScale = ContentScale.Fit
+                            )
+                            loading -> CircularProgressIndicator(color = Color.White)
+                            else -> Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Фото не найдено", color = Color.White)
+                                if (note.isNotBlank()) Text(note, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
-                    Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
                         Text(s.name, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         val art = s.article
                         if (art.isNotBlank()) Text("арт. $art", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
@@ -405,11 +481,30 @@ fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
     }
 }
 
+/** Большое фото в карточке товара: своё первое фото, а если его нет — фото с сайта (по артикулу); в карточку не сохраняется. */
+@Composable
+fun CardSitePhoto(article: String, own: List<String>, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current.applicationContext
+    var bmp by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(article, own.firstOrNull()) {
+        bmp = null
+        if (own.isEmpty() && (article.isBlank() || !DriveCfg.ready(ctx))) return@LaunchedEffect
+        bmp = SiteSearch.cardPhoto(ctx, article, own)
+    }
+    bmp?.let {
+        Image(
+            it.asImageBitmap(), contentDescription = null,
+            modifier = modifier.fillMaxWidth().heightIn(max = 260.dp).clip(RoundedCornerShape(10.dp)),
+            contentScale = ContentScale.Fit
+        )
+    }
+}
+
 /** Строка подсказки: одно имя, артикул, пометка «связан с сайтом» / «сайт stroeh.de»; свайп вправо — фото. */
 @Composable
 fun SuggestRow(s: Suggest, onClick: () -> Unit, modifier: Modifier = Modifier) {
     PhotoSwipeBox(if (s.hit != null || s.members.any { it.photos.isNotEmpty() }) s else null, modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 14.dp, vertical = 10.dp)) {
+        Column(Modifier.fillMaxWidth().clickable { PhotoMark.mark(s); onClick() }.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Text(s.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             val sub = listOf(
                 s.article.takeIf { it.isNotBlank() }?.let { "арт. $it" } ?: "",

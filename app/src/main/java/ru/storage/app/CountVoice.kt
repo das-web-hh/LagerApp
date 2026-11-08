@@ -41,7 +41,7 @@ import kotlin.math.roundToInt
 
 /** Настройки крупной цифры и голоса (хранятся на телефоне: голоса у каждого устройства свои). */
 data class VoiceCfg(
-    val voiceOn: Boolean = true,      // озвучивать количество
+    val voiceOn: Boolean = false,     // озвучивать количество (по умолчанию выключено)
     val onTap: Boolean = true,        // ...при тапах по строке
     val onPicker: Boolean = true,     // ...при выборе барабаном
     val showBig: Boolean = true,      // крупная цифра на экране

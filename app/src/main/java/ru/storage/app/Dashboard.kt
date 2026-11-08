@@ -450,7 +450,7 @@ private fun SearchResultsList(
             // тот же товар на сайте (совпал артикул) — одна строка с одним именем; свайп вправо — фото
             val sg = site.firstOrNull { it.product?.id == h.product.id } ?: Suggest(h.product, h.members, null, null)
             PhotoSwipeBox(sg, Modifier.fillMaxWidth()) {
-            Column(Modifier.fillMaxWidth().clickable { onOpenProduct(h.product.id) }.padding(vertical = 6.dp)) {
+            Column(Modifier.fillMaxWidth().clickable { PhotoMark.mark(sg); onOpenProduct(h.product.id) }.padding(vertical = 6.dp)) {
                 Text(sg.name, fontWeight = FontWeight.Medium)
                 val sub = listOf(sg.article, sg.barcode, if (sg.linked) "🔗 связан с сайтом" else "").filter { it.isNotBlank() }.joinToString(" · ")
                 if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)

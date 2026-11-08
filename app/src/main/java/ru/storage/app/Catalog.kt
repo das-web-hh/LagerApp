@@ -221,7 +221,7 @@ fun CatalogScreen(prefs: Prefs, onBack: () -> Unit) {
                 PhotoSwipeBox(sg ?: Suggest(p, listOf(p), null, null), Modifier.fillMaxWidth()) {
                     Text(
                         (if (p.groupId.isNotBlank() || sg?.linked == true) "🔗 " else "") + (sg?.name ?: p.name),
-                        modifier = Modifier.fillMaxWidth().clickable { openId = p.id }.padding(vertical = 7.dp)
+                        modifier = Modifier.fillMaxWidth().clickable { PhotoMark.mark(sg ?: Suggest(p, listOf(p), null, null)); openId = p.id }.padding(vertical = 7.dp)
                     )
                 }
                 HorizontalDivider()
@@ -486,6 +486,9 @@ fun ProductCardScreen(id: String?, prefs: Prefs, site: DriveApi.StrohHit? = null
             Text("Загружаю название, артикул и фото с сайта…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
         }
+        // большое фото товара сразу под заголовком: своё, а если нет — с сайта (по артикулу)
+        Spacer(Modifier.height(8.dp))
+        CardSitePhoto(webArticle.ifBlank { article }, photos.toList())
         if (id != null) {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { showHistory = true }, modifier = Modifier.fillMaxWidth()) {
