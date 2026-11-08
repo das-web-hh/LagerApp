@@ -48,10 +48,13 @@ function doGet(e) {
     var params = (e && e.parameter) || {};
     // Публично, без токена: мини-приложение «Сборка» в браузере получателя забирает список партии по коду.
     // Отдаётся только файл BATCH_<код>.json; код — длинная случайная строка из ссылки/QR.
-    if (String(params.action || '').toLowerCase() === 'batch') return getBatch_(params.code);
+    if (String(params.action || '').toLowerCase() === 'auth') return getAuth_(params.code);
+    if (String(params.action || '').toLowerCase() === 'batch') return getBatch_(params.code, params.who);
     if (String(params.action || '').toLowerCase() === 'app') return getBatchPage_(params.code);
     // Публично, по коду партии: счёт всех устройств (для общего подсчёта в браузере)
     if (String(params.action || '').toLowerCase() === 'counts') return getCounts_(params.code);
+    // Публично: состояние партии для конкретного работника (run / stop / del) — окно у работника закрывается само
+    if (String(params.action || '').toLowerCase() === 'status') return getStatus_(params.code, params.who);
     checkToken_(params.token);
     var action = String(params.action || 'ping').toLowerCase();
     // Поиск артикула на stroeh.de (второй уровень артикула). Папка Диска не нужна.
@@ -149,18 +152,104 @@ function doGet(e) {
   }
 }
 
-function getBatch_(code) {
+function readBatch_(code) {
   code = String(code || '');
-  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
-  var it = DriveApp.getFilesByName('BATCH_' + code + '.json');
-  var best = null;
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return {err: 'Некорректный код партии.'};
+  var best = newestFile_('BATCH_' + code + '.json', true);
+  if (!best) return {err: 'Партия не найдена.'};
+  return {batch: JSON.parse(best.getBlob().getDataAsString('UTF-8'))};
+}
+
+// Самый свежий файл с таким именем. trashOlder: старые дубликаты уходят в корзину — у партии всегда один файл.
+function newestFile_(name, trashOlder) {
+  var it = DriveApp.getFilesByName(name), best = null;
   while (it.hasNext()) {
     var f = it.next();
     if (f.isTrashed()) continue;
-    if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
+    if (!best) { best = f; continue; }
+    var older = f.getLastUpdated() > best.getLastUpdated() ? best : f;
+    if (older === best) best = f;
+    if (trashOlder) { try { older.setTrashed(true); } catch (e) {} }
   }
-  if (!best) return json_({ok: false, error: 'Партия не найдена.'});
-  return json_({ok: true, batch: JSON.parse(best.getBlob().getDataAsString('UTF-8'))});
+  return best;
+}
+
+// ───────── управление партией: стоп / пуск / удаление (для всех или для одного работника) ─────────
+// Файл BATCHCTL_<код>.json пишет приложение администратора: {all:'run|stop|del', w:{<хеш имени>:'stop|del'}, adm:[<хеш админа>]}.
+// Нет файла — всё работает. Админ (adm) не блокируется никогда.
+function readCtl_(code) {
+  var f = newestFile_('BATCHCTL_' + code + '.json', true);
+  if (!f) return {};
+  try { return JSON.parse(f.getBlob().getDataAsString('UTF-8')) || {}; } catch (e) { return {}; }
+}
+
+// who — полный хеш имени (64 символа) или его первые 32 символа (так устройство подписывает свой счёт)
+function keyMatch_(key, who) {
+  key = String(key || '');
+  return who.length >= 64 ? key === who : (who.length >= 32 && key.indexOf(who) === 0);
+}
+
+function ctlState_(code, who) {
+  who = String(who || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(String(code || ''))) return 'run';
+  var c = readCtl_(code), i, k;
+  if (who) {
+    var adm = c.adm || [];
+    for (i = 0; i < adm.length; i++) if (keyMatch_(adm[i], who)) return 'run';
+  }
+  if (c.all === 'del') return 'del';
+  var w = c.w || {}, own = '';
+  if (who) for (k in w) if (keyMatch_(k, who)) { own = w[k]; break; }
+  if (own === 'del') return 'del';
+  if (c.all === 'stop' || own === 'stop') return 'stop';
+  return 'run';
+}
+
+function getStatus_(code, who) {
+  code = String(code || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
+  return json_({ok: true, state: ctlState_(code, who), now: Date.now()});
+}
+
+// Рабочее время по серверному времени Google (часы телефона не влияют). h = {on, from, to, tz, days[1=вс..7=сб]}
+function inWindow_(h) {
+  if (!h || !h.on) return true;
+  var tz = h.tz || 'Europe/Moscow', now = new Date();
+  var u = Number(Utilities.formatDate(now, tz, 'u'));      // 1=пн … 7=вс
+  var dow = u === 7 ? 1 : u + 1;                           // 1=вс … 7=сб
+  var m = Number(Utilities.formatDate(now, tz, 'H')) * 60 + Number(Utilities.formatDate(now, tz, 'm'));
+  var days = h.days || [];
+  if (h.from <= h.to) return days.indexOf(dow) >= 0 && m >= h.from && m <= h.to;
+  if (m >= h.from) return days.indexOf(dow) >= 0;
+  if (m <= h.to) return days.indexOf(dow === 1 ? 7 : dow - 1) >= 0;
+  return false;
+}
+
+// Только вход: имена (хеши), рабочее время и серверное время. Список товаров не отдаётся.
+function getAuth_(code) {
+  var r = readBatch_(code);
+  if (r.err) return json_({ok: false, error: r.err});
+  return json_({ok: true, title: r.batch.title || '', auth: r.batch.auth || {}, now: Date.now()});
+}
+
+// Список товаров: только если имя (хеш) есть в списке партии и сейчас рабочее время.
+function getBatch_(code, who) {
+  who = String(who || '');
+  if (who) {
+    var st = ctlState_(code, who);
+    if (st === 'del') return json_({ok: false, error: 'deleted'});
+    if (st === 'stop') return json_({ok: false, error: 'stopped'});
+  }
+  var r = readBatch_(code);
+  if (r.err) return json_({ok: false, error: r.err});
+  var a = r.batch.auth;
+  if (a && a.names && a.names.length) {
+    who = String(who || '');
+    if (!who || a.names.indexOf(who) < 0) return json_({ok: false, error: 'name'});
+    var isAdm = a.adm && a.adm.indexOf(who) >= 0;
+    if (!isAdm && !inWindow_(a.h)) return json_({ok: false, error: 'hours'});
+  }
+  return json_({ok: true, batch: r.batch, now: Date.now()});
 }
 
 // ───────── общий счёт партии с нескольких устройств ─────────
@@ -190,6 +279,7 @@ function saveCounts_(p) {
   var code = String(p.code || ''), dev = String(p.dev || '');
   if (!/^[A-Za-z0-9]{6,40}$/.test(code) || !/^[A-Za-z0-9]{6,40}$/.test(dev)) return json_({ok: false, error: 'Некорректный код.'});
   if (!DriveApp.getFilesByName('BATCH_' + code + '.json').hasNext()) return json_({ok: false, error: 'Партия не найдена.'});
+  if (ctlState_(code, dev) !== 'run') return json_({ok: false, error: 'blocked'});
   var src = p.counts || {}, clean = {}, n = 0;
   for (var k in src) {
     var v = Number(src[k]);
@@ -217,13 +307,7 @@ function getBatchPage_(code) {
   code = String(code || '');
   var msg = function(t) { return HtmlService.createHtmlOutput('<p style="font:18px sans-serif;padding:24px">' + t + '</p>').addMetaTag('viewport', 'width=device-width,initial-scale=1'); };
   if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return msg('Некорректная ссылка.');
-  var it = DriveApp.getFilesByName('BATCHPAGE_' + code + '.html');
-  var best = null;
-  while (it.hasNext()) {
-    var f = it.next();
-    if (f.isTrashed()) continue;
-    if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
-  }
+  var best = newestFile_('BATCHPAGE_' + code + '.html', true);
   if (!best) return msg('Партия не найдена. Попросите отправить её ещё раз.');
   return HtmlService.createHtmlOutput(best.getBlob().getDataAsString('UTF-8'))
     .setTitle('Сборка')

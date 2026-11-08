@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
@@ -54,9 +56,13 @@ class BatchRow(name: String, qty: String, val barcode: String = "", val article:
 
 class Batch(val id: String, title: String, val created: Long) {
     var title by mutableStateOf(title)
+    /** имена получателей через запятую: по ним HTML пускает внутрь (внутри файла только хеши) */
+    var names by mutableStateOf("")
     val rows = mutableStateListOf<BatchRow>()
     /** ссылка последней отправки ("" — ещё не отправлялась) */
     var link by mutableStateOf("")
+    /** хеш того, что лежит на Диске по этой ссылке: без изменений в партии повторная отправка ничего не создаёт */
+    var pubHash by mutableStateOf("")
     /** короткий код для ссылки и имени файла на Диске */
     val code: String get() = id.replace("-", "").take(12)
 }
@@ -80,6 +86,8 @@ object BatchStore {
                 val o = a.optJSONObject(i) ?: continue
                 val b = Batch(o.optString("id"), o.optString("t"), o.optLong("at"))
                 b.link = o.optString("l")
+                b.pubHash = o.optString("ph")
+                b.names = o.optString("nm")
                 val rs = o.optJSONArray("rows")
                 if (rs != null) for (k in 0 until rs.length()) {
                     val r = rs.optJSONObject(k) ?: continue
@@ -100,7 +108,7 @@ object BatchStore {
                 b.rows.toList().forEach { r ->
                     rs.put(JSONObject().put("n", r.name).put("q", r.qty).put("b", r.barcode).put("a", r.article))
                 }
-                a.put(JSONObject().put("id", b.id).put("t", b.title).put("at", b.created).put("l", b.link).put("rows", rs))
+                a.put(JSONObject().put("id", b.id).put("t", b.title).put("at", b.created).put("l", b.link).put("ph", b.pubHash).put("nm", b.names).put("rows", rs))
             }
             file(ctx).writeText(a.toString())
         } catch (e: Exception) {
@@ -137,12 +145,40 @@ object BatchShare {
     /** Адрес страницы «Сборка» на GitHub Pages (файл docs/index.html в репозитории). Там камера в браузере работает. */
     private const val WEB = "https://das-web-hh.github.io/LagerApp/"
 
-    fun json(b: Batch): String {
+    internal fun sha(s: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+    /** Имя в одном виде у отправителя и в HTML: маленькие буквы, ё = е, без лишних пробелов. */
+    internal fun normName(s: String) = s.lowercase().replace('ё', 'е').replace(Regex("\\s+"), " ").trim()
+
+    /**
+     * Доступ к партии: хеши имён (кто может открыть), хеш администратора (ему рабочее время не мешает)
+     * и рабочее время из настроек «Доступ по месту и времени» (config/access).
+     */
+    fun auth(b: Batch, cfg: AccessCfg?): JSONObject {
+        val names = JSONArray()
+        val seen = HashSet<String>()
+        b.names.split(',', ';', '\n').map { normName(it) }.filter { it.isNotEmpty() }.forEach { if (seen.add(sha(it))) names.put(sha(it)) }
+        val adm = JSONArray()
+        val u = Session.user
+        if (u != null && u.isAdmin) {
+            val h = sha(normName(u.login))
+            adm.put(h)
+            if (seen.add(h)) names.put(h)
+        }
+        val hours = JSONObject().put("on", cfg?.enabled == true)
+        if (cfg != null) hours.put("from", cfg.fromMin).put("to", cfg.toMin).put("tz", cfg.tz).put("days", JSONArray(cfg.days.toList()))
+        return JSONObject().put("names", names).put("adm", adm).put("h", hours)
+    }
+
+    fun json(b: Batch, cfg: AccessCfg? = null, withAuth: Boolean = false): String {
         val rs = JSONArray()
         b.rows.toList().forEach { r ->
             rs.put(JSONObject().put("n", r.name.trim()).put("q", batchQty(r.qty)).put("b", r.barcode).put("a", r.article))
         }
-        return JSONObject().put("v", 1).put("code", b.code).put("title", b.title).put("at", b.created).put("rows", rs).toString()
+        val o = JSONObject().put("v", 1).put("code", b.code).put("title", b.title).put("at", b.created).put("rows", rs)
+        if (withAuth) o.put("auth", auth(b, cfg))
+        return o.toString()
     }
 
     /**
@@ -151,10 +187,11 @@ object BatchShare {
      * и артикулу, счёт, печать, переход к следующей партии с нуля. Счёт хранится в самом браузере.
      * Те же данные внутри файла читает и приложение Warehouse (открыть файл через Warehouse).
      */
-    fun html(ctx: Context, b: Batch, link: String = ""): String {
+    fun html(ctx: Context, b: Batch, link: String = "", cfg: AccessCfg? = AccessStore.cached(ctx)): String {
         val tpl = ctx.applicationContext.assets.open("batch_app.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
         // «<» в данных экранируется, чтобы текст товара не мог закрыть тег script
-        val data = json(b).replace("<", "\\u003c")
+        // в файл идут только код, название и доступ: список товаров браузер получает с сервера после входа по имени
+        val data = JSONObject(json(b, cfg, true)).also { it.remove("rows") }.toString().replace("<", "\\u003c")
         return tpl.replace("__TITLE__", bwEsc(b.title)).replace("__LINK__", bwEsc(link)).replace("__DATA__", data)
     }
 
@@ -163,20 +200,36 @@ object BatchShare {
      * Ссылка и QR ведут на скрипт Диска (действие app), он отдаёт эту страницу в браузер — iPhone и Android, без установки.
      * Повторная отправка заменяет файлы. Нужен обновлённый скрипт Диска (google-script/Code.gs). Вызывать не в главном потоке.
      */
-    fun publish(app: Context, b: Batch): String {
+    private val pubLock = Any()
+
+    /**
+     * Одна партия — одна ссылка: адрес строится из кода партии (он не меняется), поэтому QR и «Поделиться» всегда дают одну и ту же ссылку.
+     * Если список, имена и доступ не менялись, на Диск ничего не отправляется (дублей не бывает). force = true — отправить заново.
+     * Если партия удалена у всех — отправка закрыта, пока администратор не нажмёт «Пуск» для всех.
+     */
+    fun publish(app: Context, b: Batch, force: Boolean = false): String = synchronized(pubLock) {
         if (!DriveCfg.ready(app)) throw RuntimeException("Google Диск не настроен (Еще → Настройки → Google Диск)")
         val code = b.code
         val base = DriveCfg.url(app)
         // «#lager=код» в конце — по нему приложение Lager узнаёт партию при сканировании QR
         // Страница лежит на GitHub Pages (камера работает), данные партии она берёт у скрипта Диска по коду (action=batch)
         val link = WEB + "?c=" + code + "&s=" + java.net.URLEncoder.encode(base, "UTF-8") + TAG + code
-        val data = json(b).toByteArray(Charsets.UTF_8)
-        val page = html(app, b, link).toByteArray(Charsets.UTF_8)
+        if (BatchCtl.state(BatchCtl.load(app, code), null) == "del")
+            throw RuntimeException("Партия удалена у всех получателей. Верните её кнопкой «Пуск» в «Управление партией»")
+        // рабочее время берём с сервера (не из кеша), чтобы HTML получил актуальные часы
+        val cfg = try { kotlinx.coroutines.runBlocking { AccessStore.load(app) } } catch (e: Exception) { AccessStore.cached(app) }
+        val dataStr = json(b, cfg, true)
+        val h = sha(dataStr + link)
+        if (!force && b.link == link && b.pubHash == h) return@synchronized link
+        val data = dataStr.toByteArray(Charsets.UTF_8)
+        val page = html(app, b, link, cfg).toByteArray(Charsets.UTF_8)
         for (n in listOf("BATCH_$code.json", "BATCHPAGE_$code.html")) try { DriveApi.delete(app, n) } catch (e: Exception) { }
         DriveApi.uploadBytes(app, "BATCH_$code.json", "application/json", data)
         DriveApi.uploadBytes(app, "BATCHPAGE_$code.html", "text/html", page)
         b.link = link
-        return link
+        b.pubHash = h
+        BatchCtl.reinstate(app, b)
+        link
     }
 
     /** Код партии из ссылки / текста QR; null — это не ссылка на партию. */
@@ -215,6 +268,10 @@ object BatchShare {
                 putExtra(Intent.EXTRA_SUBJECT, b.title)
             }
             if (link.isBlank()) {
+                Toast.makeText(ctx, "Нужна ссылка: загрузите партию на Google Диск (Настройки → Google Диск) и отправьте снова", Toast.LENGTH_LONG).show()
+                return
+            }
+            if (false) {
                 val dir = File(ctx.cacheDir, "export").also { it.mkdirs() }
                 val safe = b.title.replace(Regex("[^\\p{L}\\p{N}_-]+"), "_").trim('_').ifBlank { "batch" }.take(40)
                 val f = File(dir, "Партия_$safe.html")
@@ -240,6 +297,71 @@ object BatchShare {
     }
 }
 
+// ───────────────────────────── управление партией (администратор) ─────────────────────────────
+
+/**
+ * Управляющий файл партии на Диске: BATCHCTL_код.json = {"all":"run|stop|del","w":{"хеш имени":"stop|del"},"adm":[хеш админа]}.
+ * Сервер (Code.gs) проверяет его при каждом запросе работника: stop — окно закрывается, счёт сохраняется;
+ * del — данные на устройстве стираются. Нет файла — всё работает. Вызывать не в главном потоке.
+ */
+object BatchCtl {
+    private fun fname(code: String) = "BATCHCTL_$code.json"
+
+    fun load(app: Context, code: String): JSONObject {
+        val bytes = DriveApi.download(app, fname(code)) ?: return JSONObject()
+        return try { JSONObject(String(bytes, Charsets.UTF_8)) } catch (e: Exception) { JSONObject() }
+    }
+
+    /** Состояние: hash = null — партия в целом (для всех), иначе — конкретный получатель. "run" / "stop" / "del". */
+    fun state(c: JSONObject, hash: String?): String {
+        val all = c.optString("all")
+        if (hash == null) return if (all == "stop" || all == "del") all else "run"
+        if (all == "del") return "del"
+        val own = c.optJSONObject("w")?.optString(hash).orEmpty()
+        return if (own == "del") "del" else if (all == "stop" || own == "stop") "stop" else "run"
+    }
+
+    private fun write(app: Context, code: String, c: JSONObject) {
+        c.put("t", System.currentTimeMillis())
+        try { DriveApi.delete(app, fname(code)) } catch (e: Exception) { }
+        DriveApi.uploadBytes(app, fname(code), "application/json", c.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    /** op: "stop" | "run" | "del"; hash = null — для всех получателей. Возвращает новое состояние. */
+    fun set(app: Context, b: Batch, hash: String?, op: String): JSONObject {
+        val c = load(app, b.code)
+        val adm = JSONArray()
+        Session.user?.takeIf { it.isAdmin }?.let { adm.put(BatchShare.sha(BatchShare.normName(it.login))) }
+        c.put("adm", adm)
+        val w = c.optJSONObject("w") ?: JSONObject().also { c.put("w", it) }
+        if (hash == null) {
+            c.put("all", op)
+            if (op == "run") w.keys().asSequence().toList().forEach { if (w.optString(it) == "stop") w.remove(it) }
+        } else if (op == "run") w.remove(hash) else w.put(hash, op)
+        write(app, b.code, c)
+        return c
+    }
+
+    /** Имя снова добавлено в партию (после удаления) — снимаем с него «удалён». */
+    fun reinstate(app: Context, b: Batch) {
+        try {
+            val c = load(app, b.code)
+            val w = c.optJSONObject("w") ?: return
+            var changed = false
+            b.names.split(',', ';', '\n').map { BatchShare.normName(it) }.filter { it.isNotEmpty() }.forEach {
+                val h = BatchShare.sha(it)
+                if (w.optString(h) == "del") { w.remove(h); changed = true }
+            }
+            if (changed) write(app, b.code, c)
+        } catch (e: Exception) {
+        }
+    }
+}
+
+private fun stText(s: String) = when (s) { "stop" -> "остановлено"; "del" -> "удалено"; else -> "работает" }
+
+private class CtlAsk(val who: String?)
+
 // ───────────────────────────── экраны ─────────────────────────────
 
 private fun displayName(ctx: Context, uri: Uri): String = try {
@@ -250,9 +372,25 @@ private fun displayName(ctx: Context, uri: Uri): String = try {
     ""
 }
 
-/** Окно «Партии»: сверху «Добавить», ниже созданные партии. */
+/** Окно «Партии» только для администратора: у остальных пользователей приложения оно не открывается. */
 @Composable
 fun BatchesScreen(prefs: Prefs, onBack: () -> Unit) {
+    if (Session.user?.isAdmin == true) {
+        BatchesScreenImpl(prefs, onBack)
+    } else {
+        BackHandler(onBack = onBack)
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Row(Modifier.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("← Назад") }
+            }
+            Text("Партии доступны только администратору.", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(8.dp))
+        }
+    }
+}
+
+/** Окно «Партии»: сверху «Добавить», ниже созданные партии. */
+@Composable
+private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { BatchStore.load(ctx) }
@@ -438,15 +576,52 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
     var sendDlg by remember { mutableStateOf(false) }
     var qrLink by remember { mutableStateOf<String?>(null) }
 
+    // управление партией: стоп / пуск / удаление — для всех получателей или для одного
+    var ctl by remember(b.id) { mutableStateOf<JSONObject?>(null) }
+    var ctlOpen by remember(b.id) { mutableStateOf(false) }
+    var ctlBusy by remember(b.id) { mutableStateOf(false) }
+    var ctlAsk by remember(b.id) { mutableStateOf<CtlAsk?>(null) }
+    val workers = b.names.split(',', ';', '\n').map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { BatchShare.normName(it) }
+
+    fun ctlLoad() {
+        if (b.link.isBlank()) return
+        val app = ctx.applicationContext
+        scope.launch {
+            try { ctl = withContext(Dispatchers.IO) { BatchCtl.load(app, b.code) } }
+            catch (e: Exception) { Toast.makeText(app, "Не удалось получить состояние: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show() }
+        }
+    }
+    fun ctlDo(who: String?, op: String) {
+        if (ctlBusy) return
+        ctlBusy = true
+        val app = ctx.applicationContext
+        scope.launch {
+            try {
+                val hash = who?.let { BatchShare.sha(BatchShare.normName(it)) }
+                ctl = withContext(Dispatchers.IO) { BatchCtl.set(app, b, hash, op) }
+                if (who != null && op == "del") {
+                    b.names = workers.filter { it != who }.joinToString(", ")
+                    BatchStore.save(app)
+                }
+                Toast.makeText(app, when (op) { "stop" -> "Остановлено"; "run" -> "Возобновлено"; else -> "Удалено" } +
+                    ": " + (who ?: "все получатели"), Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(app, "Не получилось: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            }
+            ctlBusy = false
+        }
+    }
+    LaunchedEffect(b.link) { if (b.link.isNotBlank()) ctlLoad() }
+
     /** Загружает партию на Диск (если не удалось — партию всё равно можно отправить файлом без ссылки), затем action(ссылка). */
-    fun publish(action: (String) -> Unit) {
+    fun publish(force: Boolean = false, action: (String) -> Unit) {
         if (busy) return
         busy = true
         BatchStore.save(ctx)
         val app = ctx.applicationContext
         scope.launch {
             val link = try {
-                withContext(Dispatchers.IO) { BatchShare.publish(app, b) }
+                withContext(Dispatchers.IO) { BatchShare.publish(app, b, force) }
             } catch (e: Exception) {
                 Toast.makeText(app, "На Диск не загружено: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
                 ""
@@ -465,18 +640,68 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
         // над списком: «Отправить» и «QR»
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                enabled = !busy && b.rows.isNotEmpty(),
+                enabled = !busy && b.rows.isNotEmpty() && b.names.isNotBlank(),
                 modifier = Modifier.weight(1f).height(48.dp),
                 onClick = { sendDlg = true }
             ) { Text(if (busy) "Загружаю…" else "Отправить") }
             OutlinedButton(
-                enabled = !busy && b.rows.isNotEmpty(),
+                enabled = !busy && b.rows.isNotEmpty() && b.names.isNotBlank(),
                 modifier = Modifier.weight(1f).height(48.dp),
                 onClick = { publish { link -> if (link.isNotBlank()) qrLink = link } }
             ) { Text("QR-код") }
         }
         Spacer(Modifier.height(8.dp))
         CompactField(value = b.title, onChange = { b.title = germanKeys(it) }, hint = "Название партии", modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(6.dp))
+        CompactField(value = b.names, onChange = { b.names = it }, hint = "Имена получателей (через запятую)", modifier = Modifier.fillMaxWidth())
+        Text(
+            "HTML откроется только с этими именами и только в рабочее время (часы задаёт администратор в Настройки → Доступ по месту и времени).",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+        )
+        if (b.link.isNotBlank()) {
+            OutlinedButton(
+                enabled = !busy && b.names.isNotBlank(),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                onClick = { publish(true) { l -> Toast.makeText(ctx, if (l.isNotBlank()) "Доступ обновлён: новые имена сразу работают по прежней ссылке" else "Не удалось обновить", Toast.LENGTH_LONG).show() } }
+            ) { Text("Обновить имена и доступ") }
+        }
+        if (b.link.isNotBlank()) {
+            val c = ctl ?: JSONObject()
+            val allSt = BatchCtl.state(c, null)
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                onClick = { ctlOpen = !ctlOpen; if (ctlOpen) ctlLoad() }
+            ) { Text("Управление партией · " + stText(allSt) + if (ctlOpen) " ▴" else " ▾") }
+            if (ctlOpen) {
+                Card(Modifier.fillMaxWidth().padding(top = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(12.dp).heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                        Text("Все получатели: " + stText(allSt), fontWeight = FontWeight.Bold)
+                        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (allSt == "run") OutlinedButton(enabled = !ctlBusy, modifier = Modifier.weight(1f), onClick = { ctlDo(null, "stop") }) { Text("Стоп") }
+                            else OutlinedButton(enabled = !ctlBusy, modifier = Modifier.weight(1f), onClick = { ctlDo(null, "run") }) { Text("Пуск") }
+                            OutlinedButton(enabled = !ctlBusy && allSt != "del", modifier = Modifier.weight(1f), onClick = { ctlAsk = CtlAsk(null) }) {
+                                Text("Удалить", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        if (workers.isNotEmpty()) Text("По получателям", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp))
+                        workers.forEach { n ->
+                            val st = BatchCtl.state(c, BatchShare.sha(BatchShare.normName(n)))
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(n, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(stText(st) + if (allSt != "run" && st == "run") " (партия в целом: " + stText(allSt) + ")" else "", style = MaterialTheme.typography.bodySmall)
+                                }
+                                if (st == "stop") TextButton(enabled = !ctlBusy, onClick = { ctlDo(n, "run") }) { Text("Пуск") }
+                                else TextButton(enabled = !ctlBusy && st == "run", onClick = { ctlDo(n, "stop") }) { Text("Стоп") }
+                                TextButton(enabled = !ctlBusy && st != "del", onClick = { ctlAsk = CtlAsk(n) }) { Text("✕", color = MaterialTheme.colorScheme.error) }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             "Позиций: ${b.rows.size} · всего: ${fmtQ(b.rows.sumOf { parseQ(batchQty(it.qty)) })}",
@@ -505,6 +730,20 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
         OutlinedButton(onClick = onAddMore, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Добавить ещё") }
     }
 
+    ctlAsk?.let { a ->
+        AlertDialog(
+            onDismissRequest = { ctlAsk = null },
+            title = { Text(if (a.who == null) "Удалить партию у всех?" else "Удалить партию у «${a.who}»?") },
+            text = {
+                Text(
+                    if (a.who == null) "У всех получателей окно закроется, а данные на их устройствах сотрутся при следующем подключении. Ссылка и QR перестанут открывать партию. Вернуть доступ можно кнопкой «Пуск» для всех."
+                    else "У этого получателя окно закроется, данные на его устройстве сотрутся при следующем подключении. Имя уберётся из списка получателей; чтобы вернуть его, добавьте имя снова и обновите доступ."
+                )
+            },
+            confirmButton = { Button(onClick = { val w = a.who; ctlAsk = null; ctlDo(w, "del") }) { Text("Удалить") } },
+            dismissButton = { TextButton(onClick = { ctlAsk = null }) { Text("Отмена") } }
+        )
+    }
     if (sendDlg) {
         AlertDialog(
             onDismissRequest = { sendDlg = false },
