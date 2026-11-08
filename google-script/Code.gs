@@ -55,6 +55,9 @@ function doGet(e) {
     if (String(params.action || '').toLowerCase() === 'counts') return getCounts_(params.code);
     // Публично: состояние партии для конкретного работника (run / stop / del) — окно у работника закрывается само
     if (String(params.action || '').toLowerCase() === 'status') return getStatus_(params.code, params.who);
+    // Публично, по коду существующей партии: подсказки сайта stroeh.de и каталог товаров для HTML-страницы партии
+    var pubAct = String(params.action || '').toLowerCase();
+    if (pubAct === 'stroehs' || pubAct === 'stroeha' || pubAct === 'catalog') return publicBatchTool_(pubAct, params);
     checkToken_(params.token);
     var action = String(params.action || 'ping').toLowerCase();
     // Поиск артикула на stroeh.de (второй уровень артикула). Папка Диска не нужна.
@@ -587,6 +590,18 @@ function stroehSearch_(q) {
   }
   if (items.length) cache.put(key, JSON.stringify(items), 6 * 3600);
   return {ok: true, items: items};
+}
+
+// Публичные запросы HTML-страницы партии. Работают только с кодом существующей партии (не открытый прокси).
+// catalog — файл CATALOG.json (название, штрих-код, артикул), который приложение кладёт на Диск вместе с партией.
+function publicBatchTool_(act, p) {
+  var r = readBatch_(p.code);
+  if (r.err) return json_({ok: false, error: r.err});
+  if (act === 'stroehs') return json_(stroehSearch_(p.q));
+  if (act === 'stroeha') return json_(stroehArticle_(p.url));
+  var f = newestFile_('CATALOG.json', false);
+  if (!f) return json_({ok: true, items: []});
+  return json_({ok: true, items: JSON.parse(f.getBlob().getDataAsString('UTF-8'))});
 }
 
 function stroehArticle_(url) {

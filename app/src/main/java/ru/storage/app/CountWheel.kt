@@ -79,6 +79,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -289,7 +290,10 @@ private fun ListSearchField(
 
 /** Мини-окно с подходящими товарами под полем поиска. */
 @Composable
-private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier, maxH: Dp = 280.dp, compact: Boolean = false) {
+private fun SuggestionsCard(
+    hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modifier: Modifier = Modifier, maxH: Dp = 280.dp, compact: Boolean = false,
+    products: List<Product> = emptyList(), onPickProduct: (Product) -> Unit = {}
+) {
     // свой цвет и рамка — чтобы окно подсказок отличалось от основного списка
     Card(
         modifier.fillMaxWidth().heightIn(max = maxH),
@@ -301,7 +305,7 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
         elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
         border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
     ) {
-        if (hits.isEmpty()) {
+        if (hits.isEmpty() && products.isEmpty()) {
             Text("Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
         } else {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -339,6 +343,26 @@ private fun SuggestionsCard(hits: List<ItemRow>, onPick: (ItemRow) -> Unit, modi
                         Text(info, style = MaterialTheme.typography.bodySmall)
                     }
                     if (i < hits.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                }
+                if (products.isNotEmpty()) {
+                    if (hits.isNotEmpty()) HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                    Text(
+                        "Из каталога", Modifier.padding(start = 14.dp, top = 8.dp), style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    products.forEachIndexed { i, p ->
+                        Column(
+                            Modifier.fillMaxWidth().clickable { onPickProduct(p) }.padding(horizontal = 14.dp, vertical = 10.dp)
+                        ) {
+                            Text(p.name, fontWeight = FontWeight.Medium, fontSize = 16.sp, lineHeight = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            val sub = listOf(
+                                if (p.article.isNotBlank()) "арт. ${p.article}" else "",
+                                if (p.barcode.isNotBlank()) "ШК ${p.barcode}" else ""
+                            ).filter { it.isNotEmpty() }.joinToString(" · ")
+                            if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (i < products.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                    }
                 }
             }
         }
@@ -398,6 +422,14 @@ fun CountWheelList(
     onScanCode: ((String) -> Unit)? = null,
     /** кнопка «Фото» в свайпе влево (в «Инвентаре B-Ware»; в «Приёме по имени» есть всегда) */
     photoButton: Boolean = false,
+    /** false — в свайпе строки нет кнопки «Фото» (даже если photoButton включён: «Кол-во» и «EAN» остаются) */
+    rowPhoto: Boolean = true,
+    /** false — в свайпе строки нет кнопки «Брак» */
+    rowDefect: Boolean = true,
+    /** «Приём по имени»: товар из каталога (Firebase), выбранный в подсказках под товарами списка */
+    onPickProduct: ((Product) -> Unit)? = null,
+    /** «Приём по имени»: «+» при набранном названии добавляет товар «как написано»; пусто — вызывается onAdd */
+    onAddTyped: ((String) -> Unit)? = null,
     /** false — правка строки (артикул, штрих-код) меняет только эту строку, каталог не трогает (инвентаризация, сборка: каталог обновляет «Сохранить») */
     catalogSync: Boolean = true
 ) {
@@ -474,6 +506,19 @@ fun CountWheelList(
     val n = rows.size
     val cycle = n + 1
     val hits = if (query.isBlank()) emptyList() else findRows(rows, query)
+    // подсказки из каталога (он синхронизирован с Firebase) — ниже товаров списка; то, что уже есть в списке, не повторяем
+    var catHits by remember { mutableStateOf(emptyList<Product>()) }
+    LaunchedEffect(query, rows.size) {
+        catHits = if (onPickProduct == null || query.trim().length < MIN_SEARCH_CHARS) emptyList()
+        else withContext(Dispatchers.IO) {
+            try {
+                val pdb = ProductDb.get(appCtx)
+                ProductGroups.collapse(pdb, pdb.search(query, 12)).take(8)
+            } catch (e: Exception) { emptyList() }
+        }.filter { p ->
+            rows.none { r -> (r.productId.isNotEmpty() && r.productId == p.id) || r.name.trim().equals(p.name.trim(), true) }
+        }
+    }
 
     // ---- внешний сканер, который «печатает» в поле поиска: быстрые символы подряд ----
     fun looksLikeBarcode(c: String) = c.length in 6..24 && c.all { it.isLetterOrDigit() || it in "-._" } && c.count { it.isDigit() } >= 5
@@ -542,7 +587,16 @@ fun CountWheelList(
         }
     ) {
         if (showSearch) {
-            ListSearchField(query, { onSearchTyped(it) }, onAdd, onScan, searchFocus, { searchFocused = it }) {
+            val addAction: (() -> Unit)? = if (onAdd != null || onAddTyped != null) ({
+                val typed = query.trim()
+                if (onAddTyped != null && typed.isNotEmpty()) {
+                    onAddTyped(typed)
+                    query = ""
+                    focusManager.clearFocus()
+                    keyboard?.hide()
+                } else onAdd?.invoke()
+            }) else null
+            ListSearchField(query, { onSearchTyped(it) }, addAction, onScan, searchFocus, { searchFocused = it }) {
                 if (scanBurst[1] >= 4L && onScanCode != null) finishScanBurst() else hits.firstOrNull()?.let { pick(it) }
             }
             Spacer(Modifier.height(8.dp))
@@ -600,7 +654,8 @@ fun CountWheelList(
                             onDelete = { rows.remove(row) },
                             onEan = onScanBind?.let { cb -> { cb(row) } },
                             onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
-                            onPhoto = if ((nameMode && !bware) || photoButton) ({ photoRow = row; takePhoto() }) else null
+                            onPhoto = if ((nameMode && !bware) || (photoButton && rowPhoto)) ({ photoRow = row; takePhoto() }) else null,
+                            defectButton = rowDefect
                         )
                     }
                 }
@@ -706,7 +761,8 @@ fun CountWheelList(
                                     onDelete = { rows.remove(row) },
                                     onEan = onScanBind?.let { cb -> { cb(row) } },
                                     onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
-                                    onPhoto = if ((nameMode && !bware) || photoButton) ({ photoRow = row; takePhoto() }) else null
+                                    onPhoto = if ((nameMode && !bware) || (photoButton && rowPhoto)) ({ photoRow = row; takePhoto() }) else null,
+                                    defectButton = rowDefect
                                 )
                             }
                         }
@@ -715,11 +771,18 @@ fun CountWheelList(
             }
             // «Приём по имени»: подсказки появляются с третьей буквы и остаются, пока есть похожие названия
             // или пока не нажали на название (в подсказках или в списке); без совпадений окно скрывается
-            val showSuggestions = if (nameMode) query.trim().length >= 3 && hits.isNotEmpty() else query.isNotBlank()
+            val showSuggestions = if (nameMode) query.trim().length >= 3 && (hits.isNotEmpty() || catHits.isNotEmpty()) else query.isNotBlank()
             if (showSuggestions) {
                 SuggestionsCard(
                     hits, onPick = { pick(it) }, modifier = Modifier.align(Alignment.TopCenter),
-                    maxH = if (nameMode) 336.dp else 280.dp, compact = nameMode
+                    maxH = if (nameMode) 336.dp else 280.dp, compact = nameMode,
+                    products = catHits,
+                    onPickProduct = { p ->
+                        onPickProduct?.invoke(p)
+                        query = ""
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    }
                 )
             }
             // в «Приёме по имени» круглую кнопку рисует сам экран (поверх всего окна), здесь — только для других окон
@@ -815,11 +878,13 @@ private fun WheelRow(
     /** «Приём по имени»: кнопка «Кол-во» — ввод итогового количества с клавиатуры */
     onPickQty: (() -> Unit)? = null,
     /** «Приём по имени»: кнопка «Фото» — снимок товара, печатается в документе и уходит на Google Диск */
-    onPhoto: (() -> Unit)? = null
+    onPhoto: (() -> Unit)? = null,
+    /** false — в свайпе нет кнопки «Брак» */
+    defectButton: Boolean = true
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
-    val btnCount = 2 + (if (onEan != null) 1 else 0) + (if (onPickQty != null) 1 else 0) + (if (onPhoto != null) 1 else 0)
+    val btnCount = 1 + (if (defectButton) 1 else 0) + (if (onEan != null) 1 else 0) + (if (onPickQty != null) 1 else 0) + (if (onPhoto != null) 1 else 0)
     val btnW = if (btnCount >= 5) 62.dp else 76.dp
     val maxPx = with(density) { (btnW * btnCount).toPx() }
     val rightPx = with(density) { 96.dp.toPx() }
@@ -897,23 +962,25 @@ private fun WheelRow(
                 .width(btnW * btnCount)
                 .clip(RoundedCornerShape(14.dp))
         ) {
-            Box(
-                Modifier.weight(1f).fillMaxHeight()
-                    .background(scheme.secondaryContainer)
-                    .clickable(enabled = canEdit) {
-                        scope.launch { anim.animateTo(0f) }
-                        if (hasDetails) onDetails?.invoke() else onPickDefect()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    if (hasDetails) (if (row.reasons.isEmpty()) "Причины" else "Причины\n${row.reasons.size}")
-                    else if (defD > 0) "Брак\n${fmtQ(defD)}" else "Брак",
-                    textAlign = TextAlign.Center,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = scheme.onSecondaryContainer
-                )
+            if (defectButton) {
+                Box(
+                    Modifier.weight(1f).fillMaxHeight()
+                        .background(scheme.secondaryContainer)
+                        .clickable(enabled = canEdit) {
+                            scope.launch { anim.animateTo(0f) }
+                            if (hasDetails) onDetails?.invoke() else onPickDefect()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        if (hasDetails) (if (row.reasons.isEmpty()) "Причины" else "Причины\n${row.reasons.size}")
+                        else if (defD > 0) "Брак\n${fmtQ(defD)}" else "Брак",
+                        textAlign = TextAlign.Center,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onSecondaryContainer
+                    )
+                }
             }
             if (onEan != null) {
                 Box(

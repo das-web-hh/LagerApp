@@ -91,7 +91,7 @@ class MainActivity : FragmentActivity() {
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         AppLock.touch()
-        if (!AppGuard.blocked && BtScan.onKey(this, event)) return true
+        if (!AppGuard.blocked && !VerGuard.isBlocked && BtScan.onKey(this, event)) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -239,7 +239,9 @@ fun AppRoot() {
         }
         current?.let { cu ->
             AppGate(user = cu, onLogout = doLogout) {
-                MainScreen(prefs = prefs, profile = profile, onLogout = doLogout)
+                VersionGate(user = cu, onLogout = doLogout) {
+                    MainScreen(prefs = prefs, profile = profile, onLogout = doLogout)
+                }
             }
         }
         Incoming.pending.firstOrNull()?.let { IncomingChoiceDialog(it) }

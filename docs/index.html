@@ -142,6 +142,9 @@ const nmz=s=>String(s||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ')
 const API=P.get('s')||'',ap=k=>API+(API.indexOf('?')<0?'?':'&')+k;let T0=0,P0=0,LOADED=0,ASK=0,RM=new Map(),DEV='',pushT=0,tm=0,ST='';
 const nowS=()=>T0?T0+(performance.now()-P0):Date.now(),oth=r=>(OT.get(r.sid)||0)+(RM.get(r.sid)||0);
 const fj=(u,o)=>fetch(u,Object.assign({redirect:'follow',cache:'no-store'},o||{})).then(r=>r.json());
+let WEB={q:'',items:[]},webT=0;
+/* каталог товаров (из Firebase, его кладёт на Диск приложение) — в подсказки «из базы»; артикулы и штрих-коды дополняются */
+if(API&&CODE)fj(ap('action=catalog&code='+encodeURIComponent(CODE))).then(j=>{if(!j||!j.ok||!Array.isArray(j.items)||!j.items.length)return;const m=new Map(CAT.map(p=>[String(p.name).trim().toLowerCase(),p]));j.items.forEach(x=>{const n=String(x[0]||'').trim();if(!n)return;const k=n.toLowerCase(),p=m.get(k);if(p){if(!p.barcode&&x[1])p.barcode=String(x[1]);if(!p.article&&x[2])p.article=String(x[2])}else{const q={id:Date.now()+Math.random(),name:n,barcode:String(x[1]||''),article:String(x[2]||'')};CAT.push(q);m.set(k,q)}});saveCat()}).catch(()=>{});
 /* серверное время: из ответа скрипта, иначе из заголовка Date сайта (GitHub Pages) — часы телефона не используются */
 function sync(){return fj(ap('action=auth&code='+encodeURIComponent(CODE))).then(j=>{if(!j.ok)throw 0;AU=j.auth||{};
  return(j.now?Promise.resolve(j.now):fetch(location.href.split('#')[0],{method:'HEAD',cache:'no-store'}).then(r=>Date.parse(r.headers.get('Date'))||0)).then(t=>{if(t){T0=t;P0=performance.now()}})})}
@@ -373,16 +376,21 @@ const drumBase=r=>drumLive(r)?drum.base:pq(r.fact),drumInit=r=>drumLive(r)?Math.
 /* ---------- экран ---------- */
 function pct(){const p=S.items.filter(r=>!r.extra);const pl=p.reduce((s,r)=>s+pq(r.qty),0),c=p.reduce((s,r)=>s+Math.min(pq(r.fact)+oth(r),pq(r.qty)),0);return pl>0?Math.max(0,Math.min(100,Math.round(c/pl*100))):0}
 function top_(){const t=$('#who');if(!t)return;t.innerHTML='<span class="bb sn">'+esc(S.name)+' ▾</span><b>'+pct()+'%</b>';$('#nx').disabled=S.saved||!S.items.length;$('#er').textContent=err;$('#sv').textContent=S.saved?'Приём сохранён':''}
-function setQ(v){query=v;const q=$('#q');if(q&&q.value!==v)q.value=v;sugg();if(v.trim()){const h=findRows(v);if(h[0])goTo(h[0],0)}$('#cl').style.display=v?'':'none'}
+function setQ(v){query=v;const q=$('#q');if(q&&q.value!==v)q.value=v;sugg();webAsk(v);if(v.trim()){const h=findRows(v);if(h[0])goTo(h[0],0)}$('#cl').style.display=v?'':'none'}
 let noSg=0;
+/* подсказки с сайта stroeh.de: от 4 символов, через 0,7 с после последнего символа; артикул берётся со страницы товара */
+function webAsk(v){clearTimeout(webT);v=String(v||'').trim();if(!API||!CODE||noSg||v.length<4||/^\d+$/.test(v)||WEB.q===v)return;webT=setTimeout(()=>{fj(ap('action=stroehs&code='+encodeURIComponent(CODE)+'&q='+encodeURIComponent(v))).then(j=>{if(j&&j.ok&&query.trim()===v){WEB={q:v,items:(j.items||[]).slice(0,10)};sugg()}}).catch(()=>{})},700)}
+function webPick(h){fj(ap('action=stroeha&code='+encodeURIComponent(CODE)+'&url='+encodeURIComponent(h.url))).then(j=>{if(!j||!j.ok)throw 0;const n=String(j.name||h.name).trim(),a=String(j.article||'');let p=byNm(n);if(!p){p={id:Date.now(),name:n,barcode:'',article:a};CAT.push(p)}else if(!p.article)p.article=a;saveCat();noSg=1;setQ(n);noSg=0;$('#sg').style.display='none';banner('Артикул '+(a||'—'),1)}).catch(()=>banner('Не удалось получить артикул с сайта',0))}
 function suggItems(q){const w=fold(q.trim()).split(' ').filter(Boolean);if(!w.length)return[];const w0=w[0],rk=(n,b)=>{n=fold(n);return b&&b.startsWith(w0)||n.startsWith(w0)?0:n.split(/[ ,\-\/()]/).some(x=>x.startsWith(w0))?1:2};
  const rows=findRows(q).map(r=>({name:r.name,row:r,k:rk(r.name,r.barcode.toLowerCase())})),seen=new Set(rows.map(e=>e.name.trim().toLowerCase()));
  const cat=CAT.filter(p=>{const n=fold(p.name),b=(p.barcode||'').toLowerCase();return w.every(x=>n.includes(x)||(b&&b.includes(x)))&&!seen.has(p.name.trim().toLowerCase())}).map(p=>({name:p.name,cat:p,k:rk(p.name,(p.barcode||'').toLowerCase())}));
- return rows.concat(cat.sort((a,b)=>a.k-b.k)).slice(0,30)}
+ const all=rows.concat(cat.sort((a,b)=>a.k-b.k)),sn=new Set(all.map(e=>e.name.trim().toLowerCase())),
+  wb=WEB.q===q.trim()?WEB.items.filter(h=>!sn.has(h.name.trim().toLowerCase())).slice(0,6).map(h=>({name:h.name,web:h,k:3})):[];
+ return all.slice(0,24).concat(wb)}
 function sugg(){const g=$('#sg'),h=!noSg&&query.trim().length>=3?suggItems(query):[];g.style.display=h.length?'block':'none';g.innerHTML='';
- h.forEach(x=>{const r=x.row,a=r?art(r):(x.cat.article||''),i=[];if(r){if(r.extra){if(a)i.push('арт. '+a)}else{i.push(fq(pq(r.qty)));if(a)i.push('арт. '+a)}if(r.fact)i.push('факт '+fq(pq(r.fact)))}else{i.push('из базы');if(a)i.push('арт. '+a)}
+ h.forEach(x=>{const r=x.row,a=r?art(r):(x.cat?x.cat.article||'':''),i=[];if(r){if(r.extra){if(a)i.push('арт. '+a)}else{i.push(fq(pq(r.qty)));if(a)i.push('арт. '+a)}if(r.fact)i.push('факт '+fq(pq(r.fact)))}else{i.push(x.web?'сайт stroeh.de':'из базы');if(a)i.push('арт. '+a)}
   const e=E('div','','<b>'+esc(x.name)+'</b><small>'+i.join(' · ')+'</small>');
-  e.onclick=()=>{if(r){query='';$('#q').value='';$('#cl').style.display='none';g.style.display='none';$('#q').blur();goTo(r,1)}else{noSg=1;setQ(x.name);noSg=0;g.style.display='none'}};g.appendChild(e)})}
+  e.onclick=()=>{if(r){query='';$('#q').value='';$('#cl').style.display='none';g.style.display='none';$('#q').blur();goTo(r,1)}else if(x.web){webPick(x.web)}else{noSg=1;setQ(x.name);noSg=0;g.style.display='none'}};g.appendChild(e)})}
 function render(){mkOT();const A=$('#app');A.innerHTML='';els.clear();if(!S){fab_();A.innerHTML='<div style="margin:auto;text-align:center"><button class=btn id=nb>Создать партию</button></div>';const mkB=n=>{S=newB(n);BT.list.push(S);save();render();note('Добавлено\n«'+n+'»')};const go=()=>nameDlg(defName(),mkB,1);$('#nb').onclick=go;go();return}
  if(step===1)return summary(A);
  A.innerHTML='<div class=top><div class=who id=who></div><button class=btn id=nx>Далее</button></div><div id=er class=err></div><div id=sv class=ok></div><div class=sf><svg width=24 height=24 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><circle cx=11 cy=11 r=7 /><path d="M20 20l-4-4"/></svg><input id=q placeholder="Поиск" autocomplete=off><button id=cl style="display:none;font-size:16px">✕</button><button id=sc>'+scIco('var(--pri)')+'</button><button id=ad>＋</button></div><div id=wh><div id=lst></div><div id=sg></div></div>';

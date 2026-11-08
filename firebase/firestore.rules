@@ -26,6 +26,20 @@ service cloud.firestore {
       return isActive() && get(meRef()).data.role == 'admin';
     }
 
+    // «Версия приложения разрешена администратором»: пока в config/app не включена блокировка (enforce) — всем можно.
+    // Когда включена — только тем, чей телефон записал в users/{я}.appBuild версию не ниже config/app.minBuild
+    // и которой нет в списке config/app.blockedBuilds. Старые версии (до 2.30.0) appBuild не пишут — закрываются сами.
+    function versionOk() {
+      let cfgPath = /databases/$(database)/documents/config/app;
+      return !exists(cfgPath)
+        || get(cfgPath).data.get('enforce', false) != true
+        || (get(meRef()).data.get('appBuild', 0) >= get(cfgPath).data.get('minBuild', 0)
+            && !(get(meRef()).data.get('appBuild', 0) in get(cfgPath).data.get('blockedBuilds', [])));
+    }
+    function isCurrent() {
+      return isActive() && versionOk();
+    }
+
     // ───────────── Работники ─────────────
     match /users/{id} {
       // Публичное чтение users/{id} УДАЛЕНО: раньше любой без входа мог прочитать passHash по Email.
@@ -64,28 +78,28 @@ service cloud.firestore {
 
     // ───────────── Задачи и чат ─────────────
     match /tasks/{id} {
-      allow read: if isActive();
+      allow read: if isCurrent();
       allow create: if isAdmin()
         || (signedIn() && id == ('approve_' + me()) && request.resource.data.type == 'approve');
-      allow update: if isActive();
+      allow update: if isCurrent();
       allow delete: if isAdmin();
     }
     match /chat/{id} {
-      allow read, write: if isActive();
+      allow read, write: if isCurrent();
     }
 
     // ───────────── Данные склада ─────────────
-    match /products/{id}         { allow read, write: if isActive(); }
-    match /receipts/{id}         { allow read, write: if isActive(); }
-    match /shipments/{id}        { allow read, write: if isActive(); }
-    match /wagen_ops/{id}        { allow read, write: if isActive(); }
+    match /products/{id}         { allow read, write: if isCurrent(); }
+    match /receipts/{id}         { allow read, write: if isCurrent(); }
+    match /shipments/{id}        { allow read, write: if isCurrent(); }
+    match /wagen_ops/{id}        { allow read, write: if isCurrent(); }
     // черновики «Приём B-Ware» и «Инвентарь B-Ware» (чтобы незавершённая операция не пропадала при переустановке)
-    match /bware_drafts/{id}     { allow read, write: if isActive(); }
-    match /unload_ops/{id}       { allow read, write: if isActive(); }
+    match /bware_drafts/{id}     { allow read, write: if isCurrent(); }
+    match /unload_ops/{id}       { allow read, write: if isCurrent(); }
 
     // Шаблоны накладных: создавать может любой активный (автораспознавание), править и удалять — администратор
     match /invoice_profiles/{id} {
-      allow read, create: if isActive();
+      allow read, create: if isCurrent();
       allow update, delete: if isAdmin();
     }
 

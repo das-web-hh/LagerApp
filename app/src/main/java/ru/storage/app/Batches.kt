@@ -218,6 +218,7 @@ object BatchShare {
             throw RuntimeException("Партия удалена у всех получателей. Верните её кнопкой «Пуск» в «Управление партией»")
         // рабочее время берём с сервера (не из кеша), чтобы HTML получил актуальные часы
         val cfg = try { kotlinx.coroutines.runBlocking { AccessStore.load(app) } } catch (e: Exception) { AccessStore.cached(app) }
+        pushCatalog(app)
         val dataStr = json(b, cfg, true)
         val h = sha(dataStr + link)
         if (!force && b.link == link && b.pubHash == h) return@synchronized link
@@ -230,6 +231,28 @@ object BatchShare {
         b.pubHash = h
         BatchCtl.reinstate(app, b)
         link
+    }
+
+    /**
+     * Каталог товаров (он синхронизирован с Firebase) кладётся на Диск файлом CATALOG.json: [[название, штрих-код, артикул], …].
+     * HTML-страница партии берёт его у скрипта (action=catalog) для подсказок «из базы». Отправляется, только если каталог изменился.
+     */
+    private fun pushCatalog(app: Context) {
+        try {
+            val list = ProductDb.get(app).allProducts().filter { it.name.isNotBlank() }
+            if (list.isEmpty()) return
+            val arr = org.json.JSONArray()
+            list.forEach { p -> arr.put(org.json.JSONArray().put(p.name.trim()).put(p.barcode.trim()).put(p.article.trim())) }
+            val txt = arr.toString().replace("<", "\\u003c")
+            val h = sha(txt)
+            val sp = app.getSharedPreferences("batch_catalog", Context.MODE_PRIVATE)
+            if (sp.getString("hash", "") == h) return
+            try { DriveApi.delete(app, "CATALOG.json") } catch (e: Exception) { }
+            DriveApi.uploadBytes(app, "CATALOG.json", "application/json", txt.toByteArray(Charsets.UTF_8))
+            sp.edit().putString("hash", h).apply()
+        } catch (e: Exception) {
+            // каталог — только подсказки; партия публикуется и без него
+        }
     }
 
     /** Код партии из ссылки / текста QR; null — это не ссылка на партию. */

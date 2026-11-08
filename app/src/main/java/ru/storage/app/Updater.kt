@@ -271,6 +271,16 @@ object Updater {
 
     fun install(ctx: Context, v: AppVersion) = run { downloadAndInstall(ctx, v) }
 
+    /** Удаляет версию с Диска: сначала описание (версия сразу пропадает у всех), потом части. */
+    fun deleteVersion(ctx: Context, v: AppVersion) = run {
+        val app = ctx.applicationContext
+        status = "Удаляю версию ${v.version}…"
+        DriveApi.delete(app, manifestName(v.version))
+        v.parts.forEach { try { DriveApi.delete(app, it) } catch (e: Exception) { } }
+        checkNow(app)
+        status = "Версия ${v.version} удалена с Диска"
+    }
+
     /** При запуске: раз в 6 часов проверяем Диск и, если этой версии там нет, сохраняем её (только не по мобильному интернету). */
     fun auto(ctx: Context) {
         val app = ctx.applicationContext
@@ -352,31 +362,8 @@ fun UpdateScreen(onBack: () -> Unit) {
             "Версии хранятся в папке Google Диска, настроенной в «Настройки → Google Диск». Приложение само сохраняет туда свою версию (по Wi-Fi) и проверяет, нет ли новее.",
             style = MaterialTheme.typography.bodySmall
         )
-        Spacer(Modifier.height(16.dp))
-        Text("Версии на Диске", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-        if (Updater.versions.isEmpty()) {
-            Text("Пока нет сохранённых версий", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
-        }
-        Updater.versions.forEach { v ->
-            val mark = when {
-                v.version == cur -> "установлена"
-                Updater.cmp(v.version, cur) > 0 -> "новее"
-                else -> "старее"
-            }
-            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Версия ${v.version} · $mark", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        listOfNotNull(
-                            verDate.format(Date(v.time)).takeIf { v.time > 0 },
-                            String.format(Locale.getDefault(), "%.1f МБ", v.size / 1048576.0)
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-            HorizontalDivider()
-        }
+        Spacer(Modifier.height(12.dp))
+        VersionManager()
         Spacer(Modifier.height(24.dp))
     }
 }

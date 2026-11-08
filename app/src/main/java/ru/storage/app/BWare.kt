@@ -354,6 +354,9 @@ fun CatalogWheel(
     var bindRow by remember { mutableStateOf<ItemRow?>(null) }
     var query by remember { mutableStateOf("") }
     var suggestions by remember { mutableStateOf(emptyList<Product>()) }
+    // подсказки с сайта stroeh.de (через скрипт Google): от 4 символов, после паузы; артикул берётся со страницы товара
+    var webHits by remember { mutableStateOf(emptyList<DriveApi.StrohHit>()) }
+    var webBusy by remember { mutableStateOf(false) }
     var addTick by remember { mutableIntStateOf(0) }
     var focusTarget by remember { mutableStateOf<ItemRow?>(null) }
     var detailsRow by remember { mutableStateOf<ItemRow?>(null) }
@@ -362,6 +365,16 @@ fun CatalogWheel(
     LaunchedEffect(query, sync.version) {
         suggestions = if (isolated || query.trim().length < MIN_SEARCH_CHARS) emptyList()
         else withContext(Dispatchers.IO) { ProductGroups.collapse(db, db.search(query, 12)).take(8) }
+    }
+
+    LaunchedEffect(query) {
+        val t = query.trim()
+        webHits = emptyList()
+        if (isolated || strict || t.length < 4 || t.all { it.isDigit() } || !DriveCfg.ready(ctx)) { webBusy = false; return@LaunchedEffect }
+        webBusy = true
+        delay(700)
+        webHits = try { withContext(Dispatchers.IO) { DriveApi.strohSearch(ctx, t) }.take(6) } catch (e: Exception) { emptyList() }
+        webBusy = false
     }
 
     fun addRow(name: String, productId: String, fact: String = "", barcode: String = "") {
@@ -408,6 +421,18 @@ fun CatalogWheel(
         addTick++
         query = ""
         onAdded()
+    }
+
+    // товар с сайта stroeh.de: название и артикул со страницы товара → новая строка с подставленным артикулом
+    fun addFromSite(h: DriveApi.StrohHit) {
+        scope.launch {
+            val r = try { withContext(Dispatchers.IO) { DriveApi.strohArticle(ctx, h.url) } } catch (e: Exception) { null }
+            val name = (r?.first ?: "").ifBlank { h.name }
+            val art = r?.second.orEmpty()
+            addRow(name, db.findByName(name.trim())?.id ?: "")
+            if (art.isNotBlank()) rows.firstOrNull { it.name.trim().equals(name.trim(), true) }?.let { if (it.article.isBlank()) it.article = art }
+            if (art.isBlank()) Toast.makeText(ctx, "Артикул на странице товара не найден", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // штрих-код (камера или внешний сканер): строка с этим кодом +1, иначе товар из каталога добавляется со счётом 1
@@ -585,7 +610,10 @@ fun CatalogWheel(
                 focusTarget = focusTarget,
                 onDetails = { r -> detailsRow = r },
                 onScanBind = if (scanner) ({ r -> bindRow = r; scanMode = "bind" }) else null,
-                photoButton = scanner
+                photoButton = scanner,
+                // «Инвентаризация»: в строке нет кнопок «Фото» и «Брак»
+                rowPhoto = !inventory,
+                rowDefect = !inventory
             )
             val typed = query.trim()
             // «Сборка»: сначала товары из самого списка партии (работает без интернета)
@@ -595,7 +623,8 @@ fun CatalogWheel(
             }.take(8) else emptyList()
             if (typed.length >= MIN_SEARCH_CHARS) {
                 Card(Modifier.fillMaxWidth().heightIn(max = 300.dp).align(Alignment.TopCenter)) {
-                    if (suggestions.isEmpty() && listHits.isEmpty()) {
+                    val webShown = webHits.filter { h -> suggestions.none { it.name.trim().equals(h.name.trim(), true) } }
+                    if (suggestions.isEmpty() && listHits.isEmpty() && webShown.isEmpty()) {
                         Text(
                             if (sync.busy) "Загрузка каталога…" else if (strict) "Нет в списке партии." else if (isolated) "Нет в списке — нажмите «+», чтобы добавить как написано." else "Нет в каталоге — нажмите «+», чтобы добавить как написано.",
                             Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium
@@ -633,6 +662,21 @@ fun CatalogWheel(
                                     if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
                                 }
                                 if (i < suggestions.lastIndex) HorizontalDivider()
+                            }
+                            if (webShown.isNotEmpty() || webBusy) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                                Text(
+                                    if (webBusy && webShown.isEmpty()) "Ищу на stroeh.de…" else "С сайта stroeh.de (артикул подставится)",
+                                    Modifier.padding(start = 14.dp, top = 8.dp, bottom = 2.dp),
+                                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            webShown.forEachIndexed { i, h ->
+                                Column(Modifier.fillMaxWidth().clickable { addFromSite(h) }.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                    Text(h.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text("сайт stroeh.de", style = MaterialTheme.typography.bodySmall)
+                                }
+                                if (i < webShown.lastIndex) HorizontalDivider()
                             }
                         }
                     }
