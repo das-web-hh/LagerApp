@@ -80,6 +80,7 @@ fun OtherScreen(prefs: Prefs) {
     SideEffect { TabRoot.set(2, section == null) }
     when {
         current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
+        current == "EAN" -> EanScreen(prefs) { section = null }
         current == "Шаблоны накладных" -> InvoiceProfilesScreen { section = null }
         current == "История" -> HistoryScreen { section = null }
         current == "Инфо" -> InfoScreen { section = null }
@@ -102,6 +103,7 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Сборка", Icons.Default.ShoppingCart) { section = "Сборка" },
                     TileSpec("Шаблоны накладных", Icons.Default.Edit, InvoiceProfiles.newCount) { section = "Шаблоны накладных" },
                     TileSpec("Каталог товаров", Icons.Default.Menu) { section = "Каталог товаров" },
+                    TileSpec("EAN", Icons.Default.Search) { section = "EAN" },
                     TileSpec("История", Icons.Default.DateRange) { section = "История" },
                     TileSpec("Инфо", Icons.Default.Info) { section = "Инфо" },
                     TileSpec("Журнал", Icons.AutoMirrored.Filled.List) { section = "Журнал" },

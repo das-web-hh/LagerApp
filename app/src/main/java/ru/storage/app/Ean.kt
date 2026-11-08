@@ -26,6 +26,37 @@ object Ean {
         else -> code
     }
 
+    /**
+     * Рисунок штрих-кода для экрана: строка модулей (1 — полоса, 0 — пробел), позиции охранных полос и сам код из 13 или 8 цифр
+     * (UPC-A дополняется нулём до EAN-13). null — это не EAN-13/EAN-8 или контрольная цифра не сходится: такой код нарисовать нельзя.
+     */
+    fun pattern(raw: String): Triple<String, Set<Int>, String>? {
+        val digits = raw.filter { it.isDigit() }
+        if (digits.isEmpty()) return null
+        val code = if (digits.length == 12) "0$digits" else digits
+        if (code.length == 13 && checkOk(code)) {
+            val par = PARITY[code[0] - '0']
+            val m = StringBuilder("101")
+            for (i in 0 until 6) {
+                val d = code[1 + i] - '0'
+                m.append(if (par[i] == 'L') L[d] else G[d])
+            }
+            m.append("01010")
+            for (i in 0 until 6) m.append(R[code[7 + i] - '0'])
+            m.append("101")
+            return Triple(m.toString(), setOf(0, 2, 45, 47, 92, 94), code)
+        }
+        if (code.length == 8 && checkOk(code)) {
+            val m = StringBuilder("101")
+            for (i in 0 until 4) m.append(L[code[i] - '0'])
+            m.append("01010")
+            for (i in 0 until 4) m.append(R[code[4 + i] - '0'])
+            m.append("101")
+            return Triple(m.toString(), setOf(0, 2, 32, 34, 64, 66), code)
+        }
+        return null
+    }
+
     private fun bars(modules: String, x0: Int, guardIdx: Set<Int>, sb: StringBuilder) {
         var i = 0
         while (i < modules.length) {
