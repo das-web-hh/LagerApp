@@ -751,9 +751,9 @@ function publicBatchTool_(act, p) {
   return json_({ok: true, items: JSON.parse(f.getBlob().getDataAsString('UTF-8'))});
 }
 
-// Адрес главного фото со страницы товара. Порядок: JSON-LD Product → картинки галереи перед «Artikelnr.» → og:image.
+// Адрес главного фото со страницы товара.
 function stroehImage_(html) {
-  var BAD = /logo|icon|sprite|payment|paypal|badge|flag|banner|placeholder|blank|loader|pixel|spacer|riders|feedscanner|siegel|trusted|ekomi|\.svg|\.gif|data:image/i;
+  var BAD = /\/ps\d+\/|logo|icon|sprite|payment|paypal|badge|flag|banner|placeholder|blank|loader|pixel|spacer|riders|feedscanner|siegel|trusted|ekomi|\.svg|\.gif|data:image/i;
   var THUMB = /thumb|[\/_-](xs|small|mini|tiny)[\/_.-]|_s\.|\/\d{2,3}x\d{2,3}\//i;
   function abs(u) {
     u = decodeEntities_(String(u || '')).trim();
@@ -771,6 +771,7 @@ function stroehImage_(html) {
     return last;
   }
 
+  // Порядок: 1) JSON-LD Product / itemprop=image, 2) og:image, 3) галерея перед «Artikelnr.»
   // 1) JSON-LD (schema.org Product → image)
   var ld = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi, lm;
   while ((lm = ld.exec(html))) {
@@ -788,7 +789,19 @@ function stroehImage_(html) {
     } catch (ignore) { }
   }
 
-  // 2) Галерея: область страницы от «хлебных крошек» до «Artikelnr.» (блок «Ähnliches» ниже и не попадает)
+  // 1б) разметка schema.org прямо в странице: <link itemprop="image" href="…"> (так у stroeh.de)
+  var ip = html.match(/<(?:link|meta)[^>]+itemprop=["']image["'][^>]+(?:href|content)=["']([^"']+)["']/i) ||
+    html.match(/<(?:link|meta)[^>]+(?:href|content)=["']([^"']+)["'][^>]+itemprop=["']image["']/i);
+  var u1 = ip ? abs(ip[1]) : '';
+  if (okUrl(u1)) return u1;
+
+  // 2) og:image / image_src — главное фото, которое магазин сам указывает для страницы
+  var im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
+    html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+  var u3 = im ? abs(im[1]) : '';
+  if (okUrl(u3)) return u3;
+  // 3) Галерея: область страницы от «хлебных крошек» до «Artikelnr.» (блок «Ähnliches» ниже и не попадает)
   var art = html.search(/Artikelnr/i);
   var h1 = html.search(/<h1/i);
   var endIdx = Math.max(art, h1);
@@ -801,29 +814,18 @@ function stroehImage_(html) {
     var tag = /<img\b[^>]*>/gi, tm;
     while ((tm = tag.exec(region))) {
       var t = tm[0];
-      var big = t.match(/\b(?:data-zoom-image|data-large-image|data-large|data-full|data-original|data-big|data-image-large)=["']([^"']+)["']/i);
-      var src = t.match(/\b(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i);
+      var big = t.match(/\b(?:data-zoom-image|data-large-image|data-large|data-full|data-big|data-image-large)=["']([^"']+)["']/i);
+      var src = t.match(/\b(?:src|data-src|data-lazy-src|data-original)=["']([^"']+)["']/i);
       var ss = t.match(/\b(?:data-srcset|srcset)=["']([^"']+)["']/i);
       var u = big ? big[1] : (ss ? fromSrcset(ss[1]) : (src ? src[1] : ''));
       u = abs(u);
       if (okUrl(u)) cands.push({u: u, big: !!big});
     }
-    var lk = /<a\b[^>]+href=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/gi, lkm;
-    while ((lkm = lk.exec(region))) {
-      var ul = abs(lkm[1]);
-      if (okUrl(ul)) cands.push({u: ul, big: true});
-    }
     for (var c = 0; c < cands.length; c++) if (cands[c].big && !THUMB.test(cands[c].u)) return cands[c].u;
     for (var d = 0; d < cands.length; d++) if (!THUMB.test(cands[d].u)) return cands[d].u;
     if (cands.length) return cands[0].u;
   }
-
-  // 3) og:image / image_src
-  var im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
-    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
-    html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
-  var u3 = im ? abs(im[1]) : '';
-  return okUrl(u3) ? u3 : '';
+  return '';
 }
 
 // Название из ссылки поиска без бейджей скидок («SCHNÄPPCHEN», «RABATT 17%», «(0)», цена).

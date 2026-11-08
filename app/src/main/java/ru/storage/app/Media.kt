@@ -146,8 +146,12 @@ object Media {
      * То же, но с заданным именем файла: одно и то же фото с сайта всегда получает одно имя —
      * на телефоне и на Диске оно хранится один раз. Файл уже есть — повторно не скачивается и не отправляется.
      */
+    /** Причина последней неудачи importUrlAs (для подсказки на экране). */
+    @Volatile var importError: String = ""
+
     fun importUrlAs(ctx: Context, url: String, db: ProductDb, name: String): String? {
-        if (!url.startsWith("https://")) return null
+        importError = ""
+        if (!url.startsWith("https://")) { importError = "адрес фото не https"; return null }
         val target = file(ctx, name)
         if (target.exists() && target.length() > 0) return name
         return try {
@@ -157,9 +161,10 @@ object Media {
             c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
             c.setRequestProperty("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
             c.setRequestProperty("Referer", "https://www.stroeh.de/")
-            if (c.responseCode !in 200..299) { c.disconnect(); return null }
+            if (c.responseCode !in 200..299) { importError = "сайт ответил HTTP ${c.responseCode}"; c.disconnect(); return null }
             val mime = c.contentType.orEmpty()
-            if (mime.isNotEmpty() && !mime.startsWith("image/")) { c.disconnect(); return null }
+            // тип не проверяем строго: сайт может отдавать .webp как octet-stream; главное — что файл раскодируется как картинка
+            if (mime.startsWith("text/")) { importError = "вместо фото пришла страница"; c.disconnect(); return null }
             var total = 0L
             c.inputStream.use { i -> target.outputStream().use { o ->
                 val buf = ByteArray(16 * 1024)
@@ -173,11 +178,12 @@ object Media {
             c.disconnect()
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(target.path, bounds)
-            if (bounds.outWidth <= 0) { target.delete(); return null }
+            if (bounds.outWidth <= 0) { importError = "файл не распознан как картинка"; target.delete(); return null }
             shrink(target)
             db.addUpload(name)
             name
         } catch (e: Exception) {
+            importError = "ошибка загрузки: ${e.javaClass.simpleName}"
             target.delete()
             null
         }

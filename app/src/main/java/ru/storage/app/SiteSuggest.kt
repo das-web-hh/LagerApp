@@ -114,6 +114,9 @@ object SiteSearch {
     )
     private val details = java.util.concurrent.ConcurrentHashMap<String, DriveApi.StrohInfo>()
 
+    /** Почему фото не показалось (выводится под надписью «Фото не найдено»). */
+    @Volatile var lastPhotoNote: String = ""
+
     /** Артикул для сравнения: без пробелов, дефисов и регистра. */
     fun norm(a: String): String = a.uppercase().filter { it.isLetterOrDigit() }
 
@@ -213,20 +216,24 @@ object SiteSearch {
      * Имя одинаковое для одного товара, поэтому фото не дублируется. Вызывать не в главном потоке. null — фото нет.
      */
     fun photoName(ctx: Context, info: DriveApi.StrohInfo): String? {
-        if (info.image.isBlank()) return null
+        if (info.image.isBlank()) { lastPhotoNote = "скрипт Google не вернул адрес фото (обновите Code.gs и выпустите новую версию)"; return null }
         val base = norm(info.article).ifEmpty { sha(info.image) }.take(40)
         val name = "PR-S$base.jpg"
         val db = ProductDb.get(ctx)
-        val got = Media.importUrlAs(ctx, info.image, db, name) ?: return null
-        Media.uploadPending(ctx, db)
+        val got = Media.importUrlAs(ctx, info.image, db, name)
+        if (got == null) { lastPhotoNote = Media.importError.ifBlank { "не удалось скачать фото" }; return null }
+        // выгрузка на Диск не должна мешать показу фото
+        try { Media.uploadPending(ctx, db) } catch (e: Exception) { }
         return got
     }
 
     /** Картинка для большой панели: у связанных и сайтовых — с сайта (и сохраняется на Диск), иначе первое фото карточки. */
     suspend fun bigPhoto(ctx: Context, s: Suggest): Bitmap? = withContext(Dispatchers.IO) {
         try {
+            lastPhotoNote = ""
             if (s.hit != null) {
                 val i = infoOf(ctx, s)
+                if (i == null) lastPhotoNote = "страницу товара на сайте открыть не удалось"
                 if (i != null) {
                     val n = photoName(ctx, i)
                     if (n != null) Media.thumb(Media.file(ctx, n), 1600)?.let { return@withContext it }
@@ -332,9 +339,11 @@ fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
     var shown by remember { mutableStateOf(false) }
     var bmp by remember { mutableStateOf<Bitmap?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var note by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { shown = true }
     LaunchedEffect(s.key) {
         bmp = SiteSearch.bigPhoto(ctx.applicationContext, s)
+        note = SiteSearch.lastPhotoNote
         loading = false
     }
     val close: () -> Unit = { scope.launch { shown = false; delay(200); onClose() } }
@@ -380,7 +389,10 @@ fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
                             modifier = Modifier.fillMaxSize().padding(bottom = 56.dp), contentScale = ContentScale.Fit
                         )
                         loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                        else -> Text("Фото не найдено", Modifier.align(Alignment.Center), color = Color.White)
+                        else -> Column(Modifier.align(Alignment.Center).padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Фото не найдено", color = Color.White)
+                            if (note.isNotBlank()) Text(note, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                     Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(s.name, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
