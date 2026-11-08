@@ -324,7 +324,7 @@ fun PhotoSwipeBox(s: Suggest?, modifier: Modifier = Modifier, content: @Composab
     if (open && s != null) SitePhotoPanel(s) { open = false }
 }
 
-/** Фото слева на 80% ширины экрана поверх всего окна; справа остаётся 20% свободного места. */
+/** Фото слева на 80% ширины и 30% высоты экрана (верх на месте, низ поднят); справа 20% свободно. */
 @Composable
 fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -347,12 +347,12 @@ fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
         ) {
             AnimatedVisibility(
                 visible = shown,
-                modifier = Modifier.align(Alignment.CenterStart),
+                modifier = Modifier.align(Alignment.TopStart),
                 enter = slideInHorizontally(tween(160)) { -it } + fadeIn(tween(100)),
                 exit = slideOutHorizontally(tween(160)) { -it } + fadeOut(tween(100))
             ) {
                 Box(
-                    Modifier.fillMaxHeight().fillMaxWidth(0.8f).clipToBounds()
+                    Modifier.fillMaxHeight(0.3f).fillMaxWidth(0.8f).clipToBounds()
                         .background(Color(0xF2101010))
                         .pointerInput(Unit) { detectTapGestures { } }
                         .pointerInput(Unit) {
@@ -377,12 +377,12 @@ fun SitePhotoPanel(s: Suggest, onClose: () -> Unit) {
                     when {
                         b != null -> Image(
                             b.asImageBitmap(), contentDescription = s.name,
-                            modifier = Modifier.fillMaxSize().padding(bottom = 64.dp), contentScale = ContentScale.Fit
+                            modifier = Modifier.fillMaxSize().padding(bottom = 56.dp), contentScale = ContentScale.Fit
                         )
                         loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                         else -> Text("Фото не найдено", Modifier.align(Alignment.Center), color = Color.White)
                     }
-                    Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+                    Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(s.name, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         val art = s.article
                         if (art.isNotBlank()) Text("арт. $art", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)

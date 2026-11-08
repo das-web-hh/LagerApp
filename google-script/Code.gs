@@ -689,7 +689,7 @@ function stroehSearch_(q) {
   q = String(q || '').trim().slice(0, 80);
   if (q.length < 2) throw new Error('Слишком короткий запрос');
   var cache = CacheService.getScriptCache();
-  var key = cacheKey_('sts_', q.toLowerCase());
+  var key = cacheKey_('sts2_', q.toLowerCase());
   var hit = cache.get(key);
   if (hit) return {ok: true, items: JSON.parse(hit)};
 
@@ -729,7 +729,7 @@ function stroehSearch_(q) {
     var path = mm[1];
     if (/\/$/.test(path)) continue;          // разделы каталога кончаются «/», товары — нет
     if (path.split('/').length < 3) continue; // служебные страницы (agb.php, Lieferkosten…)
-    var text = stripTags_(m[2]);
+    var text = cleanHitName_(stripTags_(m[2]));
     if (!text) continue;
     var e = seen[href];
     if (!e) { e = {name: text, url: href}; seen[href] = e; items.push(e); }
@@ -751,11 +751,92 @@ function publicBatchTool_(act, p) {
   return json_({ok: true, items: JSON.parse(f.getBlob().getDataAsString('UTF-8'))});
 }
 
+// Адрес главного фото со страницы товара. Порядок: JSON-LD Product → картинки галереи перед «Artikelnr.» → og:image.
+function stroehImage_(html) {
+  var BAD = /logo|icon|sprite|payment|paypal|badge|flag|banner|placeholder|blank|loader|pixel|spacer|riders|feedscanner|siegel|trusted|ekomi|\.svg|\.gif|data:image/i;
+  var THUMB = /thumb|[\/_-](xs|small|mini|tiny)[\/_.-]|_s\.|\/\d{2,3}x\d{2,3}\//i;
+  function abs(u) {
+    u = decodeEntities_(String(u || '')).trim();
+    if (!u) return '';
+    if (u.indexOf('//') === 0) u = 'https:' + u;
+    else if (u.charAt(0) === '/') u = STROEH_HOST_ + u;
+    else if (!/^https?:\/\//i.test(u)) u = STROEH_HOST_ + '/' + u;
+    u = u.replace(/^http:\/\//i, 'https://');
+    return /^https:\/\/[^\s"'<>]+$/.test(u) ? u : '';
+  }
+  function okUrl(u) { return u && !BAD.test(u) && /\.(jpe?g|png|webp)(\?|$)/i.test(u); }
+  function fromSrcset(v) {
+    var parts = String(v || '').split(',');
+    var last = parts[parts.length - 1].trim().split(/\s+/)[0];
+    return last;
+  }
+
+  // 1) JSON-LD (schema.org Product → image)
+  var ld = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi, lm;
+  while ((lm = ld.exec(html))) {
+    try {
+      var j = JSON.parse(lm[1]);
+      var list = Array.isArray(j) ? j : (j['@graph'] || [j]);
+      for (var i = 0; i < list.length; i++) {
+        var o = list[i];
+        if (!o || String(o['@type']).indexOf('Product') < 0 || !o.image) continue;
+        var im0 = Array.isArray(o.image) ? o.image[0] : o.image;
+        if (im0 && typeof im0 === 'object') im0 = im0.url || im0.contentUrl;
+        var u0 = abs(im0);
+        if (okUrl(u0)) return u0;
+      }
+    } catch (ignore) { }
+  }
+
+  // 2) Галерея: область страницы от «хлебных крошек» до «Artikelnr.» (блок «Ähnliches» ниже и не попадает)
+  var art = html.search(/Artikelnr/i);
+  var h1 = html.search(/<h1/i);
+  var endIdx = Math.max(art, h1);
+  if (endIdx > 0) {
+    var startIdx = Math.max(0, Math.min(art < 0 ? h1 : art, h1 < 0 ? art : h1) - 25000);
+    var bc = html.lastIndexOf('readcrumb', endIdx);
+    if (bc > startIdx) startIdx = bc;
+    var region = html.slice(startIdx, endIdx + 400);
+    var cands = [];
+    var tag = /<img\b[^>]*>/gi, tm;
+    while ((tm = tag.exec(region))) {
+      var t = tm[0];
+      var big = t.match(/\b(?:data-zoom-image|data-large-image|data-large|data-full|data-original|data-big|data-image-large)=["']([^"']+)["']/i);
+      var src = t.match(/\b(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i);
+      var ss = t.match(/\b(?:data-srcset|srcset)=["']([^"']+)["']/i);
+      var u = big ? big[1] : (ss ? fromSrcset(ss[1]) : (src ? src[1] : ''));
+      u = abs(u);
+      if (okUrl(u)) cands.push({u: u, big: !!big});
+    }
+    var lk = /<a\b[^>]+href=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/gi, lkm;
+    while ((lkm = lk.exec(region))) {
+      var ul = abs(lkm[1]);
+      if (okUrl(ul)) cands.push({u: ul, big: true});
+    }
+    for (var c = 0; c < cands.length; c++) if (cands[c].big && !THUMB.test(cands[c].u)) return cands[c].u;
+    for (var d = 0; d < cands.length; d++) if (!THUMB.test(cands[d].u)) return cands[d].u;
+    if (cands.length) return cands[0].u;
+  }
+
+  // 3) og:image / image_src
+  var im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
+    html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+  var u3 = im ? abs(im[1]) : '';
+  return okUrl(u3) ? u3 : '';
+}
+
+// Название из ссылки поиска без бейджей скидок («SCHNÄPPCHEN», «RABATT 17%», «(0)», цена).
+function cleanHitName_(t) {
+  var c = String(t || '').replace(/\s+(SCHNÄPPCHEN|RABATT|VERSANDKOSTENFREI|SALE|NEU)\b.*$/i, '').replace(/\s*\(\d+\)\s*.*$/, '').replace(/\s*€.*$/, '').trim();
+  return c || t;
+}
+
 function stroehArticle_(url) {
   url = String(url || '').trim();
   if (!/^https:\/\/www\.stroeh\.de\/shop\/[^\s]+$/.test(url)) throw new Error('Допустимы только адреса stroeh.de');
   var cache = CacheService.getScriptCache();
-  var key = cacheKey_('sta2_', url);
+  var key = cacheKey_('sta3_', url);
   var hit = cache.get(key);
   if (hit) return JSON.parse(hit);
 
@@ -766,22 +847,8 @@ function stroehArticle_(url) {
   var text = stripTags_(html);
   var m = text.match(/Artikelnr\.?\s*:?\s*([A-Za-z0-9][A-Za-z0-9\-\.\/]{2,19})/);
   if (!m) throw new Error('Артикул на странице не найден');
-  // Фото товара: og:image, иначе первая подходящая картинка на странице (без логотипов и значков)
-  var im = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
-    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
-    html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
-  var img = im ? decodeEntities_(im[1]) : '';
-  if (!img) {
-    var re2 = /<img\b[^>]+src=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/gi, mi;
-    while ((mi = re2.exec(html))) {
-      var u = decodeEntities_(mi[1]);
-      if (/logo|icon|sprite|payment|paypal|badge|flag|banner/i.test(u)) continue;
-      img = u; break;
-    }
-  }
-  if (img.indexOf('//') === 0) img = 'https:' + img;
-  else if (img.indexOf('/') === 0) img = STROEH_HOST_ + img;
-  if (!/^https:\/\//.test(img)) img = '';
+  // Фото товара: большое фото из галереи слева от названия (до «Artikelnr.»), без логотипов, значков и блока «Ähnliches»
+  var img = stroehImage_(html);
   var res = {ok: true, name: name, article: m[1].replace(/[\.\/\-]+$/, ''), url: url, image: img};
   cache.put(key, JSON.stringify(res), 6 * 3600);
   return res;

@@ -153,7 +153,10 @@ object Media {
         return try {
             val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
             c.connectTimeout = 15000; c.readTimeout = 20000
-            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) LagerApp")
+            c.instanceFollowRedirects = true
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
+            c.setRequestProperty("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
+            c.setRequestProperty("Referer", "https://www.stroeh.de/")
             if (c.responseCode !in 200..299) { c.disconnect(); return null }
             val mime = c.contentType.orEmpty()
             if (mime.isNotEmpty() && !mime.startsWith("image/")) { c.disconnect(); return null }
