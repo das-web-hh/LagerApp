@@ -1132,7 +1132,8 @@ suspend fun saveJob(
         val sender = job.sender.trim().let { if (it.equals("none", true)) "" else it }
         val stamp = job.stamp.trim().let { if (it.length == 16) it else "" }
         withContext(Dispatchers.IO) {
-            newProducts.values.forEach { Cloud.saveProduct(db, it) }
+            val newBatch = java.util.UUID.randomUUID().toString()   // все товары этого приёма — одна партия
+            newProducts.values.forEach { Cloud.saveProduct(db, it, source = "receive", batchId = newBatch) }
             // штрих-коды, привязанные сканером к товарам каталога; если код числился за другим товаром — снимаем его с того
             bind.distinctBy { it.second }.forEach { (pid, code) ->
                 if (newProducts.values.any { it.id == pid }) return@forEach

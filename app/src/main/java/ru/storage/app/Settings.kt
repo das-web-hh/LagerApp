@@ -157,6 +157,7 @@ fun SettingsScreen(prefs: Prefs, onBack: () -> Unit) {
         "Google Диск" -> DriveSettings(prefs) { section = null }
         "Артикулы и сайт" -> SiteSettings(prefs) { section = null }
         "Порядок данных" -> OrganizerSettings { section = null }
+        "Контроль каталога" -> CatalogControlScreen { section = null }
         "Подключения" -> ConnectionSettings { section = null }
         "Чтение Excel" -> ExcelSettings { section = null }
         "Распознавание документов" -> AiSettings { section = null }
@@ -181,6 +182,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Google Диск" to "Фото и накладные: адрес скрипта и папка",
         "Артикулы и сайт" to "Приоритетный артикул: с сайта stroeh.de или из системы",
         "Порядок данных" to "Разложить данные и файлы по своим папкам и базам, убрать дубли",
+        "Контроль каталога" to "Кто и сколько товаров завёл в базу: фильтр по человеку, удаление партии",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
         "Подключения" to "Firebase, EmailJS, сохранить и загрузить все настройки файлом",
         "Чтение Excel" to "Как находить столбцы названия и количества: приложение само или ИИ",
@@ -190,7 +192,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Рабочее время" to "Учёт по геолокации, зона подхода, полные и короткие дни",
         "Доступ по месту и времени" to "Рабочая точка, радиус (5 км) и часы, вне которых у сотрудников приложение закрыто"
     ).filter {
-        Session.isAdmin || it.first !in setOf("Google Диск", "Распознавание документов", "Подключения", "Доступ по месту и времени", "Порядок данных")
+        Session.isAdmin || it.first !in setOf("Google Диск", "Распознавание документов", "Подключения", "Доступ по месту и времени", "Порядок данных", "Контроль каталога")
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)

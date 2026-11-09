@@ -291,8 +291,10 @@ private fun importRows(db: ProductDb, rows: List<List<String>>, nc: Int, bc: Int
         if (p.article.isNotEmpty()) byArticle[p.article] = p
     }
     val all = out.values.toList()
+    // какие товары действительно новые (их в базе ещё не было): им записывается автор и общий номер загрузки
+    val newIds = all.filter { db.getProduct(it.id) == null }.map { it.id }.toSet()
     db.upsertProducts(all)
-    Cloud.pushProducts(all)
+    Cloud.pushProducts(all, newIds, "import", UUID.randomUUID().toString())
     return all.size
 }
 
@@ -630,7 +632,7 @@ fun ProductCardScreen(id: String?, prefs: Prefs, site: DriveApi.StrohHit? = null
                     scope.launch(Dispatchers.IO) {
                         // группа могла измениться кнопками «Объединить»/«Отделить» уже после открытия карточки — берём свежую
                         val fresh = old?.let { db.getProduct(it.id) }
-                        Cloud.saveProduct(db, p.copy(groupId = fresh?.groupId ?: "", apart = fresh?.apart ?: emptyList()))
+                        Cloud.saveProduct(db, p.copy(groupId = fresh?.groupId ?: "", apart = fresh?.apart ?: emptyList()), source = "card")
                         Media.discard(ctx, db, (old?.photos ?: emptyList()).filter { it !in cur })
                         Media.uploadPending(ctx, db)
                         withContext(Dispatchers.Main) { onClose() }

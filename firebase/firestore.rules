@@ -45,6 +45,36 @@ service cloud.firestore {
       return isActive() && versionOk();
     }
 
+    // Работник не может пометить запись «удалена» (мягкое удаление через deleted:true) — только администратор.
+    // Уже удалённую запись менять можно (не мешает синхронизации).
+    function noSoftDelete() {
+      return request.resource.data.get('deleted', false) != true
+        || resource.data.get('deleted', false) == true
+        || isAdmin();
+    }
+
+    // Учёт, кто завёл товар: при создании createdBy обязан быть своим email, потом createdBy/createdAt/source/batchId
+    // менять нельзя. Пока у части телефонов старая версия (она createdBy не пишет), в config/app не должно быть
+    // requireOrigin: true. Когда все обновились — поставьте requireOrigin: true, и товар без автора создать нельзя.
+    function originRequired() {
+      let cfgPath = /databases/$(database)/documents/config/app;
+      return exists(cfgPath) && get(cfgPath).data.get('requireOrigin', false) == true;
+    }
+    function originOnCreate() {
+      let d = request.resource.data;
+      return d.get('createdBy', '') == me()
+        ? (d.get('createdAt', 0) is int && d.get('createdAt', 0) <= request.time.toMillis() + 600000)
+        : (!originRequired() && !('createdBy' in d));
+    }
+    function originKept() {
+      let n = request.resource.data;
+      let o = resource.data;
+      return n.get('createdBy', '') == o.get('createdBy', '')
+        && n.get('createdAt', 0) == o.get('createdAt', 0)
+        && n.get('batchId', '') == o.get('batchId', '')
+        && n.get('source', '') == o.get('source', '');
+    }
+
     // ───────────── Работники ─────────────
     match /users/{id} {
       // Публичное чтение users/{id} УДАЛЕНО: раньше любой без входа мог прочитать passHash по Email.
@@ -136,11 +166,14 @@ service cloud.firestore {
     // ───────────── Данные склада ─────────────
     // читать и создавать/менять может любой работник с актуальной версией, УДАЛЯТЬ — только администратор
     match /products/{id} {
-      allow read, create, update: if isCurrent();
+      allow read: if isCurrent();
+      allow create: if isCurrent() && originOnCreate();
+      allow update: if isCurrent() && originKept() && noSoftDelete();
       allow delete: if isAdmin();
     }
     match /receipts/{id} {
-      allow read, create, update: if isCurrent();
+      allow read, create: if isCurrent();
+      allow update: if isCurrent() && noSoftDelete();
       allow delete: if isAdmin();
     }
     match /shipments/{id} {
@@ -156,7 +189,8 @@ service cloud.firestore {
       allow read, create, update, delete: if isCurrent();
     }
     match /unload_ops/{id} {
-      allow read, create, update: if isCurrent();
+      allow read, create: if isCurrent();
+      allow update: if isCurrent() && noSoftDelete();
       allow delete: if isAdmin();
     }
 

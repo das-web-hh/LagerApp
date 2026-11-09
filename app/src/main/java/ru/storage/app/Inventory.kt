@@ -260,6 +260,7 @@ private val invSaveLock = Any()
 
 internal fun invSaveBarcodes(ctx: Context, j: InvJob) = synchronized(invSaveLock) {
     val db = ProductDb.get(ctx)
+    val invBatch = UUID.randomUUID().toString()   // все товары, заведённые этой инвентаризацией, — одна партия
     j.rows.toList().forEach { r ->
         val code = r.barcode.trim()
         val art = r.article.trim()
@@ -278,7 +279,8 @@ internal fun invSaveBarcodes(ctx: Context, j: InvJob) = synchronized(invSaveLock
                         id = UUID.randomUUID().toString(), name = name, article = art, barcode = code,
                         weight = local?.size ?: "", unit = local?.unit ?: "", pack = local?.pack ?: "",
                         manufacturer = local?.manufacturer ?: "", photos = listOfNotNull(r.photo.takeIf { it.isNotBlank() }), updatedAt = 0L
-                    )
+                    ),
+                    source = "inventory", batchId = invBatch
                 )
             } else {
                 // по «Сохранить» исправленные артикул и штрих-код записываются в карточку (65 → 55); пустое поле строки карточку не стирает

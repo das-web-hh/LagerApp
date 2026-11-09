@@ -1,6 +1,7 @@
 package ru.storage.app
 
 import com.google.android.gms.tasks.Task
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldPath
@@ -73,20 +74,66 @@ object Cloud {
         "deleted" to false
     )
 
-    fun saveProduct(db: ProductDb, p: Product, log: Boolean = true): Product {
+    /** Email вошедшего (в нижнем регистре): так правила Firestore узнают автора. */
+    private fun myEmail(): String = FirebaseAuth.getInstance().currentUser?.email?.lowercase().orEmpty()
+
+    /**
+     * Кто, когда и откуда завёл товар (пишется только при создании; правила Firestore потом не дают это менять).
+     * source: import / receive / inventory / card / other; batchId — общий для товаров одной загрузки.
+     */
+    private fun originMap(source: String, batchId: String): HashMap<String, Any> = hashMapOf(
+        "createdBy" to myEmail(),
+        "createdAt" to System.currentTimeMillis(),
+        "source" to source,
+        "batchId" to batchId
+    )
+
+    fun saveProduct(
+        db: ProductDb, p: Product, log: Boolean = true,
+        source: String = "other", batchId: String = ""
+    ): Product {
         val isNew = db.getProduct(p.id) == null
         val np = p.copy(updatedAt = System.currentTimeMillis())
         db.upsertProducts(listOf(np))
-        fs.collection("products").document(np.id).set(productMap(np))
+        val m = productMap(np)
+        if (isNew) m.putAll(originMap(source, batchId))
+        // merge: у уже существующего товара поля автора остаются прежними
+        fs.collection("products").document(np.id).set(m, SetOptions.merge())
         if (log) Journal.log("Каталог", (if (isNew) "Добавлен товар: " else "Изменён товар: ") + np.name)
         return np
     }
 
-    fun pushProducts(list: List<Product>) {
-        Journal.log("Каталог", "Импорт каталога: товаров ${list.size}")
+    /** newIds — товары, которых раньше не было (им записывается автор); остальные только обновляются. */
+    fun pushProducts(
+        list: List<Product>, newIds: Set<String> = emptySet(),
+        source: String = "import", batchId: String = ""
+    ) {
+        Journal.log("Каталог", "Импорт каталога: товаров ${list.size}, новых ${newIds.size}")
         list.chunked(400).forEach { chunk ->
             val b = fs.batch()
-            chunk.forEach { b.set(fs.collection("products").document(it.id), productMap(it)) }
+            chunk.forEach {
+                val m = productMap(it)
+                if (it.id in newIds) m.putAll(originMap(source, batchId))
+                b.set(fs.collection("products").document(it.id), m, SetOptions.merge())
+            }
+            b.commit()
+        }
+    }
+
+    /** Администратор: удалить сразу много товаров (мягко, как deleteProduct; у остальных исчезнут при синхронизации). */
+    fun deleteProducts(db: ProductDb, ids: List<String>, note: String) {
+        if (ids.isEmpty()) return
+        Journal.log("Каталог", "Удалено товаров: ${ids.size}" + if (note.isNotBlank()) " ($note)" else "")
+        val now = System.currentTimeMillis()
+        ids.chunked(400).forEach { chunk ->
+            chunk.forEach { db.deleteProduct(it) }
+            val b = fs.batch()
+            chunk.forEach {
+                b.set(
+                    fs.collection("products").document(it),
+                    hashMapOf<String, Any>("deleted" to true, "updatedAt" to now), SetOptions.merge()
+                )
+            }
             b.commit()
         }
     }
@@ -148,6 +195,7 @@ object Cloud {
     private fun linkCatalog(db: ProductDb, r: Receipt): Receipt {
         var changed = false
         var added = 0
+        val bid = java.util.UUID.randomUUID().toString()   // все товары, заведённые этой приёмкой, — одна партия
         val items = r.items.map { item ->
             val name = item.name.trim()
             if (name.isEmpty() || (item.productId.isNotEmpty() && db.getProduct(item.productId) != null)) {
@@ -163,7 +211,7 @@ object Cloud {
                         weight = "", unit = "", pack = "", manufacturer = "", photos = emptyList(),
                         updatedAt = System.currentTimeMillis()
                     )
-                    saveProduct(db, p)
+                    saveProduct(db, p, source = "receipt", batchId = bid)
                     added++
                     item.copy(productId = p.id)
                 }

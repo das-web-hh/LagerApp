@@ -14,14 +14,12 @@
  * only matching file metadata and Drive URLs.
  */
 
-// Защита: токен входа Firebase (JWT). Приложение (и работник, и администратор) присылает его в параметре token,
-// скрипт проверяет профиль в Firestore (см. checkWorker_). Нужно свойство скрипта:
-//   Project Settings (шестерёнка) → Script properties → FB_PROJECT = ID проекта Firebase.
-// Общего секретного токена в приложении, в файле настроек и в Firestore больше нет.
-//
-// TOKEN (необязательно, УСТАРЕЛО): общий секрет для старых клиентов, например сайта. Если свойство TOKEN не задано,
-// запросы без токена входа отклоняются. Если сайт ещё его использует — оставьте, но помните: секрет в странице
-// сайта виден всем. Как только сайт перестанет его слать, удалите свойство TOKEN.
+// Защита секретным токеном. Токен НЕ хранится в коде: задайте его в
+// Project Settings (шестерёнка) → Script properties → Add script property:
+//   имя:  TOKEN
+//   знач: длинная случайная строка (32+ символа, например из генератора паролей)
+// Тот же токен вставьте в приложение (Профиль → Google Диск → Токен) и в настройки сайта.
+// Пока свойство TOKEN не задано, скрипт отклоняет ВСЕ запросы — так закрыто по умолчанию.
 
 function getToken_() {
   return String(PropertiesService.getScriptProperties().getProperty('TOKEN') || '');
@@ -40,7 +38,7 @@ function safeEqual_(a, b) {
 }
 
 // Работники входят не по общему TOKEN, а по токену входа Firebase (JWT): скрипт сам проверяет профиль в Firestore.
-// Нужно свойство скрипта FB_PROJECT = ID проекта Firebase. Так входят все: и работники, и администратор.
+// Нужно свойство скрипта FB_PROJECT = ID проекта Firebase. Общий TOKEN остаётся для администратора и сайта.
 function checkWorker_(jwt) {
   var project = String(PropertiesService.getScriptProperties().getProperty('FB_PROJECT') || '');
   if (!project) throw new Error('На сервере не задан FB_PROJECT (Script properties).');
@@ -62,11 +60,9 @@ function checkWorker_(jwt) {
 function checkToken_(value) {
   var v = String(value || '');
   if (v.indexOf('eyJ') === 0 && v.split('.').length === 3) { checkWorker_(v); return; }
-  // старый общий токен принимается только пока свойство TOKEN задано (для сайта); новое приложение его не шлёт
   var token = getToken_();
-  if (!v) throw new Error('Нет токена входа: войдите в аккаунт приложения.');
-  if (!token) throw new Error('Неверный токен входа.');
-  if (!safeEqual_(v, token)) throw new Error('Неверный токен.');
+  if (!token) throw new Error('На сервере не задан TOKEN (Script properties).');
+  if (!safeEqual_(value, token)) throw new Error('Неверный токен.');
 }
 
 function doGet(e) {
