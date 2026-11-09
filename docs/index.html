@@ -140,7 +140,7 @@ hash=[(t1+t2)|0].concat(hash);hash[4]=(hash[4]+t1)|0}
 for(var i=0;i<8;i++)hash[i]=(hash[i]+old[i])|0}
 for(var i=0;i<8;i++)for(var j=3;j+1;j--){var b=(hash[i]>>(j*8))&255;r+=((b<16)?0:'')+b.toString(16)}return r}
 const nmz=s=>String(s||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim(),hsh=s=>sha(unescape(encodeURIComponent(nmz(s))));
-const API=P.get('s')||'',ap=k=>API+(API.indexOf('?')<0?'?':'&')+k;let T0=0,P0=0,LOADED=0,ASK=0,RM=new Map(),DEV='',pushT=0,tm=0,ST='',LD=0;
+const API=P.get('s')||'',ap=k=>API+(API.indexOf('?')<0?'?':'&')+k;let T0=0,P0=0,LOADED=0,ASK=0,RM=new Map(),DEV='',pushT=0,tm=0,ST='',LD=0,RST=0;
 const nowS=()=>T0?T0+(performance.now()-P0):Date.now(),oth=r=>(OT.get(r.sid)||0)+(RM.get(r.sid)||0);
 const fj=(u,o)=>fetch(u,Object.assign({redirect:'follow',cache:'no-store'},o||{})).then(r=>r.json());
 let WEB={q:'',items:[]},webT=0;
@@ -182,13 +182,16 @@ function loadBatch(D){const id=String(D.code||D.rows.length),ex=BT.list.find(b=>
  const b=newB(D.title||'Партия');b.src=id;b.items=D.rows.map((r,i)=>{const x=mk(String(r.n||''),String(r.q||0));x.sid='r'+i;x.article=String(r.a||'');x.barcode=String(r.b||'');return x});BT.list.push(b);S=b;step=0;save()}
 function loadUI(on){let e=document.getElementById('ld');if(!on){if(e)e.remove();return}if(e)return;e=E('div','','<div class=spn></div><div>Загружаю список…</div>');e.id='ld';document.body.appendChild(e)}
 function enter(){if(ST)return;if(!inWin()){closedUI(1);return}closedUI(0);if(LOADED||LD)return;LD=1;loadUI(1);
- fj(ap('action=batch&code='+encodeURIComponent(CODE)+'&who='+WHO)).then(j=>{LD=0;loadUI(0);if(!j.ok||!j.batch)throw j.error||0;AU=j.batch.auth||AU;LOADED=1;S=BT.list.find(b=>b.id===BT.cur)||BT.list[0]||null;loadBatch(j.batch);render();pull()})
+ fj(ap('action=batch&code='+encodeURIComponent(CODE)+'&who='+WHO)).then(j=>{LD=0;loadUI(0);if(!j.ok||!j.batch)throw j.error||0;AU=j.batch.auth||AU;LOADED=1;S=BT.list.find(b=>b.id===BT.cur)||BT.list[0]||null;RST=1;loadBatch(j.batch);render();pull()})
   .catch(e=>{LD=0;loadUI(0);if(e==='stopped')stateUI('stop');else if(e==='deleted')wipeLocal();else if(e==='name'){lock()}else if(e==='hours')closedUI(1);else closedUI(1,'Не удалось загрузить список. Проверьте интернет — попробуем снова.')})}
 function tick(){if(!WHO||ST==='del')return;if(!inWin()){if(LOADED)lock();else closedUI(1);return}chk();if(!ST&&(CLOSED||!LOADED))enter()}
 /* общий счёт с других людей: у каждого свой счёт и своя печать, а «всего» складывается */
 function myCounts(){const c={},src=BT.list.filter(b=>b.src===CODE);src.forEach(b=>b.items.forEach(r=>{const v=pq(r.fact);if(v>0&&!r.extra)c[r.sid]=(c[r.sid]||0)+v}));return c}
-function applyDevs(dv){RM=new Map();(dv||[]).forEach(d=>{if(d.dev===DEV)return;for(const k in d.c)RM.set(k,(RM.get(k)||0)+d.c[k])});if(LOADED&&S){paint(1);top_()}}
-function push(){if(!LOADED||!API||ST)return;clearTimeout(pushT);pushT=setTimeout(()=>{fetch(API,{method:'POST',redirect:'follow',body:JSON.stringify({action:'count',code:CODE,dev:DEV,name:USER,counts:myCounts()})}).then(r=>r.json()).then(j=>j.ok&&applyDevs(j.devs)).catch(()=>{})},1200)}
+/* после входа свой счёт, сохранённый на сервере, возвращается в пустые строки (если память браузера очищена); потом отправка разрешается */
+function applyDevs(dv){RM=new Map();(dv||[]).forEach(d=>{if(d.dev===DEV)return;for(const k in d.c)RM.set(k,(RM.get(k)||0)+d.c[k])});
+ if(RST&&LOADED){RST=0;const me=(dv||[]).find(d=>d.dev===DEV),b=BT.list.find(x=>x.src===CODE);let ch=0;if(me&&b)b.items.forEach(r=>{const v=+(me.c||{})[r.sid]||0;if(v>0&&!r.extra&&pq(r.fact)<=0){r.fact=fq(v);ch=1}});if(ch)save();else push()}
+ if(LOADED&&S){paint(1);top_()}}
+function push(){if(!LOADED||!API||ST||RST)return;clearTimeout(pushT);pushT=setTimeout(()=>{fetch(API,{method:'POST',redirect:'follow',body:JSON.stringify({action:'count',code:CODE,dev:DEV,name:USER,counts:myCounts()})}).then(r=>r.json()).then(j=>j.ok&&applyDevs(j.devs)).catch(()=>{})},1200)}
 function pull(){if(!LOADED||!API||document.hidden)return;fj(ap('action=counts&code='+encodeURIComponent(CODE))).then(j=>j.ok&&applyDevs(j.devs)).catch(()=>{})}
 function boot(){const msg=t=>{$('#app').innerHTML='<p style="margin:40px 16px;text-align:center">'+t+'</p>'};
  if(!CODE||!/^https:\/\/script\.google(usercontent)?\.com\//.test(API))return msg('Ссылка неполная. Откройте её целиком или отсканируйте QR-код ещё раз.');
@@ -234,7 +237,7 @@ function doImport(txt){const L=txt.split(/\r?\n/).filter(x=>x.trim());if(!L.leng
  else L.forEach(l=>{const p=l.split('\t');if(p[0]&&!byNm(p[0]))CAT.push({id:Date.now()+Math.random(),name:p[0].trim(),barcode:(p[1]||'').trim(),article:(p[2]||'').trim()})}),saveCat();
  save();render();return true}
 function qtyDlg(r){const s=fq(pq(r.fact)),ok=(d)=>{const v=V(d,'#q');return v&&nq(v)!==''};
- dlg('Количество','<p style="font-size:12px">'+esc(r.name)+'</p><label>Фактическое количество (итог)<input id=q inputmode=decimal maxlength=9 value="'+s+'"></label>',[['Отмена','t'],['ОК','',(d,c)=>{if(ok(d)){r.fact=fq(pq(V(d,'#q')));drum=null;picked(r.fact,r.fact);c();upd()}}]],d=>{const i=d.querySelector('#q');i.oninput=()=>i.value=i.value.replace(/[^\d.,]/g,'');i.focus();i.select();i.onkeydown=e=>{if(e.key==='Enter')d.querySelector('.bt button:last-child').click()}})}
+ dlg('Количество','<p style="font-size:12px">'+esc(r.name)+'</p><label>Ваше количество (без счёта других)<input id=q inputmode=decimal maxlength=9 value="'+s+'"></label>',[['Отмена','t'],['ОК','',(d,c)=>{if(ok(d)){r.fact=fq(pq(V(d,'#q')));drum=null;picked(r.fact,r.fact);c();upd()}}]],d=>{const i=d.querySelector('#q');i.oninput=()=>i.value=i.value.replace(/[^\d.,]/g,'');i.focus();i.select();i.onkeydown=e=>{if(e.key==='Enter')d.querySelector('.bt button:last-child').click()}})}
 function pickerDlg(title,init,onApply,photos){let val=init,pos=init,tm=0,raf=0,drag=0,vel=0,moved=0,sy=0,sp=0,ly=0,lt=0;const N=10000,H=46;
  const {d,close}=dlg(title,'<div id=pk><div id=pm></div></div><p id=pv style=\"text-align:center;margin-top:8px\">Выбрано: '+init+(photos?'':' · применится само через 3 секунды')+'</p>'+(photos?'<p>Фото брака (печатается на последнем листе документа)</p><div id=gl></div><label class=btn style=\"display:inline-block;cursor:pointer\">Снять фото<input type=file accept=image/* capture=environment hidden id=fi></label>':''),
  [['Отмена','t'],['Готово','',(d,c)=>{c();onApply(val)}]]);
@@ -370,10 +373,10 @@ const wh=()=>$('#lst'),els=new Map();let hlRow=null;
 let OT=new Map();const mkOT=()=>{OT=new Map();BT.list.forEach(b=>{if(b!==S)(b.items||[]).forEach(x=>{if(x.sid)OT.set(x.sid,(OT.get(x.sid)||0)+pq(x.fact))})})};
 const RH=62;let vs=-1,ve=-1,pend=0;
 function fill(el,r){const f=pq(r.fact),o=oth(r),t=f+o,p=r.extra?0:pq(r.qty),df=pq(r.defect),a=art(r);
- el.querySelector('.rt').textContent=r.name||'—';const sub=[];if(a)sub.push('арт. '+a);if(df>0)sub.push('брак '+fq(df));if(o>0)sub.push('уже '+fq(o));if(r.expiry)sub.push('срок '+r.expiry);
+ el.querySelector('.rt').textContent=r.name||'—';const sub=[];if(a)sub.push('арт. '+a);if(df>0)sub.push('брак '+fq(df));if(o>0)sub.push('ваш '+fq(f)+' · другие '+fq(o));if(r.expiry)sub.push('срок '+r.expiry);
  const s=el.querySelector('.rs');s.textContent=sub.join(' · ');s.style.display=sub.length?'':'none';
  el.querySelector('.pl').textContent=r.extra?'':fq(p);el.querySelector('.bc').innerHTML=bcIco(!!r.barcode);
- const fb=el.querySelector('.fb');fb.textContent=fq(f);fb.style.color=!t?'var(--osv)':!r.extra&&t===p?'var(--pri)':!r.extra&&t>p?'var(--er)':'var(--tx)';
+ const fb=el.querySelector('.fb');fb.textContent=fq(Math.round(t*1000)/1000);fb.style.color=!t?'var(--osv)':!r.extra&&t===p?'var(--pri)':!r.extra&&t>p?'var(--er)':'var(--tx)';
  const b=el.querySelectorAll('.act b'),cd=canDel(r);b[0].innerHTML=r.barcode?'EAN<br>✓':'EAN';b[2].style.display=cd?'':'none';el._aw=cd?186:124;el.querySelector('.act').style.width=el._aw+'px'}
 function mkRow(i){const e=E('div','rw','<div class=ex>Срок<br>годности</div><div class=act><b class=tc data-a=e>EAN</b><b class=pc data-a=q>Кол-во</b><b class=ec data-a=x>Удалить</b></div><div class=fg><div class=nm><div class=rt></div><div class=rs></div></div><span class=pl></span><i class=bc></i><span class=fb></span></div>');e._sw=0;e._i=i;return e}
 function setSw(e,v){e._sw=v;e.querySelector('.fg').style.transform='translateX('+v+'px)';e.querySelector('.ex').style.opacity=v>1?1:0;e.querySelector('.act').style.opacity=v<-1?1:0}
