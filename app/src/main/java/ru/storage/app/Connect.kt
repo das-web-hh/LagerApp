@@ -23,8 +23,7 @@ data class MailCfg(
     val publicKey: String,
     val serviceId: String,
     val templateId: String,
-    val messageTemplateId: String,
-    val privateKey: String
+    val messageTemplateId: String
 )
 
 /**
@@ -42,6 +41,7 @@ object ConnCfg {
     /** Вызывается из Application: запоминает контекст и подключает Firebase, если админ задал свой. */
     fun init(app: Application) {
         appCtx = app.applicationContext
+        wipeLegacySecrets(app)
         val o = firebaseOverride(app) ?: return
         try {
             val cur = try { FirebaseApp.getInstance() } catch (e: Exception) { null }
@@ -52,6 +52,13 @@ object ConnCfg {
         } catch (e: Exception) {
             // не вышло — остаётся встроенное подключение
         }
+    }
+
+    /** Секреты, которые старые версии хранили на телефоне (Private key EmailJS, общий токен Диска), стираются. */
+    private fun wipeLegacySecrets(ctx: Context) {
+        val p = sp(ctx)
+        if (p.contains("mPrivate")) p.edit().remove("mPrivate").apply()
+        DriveCfg.wipeLegacyToken(ctx)
     }
 
     private fun options(c: FbCfg): FirebaseOptions {
@@ -112,7 +119,7 @@ object ConnCfg {
 
     // ---------- EmailJS ----------
 
-    val DEFAULT_MAIL = MailCfg("eVykpcx5pKB6QOkY_", "service_gqzvbbf", "template_43migsz", "template_REPLACE_ME", "")
+    val DEFAULT_MAIL = MailCfg("eVykpcx5pKB6QOkY_", "service_gqzvbbf", "template_43migsz", "template_REPLACE_ME")
 
     fun mailOverride(ctx: Context): MailCfg? {
         val p = sp(ctx)
@@ -120,7 +127,7 @@ object ConnCfg {
         val sv = p.getString("mService", "") ?: ""
         val tp = p.getString("mTemplate", "") ?: ""
         if (pk.isBlank() || sv.isBlank() || tp.isBlank()) return null
-        return MailCfg(pk, sv, tp, p.getString("mMessage", "") ?: "", p.getString("mPrivate", "") ?: "")
+        return MailCfg(pk, sv, tp, p.getString("mMessage", "") ?: "")
     }
 
     /** Ключи EmailJS: свои, если заданы, иначе встроенные. */
@@ -133,11 +140,11 @@ object ConnCfg {
     fun saveMail(ctx: Context, c: MailCfg?) {
         val e = sp(ctx).edit()
         if (c == null) {
-            e.remove("mPublic").remove("mService").remove("mTemplate").remove("mMessage").remove("mPrivate")
+            e.remove("mPublic").remove("mService").remove("mTemplate").remove("mMessage").remove("mPrivate")  // mPrivate — от старых версий
         } else {
             e.putString("mPublic", c.publicKey.trim()).putString("mService", c.serviceId.trim())
                 .putString("mTemplate", c.templateId.trim()).putString("mMessage", c.messageTemplateId.trim())
-                .putString("mPrivate", c.privateKey.trim())
+                .remove("mPrivate")
         }
         e.apply()
     }
@@ -154,7 +161,11 @@ object ConnCfg {
 
     // ---------- файл настроек ----------
 
-    /** Все настройки подключения одним JSON-файлом. Внутри секреты (ключи, токен): хранить в надёжном месте. */
+    /**
+     * Все настройки подключения одним JSON-файлом. Секретов в нём нет: ни ключей ИИ, ни Private key EmailJS,
+     * ни токена Диска (Диск и ИИ работают по токену входа Firebase). Public key EmailJS и API key Firebase
+     * по своей природе открытые: доступ ограничивают правила Firestore и настройки EmailJS.
+     */
     fun exportJson(ctx: Context): String {
         val o = JSONObject().put("type", FILE_TYPE).put("version", 1).put("savedAt", System.currentTimeMillis())
         val adminLogin = Session.user?.takeIf { it.isAdmin }?.login ?: savedAdminLogin(ctx)
@@ -170,11 +181,11 @@ object ConnCfg {
         o.put(
             "emailjs",
             JSONObject().put("publicKey", m.publicKey).put("serviceId", m.serviceId).put("templateId", m.templateId)
-                .put("messageTemplateId", m.messageTemplateId).put("privateKey", m.privateKey)
+                .put("messageTemplateId", m.messageTemplateId)
         )
         o.put(
             "drive",
-            JSONObject().put("url", DriveCfg.url(ctx)).put("folder", DriveCfg.folder(ctx)).put("token", DriveCfg.token(ctx))
+            JSONObject().put("url", DriveCfg.url(ctx)).put("folder", DriveCfg.folder(ctx))
         )
         // ключи ИИ в файл настроек не попадают (работники ходят к ИИ через скрипт)
         val ai = JSONObject()
@@ -213,11 +224,11 @@ object ConnCfg {
         o.optJSONObject("emailjs")?.let {
             val c = MailCfg(
                 it.optString("publicKey"), it.optString("serviceId"), it.optString("templateId"),
-                it.optString("messageTemplateId"), it.optString("privateKey")
-            )
+                it.optString("messageTemplateId")
+            )  // privateKey / token из старых файлов настроек игнорируются
             if (c.publicKey.isNotBlank() && c.serviceId.isNotBlank() && c.templateId.isNotBlank()) saveMail(ctx, c)
         }
-        o.optJSONObject("drive")?.let { DriveCfg.save(ctx, it.optString("url"), it.optString("folder"), it.optString("token")) }
+        o.optJSONObject("drive")?.let { DriveCfg.save(ctx, it.optString("url"), it.optString("folder")) }
         o.optJSONObject("ai")?.let { ai ->
             AiCfg.saveCommon(ctx, ai.optInt("timeout", AiCfg.timeoutSec(ctx)), ai.optInt("attempts", AiCfg.attempts(ctx)))
             if (ai.has("template")) AiCfg.setTemplateMode(ctx, ai.optBoolean("template", false))

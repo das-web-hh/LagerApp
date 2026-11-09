@@ -18,19 +18,37 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Настройки Google Диска (адрес скрипта, папка, токен) — хранятся на телефоне. */
+/** Настройки Google Диска (адрес скрипта и папка) — хранятся на телефоне. Общего токена-секрета больше нет. */
 object DriveCfg {
     private fun sp(ctx: Context) = ctx.getSharedPreferences("drive", Context.MODE_PRIVATE)
     fun url(ctx: Context): String = sp(ctx).getString("url", "")!!.trim()
     fun folder(ctx: Context): String = sp(ctx).getString("folder", "")!!.trim()
-    fun token(ctx: Context): String = sp(ctx).getString("token", "")!!.trim()
+    /**
+     * Токен входа Firebase (у администратора и у работника один и тот же механизм): скрипт Диска проверяет по нему
+     * профиль (active, не заблокирован; админские действия — только isAdmin). Общего секрета на телефонах нет.
+     * Не вошли в аккаунт — токена нет, пустая строка. Только не в главном потоке.
+     */
+    fun token(ctx: Context): String {
+        return try {
+            val u = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser ?: return ""
+            com.google.android.gms.tasks.Tasks.await(u.getIdToken(false), 20, java.util.concurrent.TimeUnit.SECONDS).token ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    /** Общий токен Диска из старых версий стирается с телефона. */
+    fun wipeLegacyToken(ctx: Context) {
+        val p = sp(ctx)
+        if (p.contains("token")) p.edit().remove("token").apply()
+    }
+
     fun ready(ctx: Context): Boolean = url(ctx).isNotEmpty() && folder(ctx).isNotEmpty()
 
-    fun save(ctx: Context, url: String, folder: String, token: String) {
+    fun save(ctx: Context, url: String, folder: String) {
         var f = folder.trim()
         if (f.contains("/folders/")) f = f.substringAfter("/folders/").substringBefore('?').substringBefore('/')
-        sp(ctx).edit().putString("url", url.trim()).putString("folder", f)
-            .putString("token", token.trim()).apply()
+        sp(ctx).edit().putString("url", url.trim()).putString("folder", f).remove("token").apply()
     }
 }
 

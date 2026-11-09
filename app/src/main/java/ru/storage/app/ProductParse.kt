@@ -62,7 +62,9 @@ object ProductParse {
 
     /** Бросает исключение при ошибке сети/ключа. Вызывать не в главном потоке. */
     fun parse(ctx: Context, text: String, hint: String = ""): ProductParts {
-        val answer = Ai.call(ctx, prompt(text.trim(), hint.ifBlank { "-" }), null)
+        val t = text.trim()
+        val h = hint.ifBlank { "-" }
+        val answer = Ai.task(ctx, "parse_one", JSONObject().put("text", t).put("hint", h), null) { prompt(t, h) }
         val s = answer.indexOf('{')
         val e = answer.lastIndexOf('}')
         if (s < 0 || e <= s) throw RuntimeException("ИИ вернул ответ без JSON")
@@ -152,7 +154,12 @@ object ProductParse {
         val out = ArrayList<ProductParts?>()
         for (chunk in names.chunked(40)) {
             val res: List<ProductParts?> = try {
-                val answer = Ai.call(ctx, promptMany(chunk.map { it.trim() }, hint.ifBlank { "-" }), null)
+                val lines = chunk.map { it.trim() }
+                val h = hint.ifBlank { "-" }
+                val answer = Ai.task(
+                    ctx, "parse_many",
+                    JSONObject().put("lines", org.json.JSONArray(lines)).put("hint", h), null
+                ) { promptMany(lines, h) }
                 val s = answer.indexOf('{')
                 val e = answer.lastIndexOf('}')
                 val arr = JSONObject(answer.substring(s, e + 1)).optJSONArray("items")

@@ -235,10 +235,22 @@ object Ai {
         }
     }
 
-    /** Один запрос к ИИ: текст + (необязательно) картинка. Возвращает текст ответа. */
-    fun call(ctx: Context, prompt: String, png: ByteArray?, json: Boolean = png != null): String {
-        // работники обращаются к ИИ только через Google-скрипт: ключа ИИ на их телефоне нет
-        if (!Session.isAdmin) return AiProxy.call(ctx, prompt, png, json)
+    /**
+     * Задача для ИИ: id — имя задачи, params — её параметры, png — картинка (необязательно).
+     * Работник: в скрипт уходит только id и params, текст запроса собирает скрипт (там же лежат промпты),
+     * поэтому local() у работника не вызывается и текст запроса в приложении даже не собирается.
+     * Администратор со своим ключом: запрос идёт напрямую, текст берётся из local().
+     */
+    fun task(
+        ctx: Context, id: String, params: JSONObject, png: ByteArray?, json: Boolean = png != null,
+        local: () -> String
+    ): String {
+        if (!Session.isAdmin) return AiProxy.call(ctx, id, params, png, json)
+        return direct(ctx, local(), png, json)
+    }
+
+    /** Прямой запрос к ИИ со своим ключом (только администратор): текст + (необязательно) картинка. */
+    private fun direct(ctx: Context, prompt: String, png: ByteArray?, json: Boolean): String {
         val provider = AiCfg.provider(ctx)
         val key = AiCfg.key(ctx)
         val model = AiCfg.model(ctx)
@@ -355,14 +367,16 @@ object Ai {
 
     /** Быстрая проверка листа: только отправитель и номер заказа. Бросает исключение при ошибке/таймауте. */
     fun identify(ctx: Context, png: ByteArray, page: Int, total: Int): IdResult {
-        val o = parseJson(call(ctx, idPrompt(page, total), png))
+        val p = JSONObject().put("page", page).put("total", total)
+        val o = parseJson(task(ctx, "identify", p, png) { idPrompt(page, total) })
         val sender = cleanSenderName(o.optString("sender", "none").trim()).ifBlank { "none" }
         return IdResult(sender, normalizeOrder(o.optString("order_number", "none")))
     }
 
     /** Распознать один лист. Бросает исключение при ошибке/таймауте — вызывающий повторит. */
     fun recognize(ctx: Context, png: ByteArray, page: Int, total: Int, rules: String = "", marks: Boolean = true): PageResult {
-        val text = call(ctx, prompt(page, total, rules, marks), png)
+        val p = JSONObject().put("page", page).put("total", total).put("rules", rules).put("marks", marks)
+        val text = task(ctx, "recognize", p, png) { prompt(page, total, rules, marks) }
         val o = parseJson(text)
         val items = ArrayList<AiItem>()
         val arr = o.optJSONArray("i") ?: o.optJSONArray("items")

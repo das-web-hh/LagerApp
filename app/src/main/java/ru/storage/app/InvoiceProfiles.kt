@@ -190,7 +190,11 @@ object InvoiceProfiles {
 
     /** Переписать правила по замечанию человека (с картинкой накладной, если она есть). Вызывать не в главном потоке. */
     fun refine(ctx: Context, sender: String, rules: String, comment: String, png: ByteArray?): String =
-        Ai.call(ctx, refinePrompt(sender, rules, comment), png, false).trim().take(1500)
+        Ai.task(
+            ctx, "profile_refine",
+            org.json.JSONObject().put("sender", sender).put("rules", rules).put("comment", comment),
+            png, false
+        ) { refinePrompt(sender, rules, comment) }.trim().take(1500)
 
     /** Фото образца накладной, уменьшенное, для отправки ИИ. */
     suspend fun samplePng(ctx: Context, p: InvoiceProfile): ByteArray? {
@@ -213,7 +217,11 @@ object InvoiceProfiles {
 
     /** Один запрос к ИИ (с картинкой первого листа) — текст правил. Вызывать не в главном потоке. */
     fun generate(ctx: Context, sender: String, png: ByteArray, extracted: String): String =
-        Ai.call(ctx, prompt(sender, extracted), png, false).trim().take(1500)
+        Ai.task(
+            ctx, "profile_gen",
+            org.json.JSONObject().put("sender", sender).put("extracted", extracted),
+            png, false
+        ) { prompt(sender, extracted) }.trim().take(1500)
 }
 
 @Composable

@@ -330,7 +330,9 @@ object ExcelColumns {
 
     /** Способ 2: столбцы выбирает ИИ. Бросает исключение при ошибке. Вызывать не в главном потоке. */
     fun askAi(ctx: Context, rows: List<List<String>>): ColPick {
-        val answer = Ai.call(ctx, aiPrompt(rows), null)
+        val sample = org.json.JSONArray()
+        rows.take(25).forEach { r -> sample.put(org.json.JSONArray(r.map { it.replace('\t', ' ').replace('\n', ' ').trim().take(60) })) }
+        val answer = Ai.task(ctx, "columns", org.json.JSONObject().put("rows", sample), null) { aiPrompt(rows) }
         val s = answer.indexOf('{')
         val e = answer.lastIndexOf('}')
         if (s < 0 || e <= s) throw RuntimeException("ИИ вернул ответ без JSON")

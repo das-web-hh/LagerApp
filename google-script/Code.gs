@@ -37,7 +37,29 @@ function safeEqual_(a, b) {
   return diff === 0;
 }
 
+// Работники входят не по общему TOKEN, а по токену входа Firebase (JWT): скрипт сам проверяет профиль в Firestore.
+// Нужно свойство скрипта FB_PROJECT = ID проекта Firebase. Общий TOKEN остаётся для администратора и сайта.
+function checkWorker_(jwt) {
+  var project = String(PropertiesService.getScriptProperties().getProperty('FB_PROJECT') || '');
+  if (!project) throw new Error('На сервере не задан FB_PROJECT (Script properties).');
+  if (jwt.length > 4000) throw new Error('Неверный токен.');
+  var payload = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(jwt.split('.')[1])).getDataAsString());
+  var email = String(payload.email || '').toLowerCase();
+  if (!email || payload.email_verified !== true) throw new Error('Email не подтверждён.');
+  // подпись и срок токена проверяет сам Firestore: без действующего токена вернёт 401/403
+  var url = 'https://firestore.googleapis.com/v1/projects/' + project + '/databases/(default)/documents/users/' + encodeURIComponent(email);
+  var r = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + jwt }, muteHttpExceptions: true });
+  if (r.getResponseCode() !== 200) throw new Error('Доступ запрещён.');
+  var f = JSON.parse(r.getContentText()).fields || {};
+  var status = f.status && f.status.stringValue;
+  var blocked = !!(f.blocked && f.blocked.booleanValue === true);
+  var strikes = f.strikes ? Number(f.strikes.integerValue || 0) : 0;
+  if (status !== 'active' || blocked || strikes >= 2) throw new Error('Профиль не активен.');
+}
+
 function checkToken_(value) {
+  var v = String(value || '');
+  if (v.indexOf('eyJ') === 0 && v.split('.').length === 3) { checkWorker_(v); return; }
   var token = getToken_();
   if (!token) throw new Error('На сервере не задан TOKEN (Script properties).');
   if (!safeEqual_(value, token)) throw new Error('Неверный токен.');

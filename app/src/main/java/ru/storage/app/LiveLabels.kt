@@ -202,7 +202,7 @@ class LiveLabels(
                 aiPool.execute {
                     var res = ScannedLabel(k, p.barcode, p.article, p.name, "none")
                     try {
-                        val answer = Ai.call(app, prompt(p.barcode), jpeg, true)
+                        val answer = Ai.task(app, "label", JSONObject().put("code", p.barcode), jpeg, true) { prompt(p.barcode) }
                         val s = answer.indexOf('{')
                         val e = answer.lastIndexOf('}')
                         if (s >= 0 && e > s) {

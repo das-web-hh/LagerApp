@@ -16,6 +16,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
@@ -75,9 +76,22 @@ object CloudSettings {
         if (Session.isAdmin) {
             m["driveUrl"] = DriveCfg.url(ctx)
             m["driveFolder"] = DriveCfg.folder(ctx)
-            m["driveToken"] = DriveCfg.token(ctx)
+            m["driveToken"] = FieldValue.delete()   // общий токен Диска больше нигде не хранится
         }
         docRef().set(m, SetOptions.merge())
+        if (Session.isAdmin) publishDrive(ctx)
+    }
+
+    /** Адрес скрипта и папка (без токена) для работников: config/drive. Пишет только администратор. */
+    private fun publishDrive(ctx: Context) {
+        val u = DriveCfg.url(ctx)
+        val f = DriveCfg.folder(ctx)
+        if (u.isBlank() || f.isBlank()) return
+        val sig = "$u|$f"
+        if (sp(ctx).getString("driveSig", "") == sig) return
+        FirebaseFirestore.getInstance().collection("config").document("drive")
+            .set(hashMapOf<String, Any>("url" to u, "folder" to f, "updatedAt" to System.currentTimeMillis()))
+        sp(ctx).edit().putString("driveSig", sig).apply()
     }
 
     /** Сверка с Firebase (1 чтение). Возвращает true, если настройки на телефоне обновились. */
@@ -85,16 +99,20 @@ object CloudSettings {
         // Диск у сотрудников такой же, как у администратора: берём его настройки (сами сотрудники их не меняют)
         if (!Session.isAdmin) {
             try {
-                val a = FirebaseFirestore.getInstance().collection("settings").document("admin").get().awaitIt()
-                val u = a.getString("driveUrl") ?: ""
+                val a = FirebaseFirestore.getInstance().collection("config").document("drive").get().awaitIt()
+                val u = a.getString("url") ?: ""
                 if (a.exists() && u.isNotBlank()) {
-                    DriveCfg.save(ctx, u, a.getString("driveFolder") ?: "", a.getString("driveToken") ?: "")
+                    DriveCfg.save(ctx, u, a.getString("folder") ?: "")
                 }
             } catch (e: Exception) {
             }
         }
-        if (!Session.isAdmin) AiProxy.pull(ctx)
+        if (!Session.isAdmin) AiProxy.pull(ctx) else publishDrive(ctx)
         val snap = docRef().get().awaitIt()
+        // одноразовая чистка: токен Диска, оставшийся в аккаунте администратора от старых версий
+        if (Session.isAdmin && snap.exists() && snap.contains("driveToken")) {
+            try { docRef().update("driveToken", FieldValue.delete()) } catch (e: Exception) { }
+        }
         val local = sp(ctx).getLong("updated", 0L)
         if (!snap.exists()) {
             if (local > 0L) push(ctx, prefs, local)
@@ -106,8 +124,7 @@ object CloudSettings {
                 DriveCfg.save(
                     ctx,
                     snap.getString("driveUrl") ?: "",
-                    snap.getString("driveFolder") ?: "",
-                    snap.getString("driveToken") ?: ""
+                    snap.getString("driveFolder") ?: ""
                 )
             }
             prefs.useFront = snap.getBoolean("useFront") ?: false
@@ -161,7 +178,7 @@ private fun SettingsHome(onBack: () -> Unit, onOpen: (String) -> Unit) {
         "Экран" to "Не выключать экран при подсчёте: вкл/выкл и сколько минут",
         "Сканер" to "Камера, типы штрих-кодов",
         "Сканер документов" to "Снимок листов: сканер Google или наш (для сшитых листов)",
-        "Google Диск" to "Фото и накладные: адрес скрипта, папка, токен",
+        "Google Диск" to "Фото и накладные: адрес скрипта и папка",
         "Артикулы и сайт" to "Приоритетный артикул: с сайта stroeh.de или из системы",
         "Порядок данных" to "Разложить данные и файлы по своим папкам и базам, убрать дубли",
         "Распознавание документов" to "ИИ для автоприёма: API-ключи, модель, время ожидания",
@@ -416,7 +433,6 @@ fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf(DriveCfg.url(ctx)) }
     var folder by remember { mutableStateOf(DriveCfg.folder(ctx)) }
-    var token by remember { mutableStateOf(DriveCfg.token(ctx)) }
     var msg by remember { mutableStateOf("") }
     BackHandler(onBack = onBack)
 
@@ -425,7 +441,6 @@ fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
             if (CloudSettings.pull(ctx, prefs)) {
                 url = DriveCfg.url(ctx)
                 folder = DriveCfg.folder(ctx)
-                token = DriveCfg.token(ctx)
                 msg = "Настройки загружены из аккаунта «${Session.login}»"
             }
         } catch (e: Exception) {
@@ -445,11 +460,13 @@ fun DriveSettings(prefs: Prefs, onBack: () -> Unit) {
         OutlinedTextField(folder, { folder = it }, label = { Text("ID папки или ссылка на папку") },
             modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(token, { token = it }, label = { Text("Токен (если задан в скрипте)") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Text(
+            "Токена в приложении нет: скрипт проверяет вход в аккаунт сам.",
+            style = MaterialTheme.typography.bodySmall
+        )
         Spacer(Modifier.height(12.dp))
         Button(onClick = {
-            DriveCfg.save(ctx, url, folder, token)
+            DriveCfg.save(ctx, url, folder)
             folder = DriveCfg.folder(ctx)
             CloudSettings.save(ctx, prefs)
             msg = "Проверка…"
@@ -604,7 +621,7 @@ fun AiSettings(onBack: () -> Unit) {
                 msg = "Проверка…"
                 scope.launch {
                     msg = try {
-                        val r = withContext(Dispatchers.IO) { Ai.call(ctx, "Reply with the single word OK", null) }
+                        val r = withContext(Dispatchers.IO) { Ai.task(ctx, "ping", org.json.JSONObject(), null, false) { "Reply with the single word OK" } }
                         "ИИ отвечает: " + r.trim().take(60)
                     } catch (e: Exception) {
                         "Ошибка: " + (e.message ?: e.javaClass.simpleName)

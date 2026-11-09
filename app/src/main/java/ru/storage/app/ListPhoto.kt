@@ -424,7 +424,7 @@ object ListPhoto {
             piece = scaled(piece, 1568) // больше ИИ всё равно не использует, лишнее — только токены
             val tmp = ArrayList<Item>()
             try {
-                parseRows(Ai.call(ctx, PROMPT, jpeg(piece), true), tmp)
+                parseRows(Ai.task(ctx, "list_photo", JSONObject(), jpeg(piece), true) { PROMPT }, tmp)
             } catch (e: Exception) {
                 if (i == 0 && parts == 1) throw e
             }

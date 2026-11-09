@@ -346,7 +346,7 @@ fun ScannerScreen(
                                 var found: String? = null
                                 try {
                                     val jpg = try { jpegFromProxy(image) } finally { image.close() }
-                                    val ans = Ai.call(context, AI_BARCODE_PROMPT, jpg, json = false)
+                                    val ans = Ai.task(context, "barcode", org.json.JSONObject(), jpg, json = false) { AI_BARCODE_PROMPT }
                                     val digits = Regex("\\d[\\d\\s-]{6,20}\\d").find(ans)?.value?.filter { it.isDigit() }.orEmpty()
                                     msg = when {
                                         digits.isEmpty() -> "ИИ не смог разобрать код — снимите ближе и без бликов"

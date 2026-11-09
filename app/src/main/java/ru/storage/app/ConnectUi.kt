@@ -157,7 +157,6 @@ fun ConnectionSettings(onBack: () -> Unit) {
     var mService by remember { mutableStateOf(mo?.serviceId ?: "") }
     var mTemplate by remember { mutableStateOf(mo?.templateId ?: "") }
     var mMessage by remember { mutableStateOf(mo?.messageTemplateId ?: "") }
-    var mPrivate by remember { mutableStateOf(mo?.privateKey ?: "") }
     var msg by remember { mutableStateOf("") }
     var restart by remember { mutableStateOf(false) }
 
@@ -205,7 +204,6 @@ fun ConnectionSettings(onBack: () -> Unit) {
         Field("Service ID", mService, { mService = it })
         Field("Template ID (код подтверждения)", mTemplate, { mTemplate = it })
         Field("Template ID (письма сотрудникам)", mMessage, { mMessage = it })
-        Field("Private key (необязательно)", mPrivate, { mPrivate = it }, secret = true)
 
         if (msg.isNotBlank()) Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
 
@@ -221,7 +219,7 @@ fun ConnectionSettings(onBack: () -> Unit) {
                     else -> {
                         msg = ""
                         ConnCfg.saveFirebase(ctx, if (fbAny) fb else null)
-                        ConnCfg.saveMail(ctx, if (mailAny) MailCfg(mPublic, mService, mTemplate, mMessage, mPrivate) else null)
+                        ConnCfg.saveMail(ctx, if (mailAny) MailCfg(mPublic, mService, mTemplate, mMessage) else null)
                         Journal.log("Система", "Изменены подключения (Firebase / EmailJS)")
                         restart = true
                     }
@@ -234,7 +232,7 @@ fun ConnectionSettings(onBack: () -> Unit) {
                 ConnCfg.saveFirebase(ctx, null)
                 ConnCfg.saveMail(ctx, null)
                 project = ""; appId = ""; apiKey = ""; bucket = ""; sender = ""
-                mPublic = ""; mService = ""; mTemplate = ""; mMessage = ""; mPrivate = ""
+                mPublic = ""; mService = ""; mTemplate = ""; mMessage = ""
                 msg = ""
                 restart = true
             },

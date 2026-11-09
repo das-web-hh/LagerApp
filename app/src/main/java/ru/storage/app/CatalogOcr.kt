@@ -298,7 +298,7 @@ object CatalogOcr {
         for (p in pages) {
             val bos = ByteArrayOutputStream()
             scaled(p, 1800).compress(Bitmap.CompressFormat.PNG, 100, bos)
-            val answer = Ai.call(ctx, prompt, bos.toByteArray(), true)
+            val answer = Ai.task(ctx, "catalog", JSONObject(), bos.toByteArray(), true) { prompt }
             val s = answer.indexOf('{')
             val e = answer.lastIndexOf('}')
             if (s < 0 || e <= s) continue
