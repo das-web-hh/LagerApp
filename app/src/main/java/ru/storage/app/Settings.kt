@@ -577,6 +577,21 @@ fun AiSettings(onBack: () -> Unit) {
             onClick = { AiProxy.publish(ctx, proxyUrl); msg = "Адрес скрипта сохранён для работников" },
             modifier = Modifier.fillMaxWidth()
         ) { Text("Сохранить адрес для работников") }
+        OutlinedButton(
+            onClick = {
+                AiProxy.publish(ctx, proxyUrl)
+                msg = "Проверка скрипта…"
+                scope.launch {
+                    msg = try {
+                        val r = withContext(Dispatchers.IO) { AiProxy.call(ctx, "ping", org.json.JSONObject(), null, false) }
+                        "Скрипт отвечает (как у работников): " + r.trim().take(60)
+                    } catch (e: Exception) {
+                        "Скрипт: " + (e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Проверить скрипт (как у работников)") }
 
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -629,7 +644,7 @@ fun AiSettings(onBack: () -> Unit) {
                         "Ошибка: " + (e.message ?: e.javaClass.simpleName)
                     }
                 }
-            }) { Text("Проверить активный ключ") }
+            }) { Text("Проверить мой ключ (напрямую)") }
         }
         if (msg.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
