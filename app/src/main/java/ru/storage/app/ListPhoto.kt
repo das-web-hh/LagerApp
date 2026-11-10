@@ -379,13 +379,40 @@ object ListPhoto {
         name WITHOUT price, WITHOUT the "% ab 2 Stück" line, WITHOUT logo text; barcode = digits only. Never invent values, use "" when not visible.
     """.trimIndent()
 
+    /** Достаёт из ответа ИИ все целые объекты {...} массива "rows", даже если ответ оборван на полуслове. */
+    private fun completeObjects(answer: String): List<JSONObject> {
+        val res = ArrayList<JSONObject>()
+        val k = answer.indexOf("\"rows\"")
+        val start = answer.indexOf('[', if (k >= 0) k else 0)
+        if (start < 0) return res
+        var depth = 0
+        var inStr = false
+        var esc = false
+        var objStart = -1
+        for (i in start + 1 until answer.length) {
+            val c = answer[i]
+            if (inStr) {
+                if (esc) esc = false else if (c == '\\') esc = true else if (c == '"') inStr = false
+                continue
+            }
+            when (c) {
+                '"' -> inStr = true
+                '{' -> { if (depth == 0) objStart = i; depth++ }
+                '}' -> if (depth > 0) {
+                    depth--
+                    if (depth == 0 && objStart >= 0) {
+                        try { res.add(JSONObject(answer.substring(objStart, i + 1))) } catch (e: Exception) { }
+                        objStart = -1
+                    }
+                }
+                ']' -> if (depth == 0) return res
+            }
+        }
+        return res // оборванный последний объект отбрасываем, остальные сохраняем
+    }
+
     private fun parseRows(answer: String, out: MutableList<Item>) {
-        val s = answer.indexOf('{')
-        val e = answer.lastIndexOf('}')
-        if (s < 0 || e <= s) return
-        val arr = JSONObject(answer.substring(s, e + 1)).optJSONArray("rows") ?: return
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
+        for (o in completeObjects(answer)) {
             fun v(k: String) = o.optString(k).trim().let { if (it.equals("null", true) || it.equals("none", true)) "" else it }
             val name = v("name")
             if (name.isEmpty()) continue
@@ -412,7 +439,7 @@ object ListPhoto {
         }
         val gray = prep(crop)
         // очень длинный снимок режем на полосы с небольшим нахлёстом: строки остаются читаемыми при уменьшении
-        val parts = ((gray.height.toFloat() / (gray.width * 1.5f)).let { kotlin.math.ceil(it.toDouble()).toInt() }).coerceIn(1, 3)
+        val parts = ((gray.height.toFloat() / (gray.width * 1.5f)).let { kotlin.math.ceil(it.toDouble()).toInt() }).coerceIn(1, 6)
         val out = ArrayList<Item>()
         val ph = gray.height / parts
         val overlap = (gray.height * 0.03f).toInt()
