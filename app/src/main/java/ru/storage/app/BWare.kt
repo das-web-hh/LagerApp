@@ -554,12 +554,19 @@ fun CatalogWheel(
                         label = { Text("Название товара") }, singleLine = false, modifier = Modifier.fillMaxWidth()
                     )
                     if (ordered.isNotEmpty() || nameSug.busy) {
-                        Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-                            ordered.forEachIndexed { i, sg ->
-                                SuggestRow(sg, onClick = { pickSug(sg) })
-                                if (i < ordered.lastIndex) HorizontalDivider()
+                        // список подсказок: свой цвет и рамка, чтобы отличался от окна, в котором стоит
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                        ) {
+                            Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                                ordered.forEachIndexed { i, sg ->
+                                    SuggestRow(sg, onClick = { pickSug(sg) })
+                                    if (i < ordered.lastIndex) HorizontalDivider()
+                                }
+                                SiteBusyLine(nameSug.busy)
                             }
-                            SiteBusyLine(nameSug.busy)
                         }
                     }
                 }
@@ -694,7 +701,17 @@ fun CatalogWheel(
                     (r.barcode.isNotBlank() && r.barcode.contains(typed))
             }.take(8) else emptyList()
             if (typed.length >= MIN_SEARCH_CHARS) {
-                Card(Modifier.fillMaxWidth().heightIn(max = 300.dp).align(Alignment.TopCenter)) {
+                // окно подсказок: свой цвет и рамка, чтобы оно отличалось от списка товаров под ним
+                Card(
+                    Modifier.fillMaxWidth().heightIn(max = 300.dp).align(Alignment.TopCenter),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+                    border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
+                ) {
                     val siteItems = siteSug.items
                     if (siteItems.isEmpty() && listHits.isEmpty()) {
                         Text(

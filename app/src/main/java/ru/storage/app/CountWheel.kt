@@ -7,6 +7,9 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1170,9 +1173,19 @@ private fun WheelRow(
                         if (defD > 0) add("брак ${fmtQ(defD)}")
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")
-                    if (sub.isNotEmpty()) Text(sub, fontSize = if (bigText) 11.sp else 12.sp, lineHeight = if (bigText) 13.sp else 14.sp, maxLines = 1, color = scheme.onSurfaceVariant)
-                    // «Инвентаризация»: срок не выбран — красная надпись; выбрали срок — исчезает (на печать товар идёт и без срока)
-                    if (expiryHint && row.expiry.isBlank()) Text("срок: не указан", fontSize = 12.sp, maxLines = 1, color = scheme.error)
+                    // «Инвентаризация»: срок не выбран — слово «срок» красным в этой же строке (после артикула); выбрали срок — слово становится серым
+                    // с датой. На печать товар идёт и без срока.
+                    val hintNow = expiryHint && row.expiry.isBlank()
+                    if (sub.isNotEmpty() || hintNow) Text(
+                        buildAnnotatedString {
+                            append(sub)
+                            if (hintNow) {
+                                if (sub.isNotEmpty()) append(" · ")
+                                withStyle(SpanStyle(color = scheme.error)) { append("срок") }
+                            }
+                        },
+                        fontSize = if (bigText) 11.sp else 12.sp, lineHeight = if (bigText) 13.sp else 14.sp, maxLines = 1, color = scheme.onSurfaceVariant
+                    )
                 }
             }
             // план — рядом с фактическим количеством
