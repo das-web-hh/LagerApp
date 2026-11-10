@@ -713,7 +713,9 @@ fun CatalogWheel(
                     border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
                 ) {
                     val siteItems = siteSug.items
-                    if (siteItems.isEmpty() && listHits.isEmpty()) {
+                    if (siteItems.isEmpty() && listHits.isEmpty() && siteSug.busy) {
+                        SiteBusyLine(true)
+                    } else if (siteItems.isEmpty() && listHits.isEmpty()) {
                         Text(
                             if (sync.busy) "Загрузка каталога…" else if (strict) "Нет в списке партии." else if (isolated) "Нет в списке — нажмите «+», чтобы добавить как написано." else "Нет в каталоге — нажмите «+», чтобы добавить как написано.",
                             Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium

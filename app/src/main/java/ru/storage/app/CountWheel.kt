@@ -309,7 +309,8 @@ private fun SuggestionsCard(
         border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
     ) {
         if (hits.isEmpty() && products.isEmpty()) {
-            Text(if (siteBusy) "Ищу на stroeh.de…" else "Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+            if (siteBusy) SiteBusyLine(true)
+            else Text("Ничего не найдено", Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
         } else {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 hits.forEachIndexed { i, r ->

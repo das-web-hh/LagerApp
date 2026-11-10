@@ -520,11 +520,16 @@ fun SuggestRow(s: Suggest, onClick: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Строка «Ищу на stroeh.de…» под полем поиска, пока идёт запрос. */
+/** Строка «Ищу на stroeh.de…» под полем поиска, пока идёт запрос: тонкая бегущая полоска, не мешает работе. */
 @Composable
 fun SiteBusyLine(busy: Boolean) {
-    if (busy) Text(
-        "Ищу на stroeh.de…", Modifier.padding(start = 14.dp, top = 6.dp, bottom = 4.dp),
-        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary
-    )
+    if (busy) Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 8.dp)) {
+        Text("Ищу на stroeh.de…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(4.dp))
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(1.dp)),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+        )
+    }
 }
