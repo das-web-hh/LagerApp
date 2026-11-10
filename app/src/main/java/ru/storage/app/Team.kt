@@ -55,6 +55,31 @@ sealed class AuthResult {
     class Fail(val text: String) : AuthResult()
     /** Не ошибка и не вход: нужно действие вне приложения (например, открыть ссылку из письма). */
     class Notice(val text: String) : AuthResult()
+    /** Аккаунт уже привязан к другому телефону: вход возможен только после подтверждения кодом из Email. Сеанс Firebase пока открыт. */
+    class OtherDevice(val login: String, val name: String, val device: String) : AuthResult()
+}
+
+/** Телефон, на котором открыт аккаунт: один аккаунт работает только на одном устройстве (users/{email}.deviceId). */
+object DeviceId {
+    @Volatile private var cached: String? = null
+
+    fun id(): String {
+        cached?.let { return it }
+        val ctx = com.google.firebase.FirebaseApp.getInstance().applicationContext
+        val sp = ctx.getSharedPreferences("device_id", Context.MODE_PRIVATE)
+        var v = sp.getString("id", "") ?: ""
+        if (v.isEmpty()) {
+            v = try {
+                android.provider.Settings.Secure.getString(ctx.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            } catch (e: Exception) { null } ?: ""
+            if (v.isBlank() || v == "9774d56d682e549c") v = UUID.randomUUID().toString()
+            sp.edit().putString("id", v).apply()
+        }
+        cached = v
+        return v
+    }
+
+    fun name(): String = listOf(android.os.Build.MANUFACTURER, android.os.Build.MODEL).filter { it.isNotBlank() }.joinToString(" ").take(60)
 }
 
 object Users {
@@ -124,6 +149,7 @@ object Users {
 
     /** Firebase Auth принял пароль: проверяем подтверждение Email и профиль в Firestore. */
     private suspend fun afterAuth(k: String, user: FirebaseUser): AuthResult {
+        releasing = false
         user.reload().awaitIt()
         val u = fa.currentUser ?: return AuthResult.Fail(NO_NET)
         if (!u.isEmailVerified) {
@@ -139,6 +165,12 @@ object Users {
             fa.signOut()
             return AuthResult.Fail("Доступ заблокирован. Обратитесь к администратору")
         }
+        // один аккаунт — один телефон: занят другим устройством — нужен код из Email; свободен — привязываем этот телефон
+        val bound = snap.getString("deviceId") ?: ""
+        if (bound.isNotEmpty() && bound != DeviceId.id()) {
+            return AuthResult.OtherDevice(k, snap.getString("name") ?: k, snap.getString("deviceName") ?: "")
+        }
+        if (bound.isEmpty()) bindDevice(k)
         // администратор при входе вычищает остатки старых хэшей паролей из базы
         if (snap.getString("role") == "admin") purgeLegacyHashes()
         return AuthResult.Ok(snap.toUser()!!)
@@ -154,7 +186,8 @@ object Users {
         fs.collection("users").document(k).set(
             hashMapOf<String, Any>(
                 "name" to n, "firstName" to f, "lastName" to l, "login" to k, "email" to k,
-                "position" to "", "role" to "worker", "status" to "pending", "createdAt" to now
+                "position" to "", "role" to "worker", "status" to "pending", "createdAt" to now,
+                "deviceId" to DeviceId.id(), "deviceName" to DeviceId.name(), "deviceAt" to now
             )
         ).awaitIt()
         if (admin != null) Tasks.createApproval(k, n, now, admin)
@@ -191,6 +224,75 @@ object Users {
         } catch (e: Exception) {
             AuthResult.Fail(authText(e))
         }
+    }
+
+    /** true — идёт выход из аккаунта: слушатель привязки не должен заново занять телефон. */
+    @Volatile var releasing = false
+
+    /** Привязывает этот телефон к аккаунту. */
+    suspend fun bindDevice(k: String) {
+        try {
+            fs.collection("users").document(k).update(
+                mapOf("deviceId" to DeviceId.id(), "deviceName" to DeviceId.name(), "deviceAt" to System.currentTimeMillis())
+            ).awaitIt()
+        } catch (e: Exception) { }
+    }
+
+    /** Новый телефон после проверки кода из Email: старый телефон теряет доступ (его сеанс завершится сам). */
+    suspend fun claimDevice(k: String): AuthResult {
+        if (fa.currentUser?.email?.trim()?.lowercase() != k) return AuthResult.Fail("Сеанс входа истёк. Войдите снова")
+        return try {
+            val ref = fs.collection("users").document(k)
+            ref.update(
+                mapOf("deviceId" to DeviceId.id(), "deviceName" to DeviceId.name(), "deviceAt" to System.currentTimeMillis())
+            ).awaitIt()
+            val u = ref.get().awaitIt().toUser()
+            if (u != null) AuthResult.Ok(u) else AuthResult.Fail(NO_NET)
+        } catch (e: Exception) {
+            AuthResult.Fail(authText(e))
+        }
+    }
+
+    /** Отказались подтверждать код: закрываем открытый сеанс Firebase. */
+    fun cancelPending() {
+        try { fa.signOut() } catch (e: Exception) { }
+    }
+
+    /** При выходе из аккаунта телефон освобождается: аккаунт можно открыть на другом телефоне без кода. */
+    suspend fun releaseDevice(login: String) {
+        try {
+            val ref = fs.collection("users").document(login)
+            val snap = ref.get().awaitIt()
+            if ((snap.getString("deviceId") ?: "") == DeviceId.id()) {
+                ref.update(mapOf("deviceId" to FieldValue.delete(), "deviceName" to FieldValue.delete(), "deviceAt" to FieldValue.delete())).awaitIt()
+            }
+        } catch (e: Exception) { }
+    }
+
+    /** Слежение за привязкой: cb(deviceId, fromCache). Пустой deviceId — аккаунт свободен. */
+    fun listenDevice(login: String, cb: (String, Boolean) -> Unit): ListenerRegistration =
+        fs.collection("users").document(login).addSnapshotListener { snap, _ ->
+            if (snap != null && snap.exists()) cb(snap.getString("deviceId") ?: "", snap.metadata.isFromCache)
+        }
+
+    /** Забыли пароль: Firebase присылает на Email ссылку для нового пароля. null — письмо отправлено. */
+    suspend fun resetPassword(email: String): String? {
+        val k = key(email)
+        if (!validEmail(k)) return "Введите корректный Email"
+        return try {
+            fa.sendPasswordResetEmail(k).awaitIt()
+            null
+        } catch (e: com.google.firebase.auth.FirebaseAuthInvalidUserException) {
+            "Аккаунт с таким Email не найден"
+        } catch (e: Exception) {
+            authText(e)
+        }
+    }
+
+    fun maskEmail(e: String): String {
+        val a = e.substringBefore('@')
+        val d = e.substringAfter('@', "")
+        return a.take(if (a.length <= 2) 1 else 2) + "***@" + d
     }
 
     /** Подписка на документ пользователя. cb(null, false) — документ удалён (регистрация отклонена). */

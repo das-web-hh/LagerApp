@@ -46,6 +46,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : FragmentActivity() {
@@ -129,6 +130,7 @@ data class UserProfile(
 fun AppRoot() {
     val context = LocalContext.current
     val prefs = remember { Prefs(context) }
+    val appScope = rememberCoroutineScope()
     // вход запоминается до выхода из аккаунта (кнопка в Профиле)
     val sessionSp = remember { context.getSharedPreferences("session", Context.MODE_PRIVATE) }
     fun loadUser(): AppUser? {
@@ -219,6 +221,24 @@ fun AppRoot() {
         }
         onDispose { reg?.remove() }
     }
+    // один аккаунт — один телефон: если аккаунт занят другим телефоном (вход по коду из Email), этот сеанс завершается;
+    // у аккаунта без привязки (старые входы) телефон занимает тот, который открыл приложение первым
+    DisposableEffect(current?.login) {
+        var reg: com.google.firebase.firestore.ListenerRegistration? = null
+        val cl = current?.login
+        if (cl != null) {
+            reg = Users.listenDevice(cl) { dev, fromCache ->
+                if (!fromCache && !Users.releasing) {
+                    if (dev.isEmpty()) appScope.launch { Users.bindDevice(cl) }
+                    else if (dev != DeviceId.id()) {
+                        Toast.makeText(context, "Этот аккаунт открыт на другом телефоне — вы вышли", Toast.LENGTH_LONG).show()
+                        saveUser(null)
+                    }
+                }
+            }
+        }
+        onDispose { reg?.remove() }
+    }
     // разрешение на уведомления (Android 13+)
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     LaunchedEffect(loggedIn) {
@@ -236,7 +256,18 @@ fun AppRoot() {
         AutoReceiveHolder.receiver = receiver
         val doLogout = {
             Journal.log("Система", "Выход из аккаунта")
-            saveUser(null)
+            val l = current?.login
+            if (l == null) saveUser(null)
+            else {
+                // телефон освобождается (аккаунт можно открыть на другом телефоне), потом выход
+                Users.releasing = true
+                appScope.launch {
+                    kotlinx.coroutines.withTimeoutOrNull(4000) { Users.releaseDevice(l) }
+                    saveUser(null)
+                    Users.releasing = false
+                }
+                Unit
+            }
         }
         current?.let { cu ->
             AppGate(user = cu, onLogout = doLogout) {
@@ -251,7 +282,15 @@ fun AppRoot() {
         PendingScreen(
             current,
             onApproved = { u -> pendingUser = u; splash = true },
-            onLogout = { saveUser(null) }
+            onLogout = {
+                val l = current.login
+                Users.releasing = true
+                appScope.launch {
+                    kotlinx.coroutines.withTimeoutOrNull(4000) { Users.releaseDevice(l) }
+                    saveUser(null)
+                    Users.releasing = false
+                }
+            }
         )
     } else {
         LoginScreen(onSuccess = { u ->

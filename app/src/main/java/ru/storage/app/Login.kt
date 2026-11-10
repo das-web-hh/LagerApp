@@ -49,7 +49,7 @@ private fun Appear(delayMs: Int, modifier: Modifier = Modifier, content: @Compos
     }) { content() }
 }
 
-private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, PIN }
+private enum class Mode { LOGIN, REG_EMAIL, REG_CODE, REG_DATA, PIN, FORGOT }
 
 @Composable
 private fun Field(
@@ -89,6 +89,10 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
     var password2 by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var show by remember { mutableStateOf(false) }
+    // аккаунт занят другим телефоном: вход только после кода из Email
+    var conflict by remember { mutableStateOf<AuthResult.OtherDevice?>(null) }
+    var devSent by remember { mutableStateOf(false) }
+    var devCode by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
     val focus = LocalFocusManager.current
@@ -127,6 +131,37 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
         onSuccess(u)
     }
 
+    fun closeConflict() {
+        conflict = null
+        devSent = false
+        devCode = ""
+        error = null
+    }
+
+    fun sendDeviceCode(c: AuthResult.OtherDevice) {
+        busy = true
+        scope.launch {
+            val p = EmailCode.send(c.login)
+            busy = false
+            if (p != null) error = p else { devSent = true; devCode = ""; error = null }
+        }
+    }
+
+    fun confirmDevice(c: AuthResult.OtherDevice) {
+        val p = EmailCode.check(c.login, devCode)
+        if (p != null) { error = p; return }
+        busy = true
+        scope.launch {
+            val r = Users.claimDevice(c.login)
+            busy = false
+            when (r) {
+                is AuthResult.Ok -> { closeConflict(); finish(r.user) }
+                is AuthResult.Fail -> error = r.text
+                else -> {}
+            }
+        }
+    }
+
     /** Вход сохранёнными логином и паролем (после PIN или отпечатка): проверка всё равно идёт в Firebase. */
     fun quickSignIn(login: String, pw: String) {
         busy = true
@@ -147,6 +182,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                     }
                 }
                 is AuthResult.Notice -> { pin = ""; go(Mode.LOGIN); info = r.text }
+                is AuthResult.OtherDevice -> { pin = ""; conflict = r }
             }
         }
     }
@@ -181,6 +217,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                         is AuthResult.Ok -> finish(r.user)
                         is AuthResult.Notice -> info = r.text
                         is AuthResult.Fail -> fail(r.text)
+                        is AuthResult.OtherDevice -> conflict = r
                     }
                 }
             }
@@ -221,6 +258,21 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                         is AuthResult.Ok -> finish(r.user)
                         is AuthResult.Fail -> fail(r.text)
                         is AuthResult.Notice -> { go(Mode.LOGIN); info = r.text }
+                        is AuthResult.OtherDevice -> conflict = r
+                    }
+                }
+            }
+            Mode.FORGOT -> {
+                busy = true
+                scope.launch {
+                    val p = Users.resetPassword(email)
+                    busy = false
+                    if (p != null) fail(p)
+                    else {
+                        val e = Users.key(email)
+                        go(Mode.LOGIN)
+                        login = e
+                        info = "Письмо со ссылкой для нового пароля отправлено на $e. Откройте её (проверьте «Спам»), задайте пароль и войдите."
                     }
                 }
             }
@@ -278,6 +330,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                 Mode.REG_EMAIL -> "Регистрация — шаг 1 из 3"
                 Mode.REG_CODE -> "Регистрация — шаг 2 из 3"
                 Mode.REG_DATA -> "Регистрация — шаг 3 из 3"
+                Mode.FORGOT -> "Восстановление пароля"
             }
             if (title.isNotEmpty()) {
                 Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -312,6 +365,14 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                         )
                     }
                     Mode.REG_EMAIL -> {
+                        Field(email, { email = it; error = null }, "Email", keyboard = KeyboardType.Email, ime = ImeAction.Done, focus = focus, onDone = { submit() })
+                    }
+                    Mode.FORGOT -> {
+                        Text(
+                            "Укажите Email, на который зарегистрирован аккаунт. Мы пришлём ссылку, по которой можно задать новый пароль.",
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
                         Field(email, { email = it; error = null }, "Email", keyboard = KeyboardType.Email, ime = ImeAction.Done, focus = focus, onDone = { submit() })
                     }
                     Mode.REG_CODE -> {
@@ -361,6 +422,7 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                             Mode.REG_EMAIL -> "Получить код"
                             Mode.REG_CODE -> "Подтвердить код"
                             Mode.REG_DATA -> "Завершить регистрацию"
+                            Mode.FORGOT -> "Отправить письмо"
                         },
                         fontSize = 17.sp, fontWeight = FontWeight.SemiBold
                     )
@@ -378,13 +440,23 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                         ) { Text("Войти по отпечатку / лицу") }
                     }
                     when (mode) {
-                        Mode.PIN -> TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Войти по паролю")
+                        Mode.PIN -> {
+                            TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) { Text("Войти по паролю") }
+                            TextButton(
+                                onClick = {
+                                    // PIN забыт: быстрый вход стирается, дальше вход паролем (пароль можно восстановить по Email)
+                                    LocalAuth.clearAll(ctx)
+                                    go(Mode.LOGIN)
+                                    info = "PIN-код сброшен. Войдите паролем. Пароль забыт — нажмите «Забыли пароль?»"
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Забыли PIN-код?") }
                         }
                         Mode.LOGIN -> {
                             if (LocalAuth.pinEnabled(ctx)) {
                                 TextButton(onClick = { go(Mode.PIN) }, modifier = Modifier.fillMaxWidth()) { Text("Войти по PIN-коду") }
                             }
+                            TextButton(onClick = { email = login; go(Mode.FORGOT) }, modifier = Modifier.fillMaxWidth()) { Text("Забыли пароль?") }
                             TextButton(onClick = { go(Mode.REG_EMAIL) }, modifier = Modifier.fillMaxWidth()) {
                                 Text("Нет аккаунта? Зарегистрироваться")
                             }
@@ -404,6 +476,9 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                             ) { Text("Отправить код ещё раз") }
                             TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) { Text("Уже есть аккаунт? Войти") }
                         }
+                        Mode.FORGOT -> TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Вернуться ко входу")
+                        }
                         else -> TextButton(onClick = { go(Mode.LOGIN) }, modifier = Modifier.fillMaxWidth()) {
                             Text("Уже есть аккаунт? Войти")
                         }
@@ -421,5 +496,39 @@ fun LoginScreen(onSuccess: (AppUser) -> Unit) {
                 )
             }
         }
+    }
+
+    // аккаунт открыт на другом телефоне: восстановление доступа кодом из Email
+    conflict?.let { c ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) { Users.cancelPending(); closeConflict() } },
+            title = { Text("Аккаунт уже используется") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Аккаунт «${c.name}» открыт на другом телефоне" + (if (c.device.isNotBlank()) " (${c.device})" else "") + ". Один аккаунт работает только на одном устройстве.")
+                    Text(
+                        if (!devSent) "Если телефон потерян или вы перешли на новый, восстановите доступ: код придёт на ${Users.maskEmail(c.login)}. Старый телефон будет отключён от аккаунта."
+                        else "Код отправлен на ${Users.maskEmail(c.login)}. Введите его:",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (devSent) {
+                        Field(
+                            devCode, { devCode = it.filter(Char::isDigit).take(6); error = null }, "Код из Email (6 цифр)",
+                            keyboard = KeyboardType.Number, ime = ImeAction.Done, focus = focus, onDone = { if (devCode.length == 6 && !busy) confirmDevice(c) }
+                        )
+                    }
+                    error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !busy && (!devSent || devCode.length == 6),
+                    onClick = { if (!devSent) sendDeviceCode(c) else confirmDevice(c) }
+                ) { Text(if (!devSent) "Отправить код" else "Подтвердить") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { Users.cancelPending(); closeConflict() }) { Text("Отмена") }
+            }
+        )
     }
 }
