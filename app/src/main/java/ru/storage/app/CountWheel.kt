@@ -423,7 +423,9 @@ fun CountWheelList(
     /** «Приём по имени»: «+» при набранном названии добавляет товар «как написано»; пусто — вызывается onAdd */
     onAddTyped: ((String) -> Unit)? = null,
     /** false — правка строки (артикул, штрих-код) меняет только эту строку, каталог не трогает (инвентаризация, сборка: каталог обновляет «Сохранить») */
-    catalogSync: Boolean = true
+    catalogSync: Boolean = true,
+    /** true — «Инвентаризация»: у строки без срока годности под названием красная надпись «срок: не указан» */
+    expiryHint: Boolean = false
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val scanBurst = remember { longArrayOf(0L, 0L) } // [время последнего символа, символов подряд «быстро»]
@@ -654,7 +656,8 @@ fun CountWheelList(
                             onEan = onScanBind?.let { cb -> { cb(row) } },
                             onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
                             onPhoto = if ((nameMode && !bware) || (photoButton && rowPhoto)) ({ photoRow = row; takePhoto() }) else null,
-                            defectButton = rowDefect
+                            defectButton = rowDefect,
+                            expiryHint = expiryHint
                         )
                     }
                 }
@@ -761,7 +764,8 @@ fun CountWheelList(
                                     onEan = onScanBind?.let { cb -> { cb(row) } },
                                     onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
                                     onPhoto = if ((nameMode && !bware) || (photoButton && rowPhoto)) ({ photoRow = row; takePhoto() }) else null,
-                                    defectButton = rowDefect
+                                    defectButton = rowDefect,
+                                    expiryHint = expiryHint
                                 )
                             }
                         }
@@ -894,7 +898,8 @@ private fun WheelRow(
     /** «Приём по имени»: кнопка «Фото» — снимок товара, печатается в документе и уходит на Google Диск */
     onPhoto: (() -> Unit)? = null,
     /** false — в свайпе нет кнопки «Брак» */
-    defectButton: Boolean = true
+    defectButton: Boolean = true,
+    expiryHint: Boolean = false
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
@@ -1166,6 +1171,8 @@ private fun WheelRow(
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")
                     if (sub.isNotEmpty()) Text(sub, fontSize = if (bigText) 11.sp else 12.sp, lineHeight = if (bigText) 13.sp else 14.sp, maxLines = 1, color = scheme.onSurfaceVariant)
+                    // «Инвентаризация»: срок не выбран — красная надпись; выбрали срок — исчезает (на печать товар идёт и без срока)
+                    if (expiryHint && row.expiry.isBlank()) Text("срок: не указан", fontSize = 12.sp, maxLines = 1, color = scheme.error)
                 }
             }
             // план — рядом с фактическим количеством

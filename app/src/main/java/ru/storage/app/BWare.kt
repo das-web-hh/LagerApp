@@ -474,8 +474,75 @@ fun CatalogWheel(
             onDispose { if (BtScan.handler === h) BtScan.handler = null }
         }
     }
+    // «Инвентаризация»: у строки без артикула артикул ищется на stroeh.de по названию (артикул из базы главнее: ищем только если его нигде нет).
+    // Берётся только товар сайта с таким же названием, чужой артикул не подставляется.
+    if (inventory && !isolated) {
+        val artTried = remember { HashSet<String>() }
+        val names = rows.map { it.name.trim() }
+        LaunchedEffect(names) {
+            val app = ctx.applicationContext
+            if (!DriveCfg.ready(app)) return@LaunchedEffect
+            fun nk(t: String) = t.lowercase().filter { it.isLetterOrDigit() }
+            for (row in rows.toList()) {
+                val n = row.name.trim()
+                val k = nk(n)
+                if (n.length < 4 || k in artTried || row.article.isNotBlank()) continue
+                val known = withContext(Dispatchers.IO) { ArticleLookup.find(row).isNotBlank() }
+                if (known) { artTried.add(k); continue }
+                var art = ""
+                var done = true
+                try {
+                    for (h in SiteSearch.search(app, n).take(3)) {
+                        val info = SiteSearch.infoOf(app, Suggest(null, emptyList(), h, null))
+                        if (nk(h.name) == k || nk(info?.name.orEmpty()) == k) { art = info?.article.orEmpty().trim(); break }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    done = false // нет сети — попробуем в следующий раз
+                }
+                if (done) artTried.add(k)
+                if (art.isBlank()) continue
+                withContext(Dispatchers.IO) {
+                    try {
+                        val p = (if (row.productId.isNotEmpty()) db.getProduct(row.productId) else null) ?: db.findByName(n)
+                        if (p != null && p.webArticle.isBlank()) Cloud.saveProduct(db, p.copy(webArticle = art), log = false)
+                    } catch (e: Exception) { }
+                }
+                rows.toList().filter { it.name.trim().equals(n, true) && it.article.isBlank() }.forEach { it.article = art }
+            }
+        }
+    }
     unknownCode?.let { code ->
         var nm by remember(code) { mutableStateOf("") }
+        var pid by remember(code) { mutableStateOf("") }          // товар каталога, выбранный в подсказках
+        var siteArt by remember(code) { mutableStateOf("") }      // артикул со страницы товара сайта, если выбран товар сайта
+        var picked by remember(code) { mutableStateOf(false) }    // подсказка выбрана: список закрыт до следующего набора
+        var dbHits by remember(code) { mutableStateOf(emptyList<Product>()) }
+        LaunchedEffect(nm, picked) {
+            dbHits = if (picked || nm.trim().length < MIN_SEARCH_CHARS) emptyList()
+            else withContext(Dispatchers.IO) { ProductGroups.collapse(db, db.search(nm, 12)).take(8) }
+        }
+        val nameSug = rememberSiteSuggest(nm, dbHits, enabled = !picked && !isolated)
+        // порядок: сначала база с артикулом, затем сайт stroeh.de, затем база без артикула
+        val sugItems = if (picked) emptyList() else nameSug.items
+        val ordered = sugItems.filter { it.product != null && it.article.isNotBlank() } +
+            sugItems.filter { it.product == null } +
+            sugItems.filter { it.product != null && it.article.isBlank() }
+        fun pickSug(sg: Suggest) {
+            picked = true
+            val p = sg.product
+            if (p != null) {
+                nm = p.name; pid = p.id; siteArt = ""
+                scope.launch(Dispatchers.IO) { SiteSearch.bind(ctx, sg) }
+            } else scope.launch {
+                val info = SiteSearch.infoOf(ctx, sg)
+                val n = (info?.name ?: "").ifBlank { sg.hit?.name.orEmpty() }.trim()
+                if (n.isNotBlank()) nm = n
+                siteArt = info?.article.orEmpty().trim()
+                pid = withContext(Dispatchers.IO) { db.findByName(n)?.id } ?: ""
+            }
+        }
         AlertDialog(
             onDismissRequest = { nextUnknown() },
             title = { Text("Товара нет в базе") },
@@ -483,13 +550,27 @@ fun CatalogWheel(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Штрих-код $code. Наберите название — вес и упаковку пишите прямо в названии.", style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(
-                        value = nm, onValueChange = { nm = germanKeys(it) },
+                        value = nm, onValueChange = { nm = germanKeys(it); picked = false; pid = ""; siteArt = "" },
                         label = { Text("Название товара") }, singleLine = false, modifier = Modifier.fillMaxWidth()
                     )
+                    if (ordered.isNotEmpty() || nameSug.busy) {
+                        Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                            ordered.forEachIndexed { i, sg ->
+                                SuggestRow(sg, onClick = { pickSug(sg) })
+                                if (i < ordered.lastIndex) HorizontalDivider()
+                            }
+                            SiteBusyLine(nameSug.busy)
+                        }
+                    }
                 }
             },
             confirmButton = {
-                Button(enabled = nm.isNotBlank(), onClick = { addRow(nm, "", fact = "1", barcode = code); nextUnknown() }) { Text("Добавить") }
+                Button(enabled = nm.isNotBlank(), onClick = {
+                    val n = nm.trim()
+                    addRow(n, pid, fact = "1", barcode = code)
+                    if (siteArt.isNotBlank()) rows.toList().filter { it.name.trim().equals(n, true) && it.article.isBlank() }.forEach { it.article = siteArt }
+                    nextUnknown()
+                }) { Text("Добавить") }
             },
             dismissButton = { TextButton(onClick = { nextUnknown() }) { Text("Отмена") } }
         )
@@ -603,7 +684,8 @@ fun CatalogWheel(
                 photoButton = scanner,
                 // «Инвентаризация»: в строке нет кнопок «Фото» и «Брак»
                 rowPhoto = !inventory,
-                rowDefect = !inventory
+                rowDefect = !inventory,
+                expiryHint = inventory && !listBase
             )
             val typed = query.trim()
             // «Сборка»: сначала товары из самого списка партии (работает без интернета)
