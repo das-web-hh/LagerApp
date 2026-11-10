@@ -141,7 +141,7 @@ for(var i=0;i<8;i++)hash[i]=(hash[i]+old[i])|0}
 for(var i=0;i<8;i++)for(var j=3;j+1;j--){var b=(hash[i]>>(j*8))&255;r+=((b<16)?0:'')+b.toString(16)}return r}
 const nmz=s=>String(s||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim(),hsh=s=>sha(unescape(encodeURIComponent(nmz(s))));
 const API=P.get('s')||'',ap=k=>API+(API.indexOf('?')<0?'?':'&')+k;let T0=0,P0=0,LOADED=0,ASK=0,RM=new Map(),DEV='',pushT=0,tm=0,ST='',LD=0,RST=0;
-const nowS=()=>T0?T0+(performance.now()-P0):Date.now(),oth=r=>(OT.get(r.sid)||0)+(RM.get(r.sid)||0);
+const nowS=()=>T0?T0+(performance.now()-P0):Date.now(),oth=r=>(OT.get(r.sid)||0)+(RM.get(r.sid)||0)+pq(r.pre);
 const fj=(u,o)=>fetch(u,Object.assign({redirect:'follow',cache:'no-store'},o||{})).then(r=>r.json());
 let WEB={q:'',items:[]},webT=0;
 /* каталог товаров (из Firebase, его кладёт на Диск приложение) — в подсказки «из базы»; артикулы и штрих-коды дополняются */
@@ -179,7 +179,7 @@ function askName(){if(ASK)return;ASK=1;const L=AU.names||[],LOCK_MIN=[3,5,10,30]
  i.onkeydown=e=>{if(e.key==='Enter')btn.click()};tick('');setTimeout(()=>!i.disabled&&i.focus(),400)}
 function lock(){ST='';LOADED=0;WHO='';USER='';S=null;step=0;hlRow=null;RM=new Map();$('#app').innerHTML='';document.querySelectorAll('.dm,.scn').forEach(x=>x.remove());closedUI(0);askName()}
 function loadBatch(D){const id=String(D.code||D.rows.length),ex=BT.list.find(b=>b.src===id);if(ex){if(!S)S=ex;return}
- const b=newB(D.title||'Партия');b.src=id;b.items=D.rows.map((r,i)=>{const x=mk(String(r.n||''),String(r.q||0));x.sid='r'+i;x.article=String(r.a||'');x.barcode=String(r.b||'');return x});BT.list.push(b);S=b;step=0;save()}
+ const b=newB(D.title||'Партия');b.src=id;b.items=D.rows.map((r,i)=>{const x=mk(String(r.n||''),String(r.q||0));x.sid='r'+i;x.article=String(r.a||'');x.barcode=String(r.b||'');x.pre=String(r.d||'');return x});BT.list.push(b);S=b;step=0;save()}
 function loadUI(on){let e=document.getElementById('ld');if(!on){if(e)e.remove();return}if(e)return;e=E('div','','<div class=spn></div><div>Загружаю список…</div>');e.id='ld';document.body.appendChild(e)}
 function enter(){if(ST)return;if(!inWin()){closedUI(1);return}closedUI(0);if(LOADED||LD)return;LD=1;loadUI(1);
  fj(ap('action=batch&code='+encodeURIComponent(CODE)+'&who='+WHO)).then(j=>{LD=0;loadUI(0);if(!j.ok||!j.batch)throw j.error||0;AU=j.batch.auth||AU;LOADED=1;S=BT.list.find(b=>b.id===BT.cur)||BT.list[0]||null;RST=1;loadBatch(j.batch);render();pull()})
@@ -264,21 +264,25 @@ function shot(f,cb){if(!f)return;const r=new FileReader();r.onload=()=>{const im
 function rowDlg(r){dlg('Правка строки','<label>Название<input id=n value="'+esc(r.name)+'"></label><label>Номер артикула<input id=a inputmode=numeric pattern="[0-9]*" value="'+esc(r.article||'')+'"></label><label>Штрих-код<input id=b value="'+esc(r.barcode)+'"></label>'+(r.extra?'':'<label>План (по документу)<input id=p inputmode=decimal value="'+esc(r.qty)+'"></label>'),
  [['Отмена','t'],['Сохранить','',(d,c)=>{const n=V(d,'#n').trim();if(!n)return;r.name=n;r.article=V(d,'#a').trim();r.barcode=V(d,'#b').replace(/\s/g,'');if(!r.extra)r.qty=V(d,'#p');const p=byNm(n);if(p){if(r.barcode)p.barcode=r.barcode;if(r.article)p.article=r.article;saveCat()}c();upd();note('Сохранено')}]],d=>d.querySelector('#n').oninput=e=>e.target.value=gk(e.target.value))}
 /* артикул товара с сайта: берётся только текст (название и артикул), фото не загружаются; результат запоминается */
-const ART=new Map(),getArt=h=>{if(h.article)return Promise.resolve(h.article);if(ART.has(h.url))return Promise.resolve(ART.get(h.url));if(!API||!CODE||!h.url)return Promise.resolve('');return fj(ap('action=stroeha&code='+encodeURIComponent(CODE)+'&url='+encodeURIComponent(h.url))).then(j=>{if(!j||!j.ok)return'';const a=String(j.article||'');ART.set(h.url,a);return a}).catch(()=>'')};
+const ART=new Map(),getArt=h=>{if(h.article)return Promise.resolve(h.article);if(ART.has(h.url))return Promise.resolve(ART.get(h.url));if(!API||!CODE||!h.url)return Promise.resolve(null);return fj(ap('action=stroeha&code='+encodeURIComponent(CODE)+'&url='+encodeURIComponent(h.url))).then(j=>{if(!j||!j.ok)return null;const a=String(j.article||'');ART.set(h.url,a);return a}).catch(()=>null)};
+/* состояние артикула подсказки: 0 — есть, 1 — ещё узнаём на сайте, 2 — артикула нет (такие идут в самый низ) */
+const artSt=x=>{const a=x.row?art(x.row):x.cat?(x.cat.article||''):x.web?(x.web.article||''):'';return a?0:(x.web&&!x.web.fetched)?1:2};
 /* мини-окно подсказок под полем названия: от 3 букв — база и сайт stroeh.de (название и артикул, без фото) */
 function nameSugg(n,g){let tm=0,last='',pend='',web=[],art='',pn='';
+ const note=s=>{g.innerHTML='';const e=E('div','wt',s);e.style.color='var(--er)';e.style.fontWeight='600';g.appendChild(e);g.style.display='block'};
  const draw=()=>{const v=n.value.trim();g.innerHTML='';if(v.length<3){g.style.display='none';return}
   const w=fold(v).split(' ').filter(Boolean),seen=new Set(),list=[];
   CAT.filter(p=>w.every(x=>fold(p.name).includes(x)||String(p.article||'').toLowerCase().includes(x))).slice(0,5).forEach(p=>{seen.add(p.name.trim().toLowerCase());list.push({name:p.name,article:p.article||'',src:'из базы'})});
-  if(last===v)web.forEach(h=>{const k=h.name.trim().toLowerCase();if(!seen.has(k)&&list.length<10){seen.add(k);list.push({name:h.name,article:h.article||'',url:h.url,src:'сайт stroeh.de'})}});
-  list.forEach(x=>{const e=E('div','','<b>'+esc(x.name)+'</b><small>'+x.src+(x.article?' · арт. '+esc(x.article):'')+'</small>');
-   e.onclick=()=>{n.value=x.name;pn=x.name;art=x.article||'';g.style.display='none';g.innerHTML='';
-    if(!art&&x.url)getArt(x).then(a=>{if(a&&n.value.trim()===pn)art=a})};g.appendChild(e)});
+  if(last===v)web.forEach(h=>{const k=h.name.trim().toLowerCase();if(!seen.has(k)&&list.length<10){seen.add(k);list.push({name:h.name,article:h.article||'',url:h.url,fetched:h.fetched,src:'сайт stroeh.de'})}});
+  list.forEach((x,i)=>{x.st=x.article?0:(x.url&&!x.fetched?1:2);x.i=i});list.sort((a,b)=>a.st-b.st||a.i-b.i);
+  list.forEach(x=>{const e=E('div','','<b>'+esc(x.name)+'</b><small>'+x.src+(x.article?' · арт. '+esc(x.article):x.st===2?' · <span style="color:var(--er);font-weight:600">нет артикула</span>':x.st===1?' · артикул…':'')+'</small>');
+   e.onclick=()=>{n.value=x.name;pn=x.name;art=x.article||'';g.style.display='none';g.innerHTML='';if(x.st===2)note('У этого товара нет артикула');
+    if(!art&&x.url)getArt(x).then(a=>{if(n.value.trim()!==pn)return;if(a)art=a;else if(a===''&&x.st!==2)note('У этого товара нет артикула')})};g.appendChild(e)});
   if(pend===v&&last!==v)g.appendChild(E('div','wt','Ищу на сайте…'));
   g.style.display=g.children.length?'block':'none'};
  const run=()=>{const v=n.value.trim();if(v!==pn)art='';draw();
   if(!API||!CODE||v.length<3||(/^\d+$/.test(v)&&v.length>7)||last===v)return;pend=v;draw();clearTimeout(tm);
-  tm=setTimeout(()=>{fj(ap('action=stroehs&code='+encodeURIComponent(CODE)+'&q='+encodeURIComponent(v))).then(j=>{if(j&&j.ok&&n.value.trim()===v){web=(j.items||[]).slice(0,6);last=v;draw();web.slice(0,5).forEach(h=>getArt(h).then(a=>{if(a&&web.includes(h)){h.article=a;draw()}}))}}).catch(()=>{if(pend===v){pend='';draw()}})},600)};
+  tm=setTimeout(()=>{fj(ap('action=stroehs&code='+encodeURIComponent(CODE)+'&q='+encodeURIComponent(v))).then(j=>{if(j&&j.ok&&n.value.trim()===v){web=(j.items||[]).slice(0,5);last=v;draw();web.forEach(h=>getArt(h).then(a=>{if(a!==null&&web.includes(h)&&n.value.trim()===v){h.article=a;h.fetched=1;draw()}}))}}).catch(()=>{if(pend===v){pend='';draw()}})},600)};
  const prev=n.oninput;n.oninput=e=>{if(prev)prev.call(n,e);run()};
  return{art:()=>art,run}}
 function addDlg(name,bc,known){let ph='';const {d}=dlg(bc&&!known?'Новый товар':'Добавить товар',(bc?'<p>'+(known?'Штрих-код '+esc(bc)+' · товар есть в каталоге, но не в этом списке.':'Штрих-код '+esc(bc)+' не найден в каталоге. Назовите товар — он добавится в каталог и в список.')+'</p>':'')+'<label>Название товара<input id=n value="'+esc(name||'')+'"></label><p>Введите от 3 символов, чтобы найти товар в каталоге, или впишите новое название.</p><div class=ns id=g></div><p style="margin-top:10px">Фото товара (печатается на последнем листе документа)</p><div id=gl></div><label class=btn style="display:inline-block;cursor:pointer;margin-top:4px">Снять фото<input type=file accept=image/* capture=environment hidden id=fi></label>',
@@ -373,8 +377,8 @@ const wh=()=>$('#lst'),els=new Map();let hlRow=null;
 let OT=new Map();const mkOT=()=>{OT=new Map();BT.list.forEach(b=>{if(b!==S)(b.items||[]).forEach(x=>{if(x.sid)OT.set(x.sid,(OT.get(x.sid)||0)+pq(x.fact))})})};
 const RH=62;let vs=-1,ve=-1,pend=0;
 function fill(el,r){const f=pq(r.fact),o=oth(r),t=f+o,p=r.extra?0:pq(r.qty),df=pq(r.defect),a=art(r);
- el.querySelector('.rt').textContent=r.name||'—';const sub=[];if(a)sub.push('арт. '+a);if(df>0)sub.push('брак '+fq(df));if(o>0)sub.push('ваш '+fq(f)+' · другие '+fq(o));if(r.expiry)sub.push('срок '+r.expiry);
- const s=el.querySelector('.rs');s.textContent=sub.join(' · ');s.style.display=sub.length?'':'none';
+ el.querySelector('.rt').textContent=r.name||'—';const sub=[];if(a)sub.push('арт. '+a);if(df>0)sub.push('брак '+fq(df));const pre=pq(r.pre),oo=Math.round((o-pre)*1000)/1000;if(oo>0)sub.push('ваш '+fq(f)+' · другие '+fq(oo));if(pre>0)sub.push('✓ уже найдено '+fq(pre));if(r.expiry)sub.push('срок '+r.expiry);
+ const s=el.querySelector('.rs');s.innerHTML=esc(sub.join(' · '))+(a?'':(sub.length?' · ':'')+'<span style="color:var(--er);font-weight:600">нет артикула</span>');s.style.display='';
  el.querySelector('.pl').textContent=r.extra?'':fq(p);el.querySelector('.bc').innerHTML=bcIco(!!r.barcode);
  const fb=el.querySelector('.fb');fb.textContent=fq(Math.round(t*1000)/1000);fb.style.color=!t?'var(--osv)':!r.extra&&t===p?'var(--pri)':!r.extra&&t>p?'var(--er)':'var(--tx)';
  const b=el.querySelectorAll('.act b'),cd=canDel(r);b[0].innerHTML=r.barcode?'EAN<br>✓':'EAN';b[2].style.display=cd?'':'none';el._aw=cd?186:124;el.querySelector('.act').style.width=el._aw+'px'}
@@ -416,7 +420,7 @@ function top_(){const t=$('#who');if(!t)return;t.innerHTML='<span class="bb sn">
 function setQ(v){query=v;const q=$('#q');if(q&&q.value!==v)q.value=v;sugg();webAsk(v);if(v.trim()){const h=findRows(v);if(h[0])goTo(h[0],0)}$('#cl').style.display=v?'':'none'}
 let noSg=0;
 /* подсказки с сайта stroeh.de: от 4 символов, через 0,7 с после последнего символа; артикул берётся со страницы товара */
-function webAsk(v){clearTimeout(webT);v=String(v||'').trim();if(!API||!CODE||noSg||v.length<3||(/^\d+$/.test(v)&&v.length>7)||WEB.q===v)return;webT=setTimeout(()=>{fj(ap('action=stroehs&code='+encodeURIComponent(CODE)+'&q='+encodeURIComponent(v))).then(j=>{if(j&&j.ok&&query.trim()===v){WEB={q:v,items:(j.items||[]).slice(0,10)};sugg();WEB.items.slice(0,5).forEach(h=>getArt(h).then(a=>{if(a&&WEB.items.includes(h)){h.article=a;sugg()}}))}}).catch(()=>{})},700)}
+function webAsk(v){clearTimeout(webT);v=String(v||'').trim();if(!API||!CODE||noSg||v.length<3||(/^\d+$/.test(v)&&v.length>7)||WEB.q===v)return;webT=setTimeout(()=>{fj(ap('action=stroehs&code='+encodeURIComponent(CODE)+'&q='+encodeURIComponent(v))).then(j=>{if(j&&j.ok&&query.trim()===v){WEB={q:v,items:(j.items||[]).slice(0,10)};sugg();WEB.items.slice(0,5).forEach(h=>getArt(h).then(a=>{if(a!==null&&WEB.items.includes(h)){h.article=a;h.fetched=1;sugg()}}))}}).catch(()=>{})},700)}
 function webPick(h){const fin=(nm,ar)=>{const n=String(nm||h.name).trim(),a=String(ar||'');let p=byNm(n);if(!p){p={id:Date.now(),name:n,barcode:'',article:a};CAT.push(p)}else if(!p.article)p.article=a;saveCat();noSg=1;setQ(n);noSg=0;$('#sg').style.display='none';banner('Артикул '+(a||'—'),1)};
  if(h.article)return fin(h.name,h.article);
  fj(ap('action=stroeha&code='+encodeURIComponent(CODE)+'&url='+encodeURIComponent(h.url))).then(j=>{if(!j||!j.ok)throw 0;fin(j.name,j.article)}).catch(()=>banner('Не удалось получить артикул с сайта',0))}
@@ -424,12 +428,13 @@ function suggItems(q){const w=fold(q.trim()).split(' ').filter(Boolean);if(!w.le
  const rows=findRows(q).map(r=>({name:r.name,row:r,k:rk(r.name,r.barcode.toLowerCase())})),seen=new Set(rows.map(e=>e.name.trim().toLowerCase()));
  const cat=CAT.filter(p=>{const n=fold(p.name),b=(p.barcode||'').toLowerCase();return w.every(x=>n.includes(x)||(b&&b.includes(x)))&&!seen.has(p.name.trim().toLowerCase())}).map(p=>({name:p.name,cat:p,k:rk(p.name,(p.barcode||'').toLowerCase())}));
  const all=rows.concat(cat.sort((a,b)=>a.k-b.k)),sn=new Set(all.map(e=>e.name.trim().toLowerCase())),
-  wb=WEB.q===q.trim()?WEB.items.filter(h=>!sn.has(h.name.trim().toLowerCase())).slice(0,6).map(h=>({name:h.name,web:h,k:3})):[];
- return all.slice(0,24).concat(wb)}
+  wb=WEB.q===q.trim()?WEB.items.filter(h=>!sn.has(h.name.trim().toLowerCase())).slice(0,5).map(h=>({name:h.name,web:h,k:3})):[];
+ return all.slice(0,24).concat(wb).map((x,i)=>[x,i]).sort((a,b)=>artSt(a[0])-artSt(b[0])||a[1]-b[1]).map(e=>e[0])}
 function sugg(){const g=$('#sg'),h=!noSg&&query.trim().length>=3?suggItems(query):[];g.style.display=h.length?'block':'none';g.innerHTML='';
- h.forEach(x=>{const r=x.row,a=r?art(r):(x.cat?x.cat.article||'':(x.web?x.web.article||'':'')),i=[];if(r){if(r.extra){if(a)i.push('арт. '+a)}else{i.push(fq(pq(r.qty)));if(a)i.push('арт. '+a)}if(r.fact)i.push('факт '+fq(pq(r.fact)))}else{i.push(x.web?'сайт stroeh.de':'из базы');if(a)i.push('арт. '+a)}
+ h.forEach(x=>{const r=x.row,a=r?art(r):(x.cat?x.cat.article||'':(x.web?x.web.article||'':'')),st=artSt(x),i=[];if(r){if(r.extra){if(a)i.push('арт. '+a)}else{i.push(fq(pq(r.qty)));if(a)i.push('арт. '+a)}if(r.fact)i.push('факт '+fq(pq(r.fact)))}else{i.push(x.web?'сайт stroeh.de':'из базы');if(a)i.push('арт. '+a)}
+  if(st===2)i.push('<span style=\"color:var(--er);font-weight:600\">нет артикула</span>');else if(st===1)i.push('артикул…');
   const e=E('div','','<b>'+esc(x.name)+'</b><small>'+i.join(' · ')+'</small>');
-  e.onclick=()=>{if(r){query='';$('#q').value='';$('#cl').style.display='none';g.style.display='none';$('#q').blur();goTo(r,1)}else if(x.web){webPick(x.web)}else{noSg=1;setQ(x.name);noSg=0;g.style.display='none'}};g.appendChild(e)})}
+  e.onclick=()=>{const none=artSt(x)===2;if(r){query='';$('#q').value='';$('#cl').style.display='none';g.style.display='none';$('#q').blur();goTo(r,1)}else if(x.web){webPick(x.web)}else{noSg=1;setQ(x.name);noSg=0;g.style.display='none'}if(none&&!x.web)setTimeout(()=>banner('У этого товара нет артикула',0),40)};g.appendChild(e)})}
 function render(){mkOT();const A=$('#app');A.innerHTML='';els.clear();if(!S){fab_();A.innerHTML='<div style="margin:auto;text-align:center"><button class=btn id=nb>Создать партию</button></div>';const mkB=n=>{S=newB(n);BT.list.push(S);save();render();note('Добавлено\n«'+n+'»')};const go=()=>nameDlg(defName(),mkB,1);$('#nb').onclick=go;go();return}
  if(step===1)return summary(A);
  A.innerHTML='<div class=top><div class=who id=who></div><button class=btn id=nx>Далее</button></div><div id=er class=err></div><div id=sv class=ok></div><div class=sf><svg width=24 height=24 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><circle cx=11 cy=11 r=7 /><path d="M20 20l-4-4"/></svg><input id=q placeholder="Поиск" autocomplete=off><button id=cl style="display:none;font-size:16px">✕</button><button id=sc>'+scIco('var(--pri)')+'</button><button id=ad>＋</button></div><div id=wh><div id=lst></div><div id=sg></div></div>';

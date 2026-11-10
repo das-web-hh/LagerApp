@@ -10,7 +10,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /** Какие столбцы таблицы что значат (номера с нуля, -1 — нет) и с какой строки идут товары. */
-class BatchPick(val dataStart: Int, val name: Int, val qty: Int, val code: Int, val article: Int)
+/** done — столбец «Посчитано» (число, написанное ручкой), mark — столбец с галочкой (✓, x, +, да); ask — спросить столбцы у человека. */
+class BatchPick(
+    val dataStart: Int, val name: Int, val qty: Int, val code: Int, val article: Int,
+    val done: Int = -1, val mark: Int = -1, val ask: Boolean = false
+)
 
 /**
  * Столбцы Excel для партии определяются сами, по шапке и по содержимому:
@@ -26,11 +30,16 @@ object BatchColumns {
     private const val ROLE_QTY = 3
     private const val ROLE_ART = 4
     private const val ROLE_NUM = 5
+    private const val ROLE_DONE = 6
+    private const val ROLE_MARK = 7
 
     private val NAME_KEYS = listOf("наимен", "назван", "товар", "продук", "номенклат", "описан", "name", "item", "product", "bezeichn", "beschreib", "ware")
     private val QTY_KEYS = listOf("колич", "кол-во", "кол.", "qty", "quantity", "menge", "anzahl", "stück", "stueck", "pcs", "шт", "план")
     private val CODE_KEYS = listOf("штрих", "barcode", "bar code", "ean", "gtin", "шк", "strich")
     private val ART_KEYS = listOf("артикул", "арт", "article", "artikel", "art.", "art-", "art nr", "sku")
+    private val DONE_KEYS = listOf("посчит", "найден", "факт", "сверен", "fakt", "counted", "gezählt", "gezaehlt", "tatsächlich", "tatsaechlich")
+    private val MARK_KEYS = listOf("галоч", "отметк", "haken", "✓", "✔", "check")
+    private val MARK_WORDS = setOf("да", "ja", "yes", "ok", "ок")
     private val BAD_QTY = listOf("цена", "price", "preis", "сумм", "sum", "amount", "итого", "total", "стоим", "вес", "weight", "gewicht")
     private val TOTAL_WORDS = listOf("итого", "всего", "total", "summe", "gesamt")
 
@@ -39,6 +48,14 @@ object BatchColumns {
 
     private fun cell(r: List<String>, i: Int): String = if (i < 0) "" else r.getOrElse(i) { "" }.trim()
     private fun hasLetter(s: String) = s.any { it.isLetter() }
+
+    /** Галочка ручкой: ✓ ✔ ☑ ✅ x х v + да — позиция уже найдена. */
+    private fun isMark(raw: String): Boolean {
+        val v = raw.replace("\uFE0F", "").trim().lowercase()
+        if (v.isEmpty()) return false
+        if (v in MARK_WORDS) return true
+        return v.length <= 3 && v.all { it in "✓✔☑✅xхv×+√" }
+    }
     private fun has(s: String, keys: List<String>) = keys.any { s.contains(it) }
 
     private fun headerRole(raw: String): Int {
@@ -47,6 +64,8 @@ object BatchColumns {
         if (s == "№" || s == "n" || s == "no" || s == "#" || s.startsWith("№ п") || s == "nr" || s == "nr.") return ROLE_NUM
         return when {
             has(s, CODE_KEYS) -> ROLE_CODE
+            has(s, DONE_KEYS) -> ROLE_DONE
+            has(s, MARK_KEYS) -> ROLE_MARK
             has(s, NAME_KEYS) -> ROLE_NAME
             has(s, BAD_QTY) -> 0
             has(s, QTY_KEYS) -> ROLE_QTY
@@ -56,7 +75,7 @@ object BatchColumns {
     }
 
     private class Stat {
-        var filled = 0; var code = 0; var art = 0; var qty = 0; var text = 0; var textLen = 0L
+        var filled = 0; var code = 0; var art = 0; var qty = 0; var text = 0; var textLen = 0L; var marks = 0
         val ints = ArrayList<Long>()
     }
 
@@ -88,6 +107,8 @@ object BatchColumns {
         var qty = fromHeader(ROLE_QTY)
         var code = fromHeader(ROLE_CODE)
         var art = fromHeader(ROLE_ART)
+        var done = fromHeader(ROLE_DONE)
+        var mark = fromHeader(ROLE_MARK)
 
         // 2) содержимое столбцов (для всего, что шапка не назвала)
         val from = if (headerRow >= 0) headerRow + 1 else 0
@@ -99,6 +120,7 @@ object BatchColumns {
             val v = raw.replace(" ", "").replace("\u00A0", "")
             val s = st[c]
             s.filled++
+            if (isMark(raw)) s.marks++
             when {
                 INT.matches(v) && v.length in 8..14 -> s.code++
                 INT.matches(v) && v.length in 4..7 -> s.art++
@@ -110,7 +132,7 @@ object BatchColumns {
         }
         fun frac(n: Int, c: Int) = if (st[c].filled == 0) 0.0 else n.toDouble() / st[c].filled
         val taken = HashSet<Int>()
-        listOf(name, qty, code, art).filter { it >= 0 }.forEach { taken.add(it) }
+        listOf(name, qty, code, art, done, mark).filter { it >= 0 }.forEach { taken.add(it) }
         // столбец нумерации не берём
         val numbering = (0 until width).filter { hRole[it] == ROLE_NUM || (headerRow < 0 || hRole[it] == 0) && isSequence(st[it].ints) && st[it].qty == st[it].filled }.toSet()
 
@@ -118,12 +140,20 @@ object BatchColumns {
         if (code >= 0) taken.add(code)
         if (art < 0) art = (0 until width).filter { it !in taken && frac(st[it].art, it) >= 0.6 }.maxByOrNull { st[it].art } ?: -1
         if (art >= 0) taken.add(art)
+        // столбец только с галочками (✓, x, +, да)
+        if (mark < 0) mark = (0 until width).firstOrNull { it !in taken && st[it].filled > 0 && st[it].marks == st[it].filled } ?: -1
+        if (mark >= 0) taken.add(mark)
         if (name < 0) name = (0 until width).filter { it !in taken && frac(st[it].text, it) >= 0.5 }.maxByOrNull { st[it].textLen } ?: -1
         if (name >= 0) taken.add(name)
         if (qty < 0) {
             val cands = (0 until width).filter { it !in taken && it !in numbering && frac(st[it].qty, it) >= 0.6 }
             qty = cands.firstOrNull { name >= 0 && it > name } ?: cands.firstOrNull() ?: -1
         }
+        if (qty >= 0) taken.add(qty)
+        // ещё один числовой столбец, который назвать не удалось (количество по плану? посчитано ручкой?) — лучше спросить
+        val bad = (0 until width).filter { headerRow >= 0 && has(cell(rows[headerRow], it).lowercase(), BAD_QTY) }.toSet()
+        val spare = (0 until width).filter { it !in taken && it !in numbering && it !in bad && frac(st[it].qty, it) >= 0.6 }
+        val ask = name < 0 || spare.isNotEmpty()
 
         // 3) с какой строки идут товары
         val start = if (headerRow >= 0) headerRow + 1 else {
@@ -132,7 +162,7 @@ object BatchColumns {
             }
             if (i >= 0) i else 0
         }
-        return BatchPick(start, name, qty, code, art)
+        return BatchPick(start, name, qty, code, art, done, mark, ask)
     }
 
     /** Строки партии по выбранным столбцам. Итоги и пустые строки пропускаются. */
@@ -147,7 +177,15 @@ object BatchColumns {
             if (name.isEmpty()) name = "Товар " + code.ifEmpty { art }
             if (TOTAL_WORDS.any { name.lowercase().startsWith(it) }) continue
             val q = if (p.qty >= 0) cell(r, p.qty) else ""
-            out.add(BatchRow(name, batchQty(q), code, art))
+            val plan = batchQty(q)
+            // уже найдено: галочка ручкой — вся позиция, либо число из столбца «Посчитано»
+            var done = ""
+            if (p.mark >= 0 && isMark(cell(r, p.mark))) done = plan
+            else if (p.done >= 0) {
+                val d = parseQ(cell(r, p.done))
+                if (d > 0.0) done = fmtQ(d)
+            }
+            out.add(BatchRow(name, plan, code, art, done))
         }
         return out
     }
@@ -177,6 +215,8 @@ fun BatchColumnsDialog(
     var qty by remember { mutableIntStateOf(initial.qty) }
     var code by remember { mutableIntStateOf(initial.code) }
     var art by remember { mutableIntStateOf(initial.article) }
+    var done by remember { mutableIntStateOf(initial.done) }
+    var mark by remember { mutableIntStateOf(initial.mark) }
     val start = if (header) 1 else 0
     val sample = rows.drop(start).filter { r -> r.any { it.isNotBlank() } }.take(3)
 
@@ -201,7 +241,7 @@ fun BatchColumnsDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    "Сами определить не удалось. Укажите столбцы: штрих-код — 8–14 цифр (EAN-13 и др.), артикул — 4–7 цифр, количество — 1–3 цифры, название — текст.",
+                    "Проверьте столбцы (если что-то определилось неверно — поправьте). Штрих-код — 8–14 цифр, артикул — 4–7 цифр, количество — по плану, напечатанное компьютером. «Посчитано» — число, написанное ручкой; «Галочка» — столбец с ✓ / x / +: такие позиции считаются уже найденными.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -212,11 +252,13 @@ fun BatchColumnsDialog(
                 Pick("Количество", qty) { qty = it }
                 Pick("Штрих-код", code) { code = it }
                 Pick("Артикул", art) { art = it }
+                Pick("Посчитано", done) { done = it }
+                Pick("Галочка", mark) { mark = it }
                 if (sample.isNotEmpty() && name >= 0) {
                     Text("Пример:", style = MaterialTheme.typography.labelMedium)
                     sample.forEach { r ->
                         Text(
-                            listOf(name, art, code, qty).filter { it >= 0 }.joinToString(" | ") { r.getOrElse(it) { "" }.trim().take(24) },
+                            listOf(name, art, code, qty, done, mark).filter { it >= 0 }.joinToString(" | ") { r.getOrElse(it) { "" }.trim().take(24) },
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -224,7 +266,7 @@ fun BatchColumnsDialog(
             }
         },
         confirmButton = {
-            Button(enabled = name >= 0, onClick = { onConfirm(BatchPick(start, name, qty, code, art)) }) { Text("Добавить") }
+            Button(enabled = name >= 0, onClick = { onConfirm(BatchPick(start, name, qty, code, art, done, mark)) }) { Text("Добавить") }
         },
         dismissButton = { TextButton(onClick = onCancel) { Text("Отмена") } }
     )

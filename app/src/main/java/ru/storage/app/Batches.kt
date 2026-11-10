@@ -49,7 +49,8 @@ import java.util.UUID
  * Партия создаётся сканером этикеток (как «Скан списка» в каталоге, но товары идут не в каталог, а в список) или из Excel.
  * Отправка: файл партии (JSON) и страница HTML кладутся на Google Диск; получатель получает ссылку / QR / файл HTML.
  */
-class BatchRow(name: String, qty: String, val barcode: String = "", val article: String = "") {
+/** done — сколько штук по этой позиции уже найдено заранее (галочка ручкой на бумажном списке или столбец «Посчитано»); "" — ничего. */
+class BatchRow(name: String, qty: String, val barcode: String = "", val article: String = "", val done: String = "") {
     var name by mutableStateOf(name)
     var qty by mutableStateOf(qty)
 }
@@ -91,7 +92,7 @@ object BatchStore {
                 val rs = o.optJSONArray("rows")
                 if (rs != null) for (k in 0 until rs.length()) {
                     val r = rs.optJSONObject(k) ?: continue
-                    b.rows.add(BatchRow(r.optString("n"), r.optString("q"), r.optString("b"), r.optString("a")))
+                    b.rows.add(BatchRow(r.optString("n"), r.optString("q"), r.optString("b"), r.optString("a"), r.optString("d")))
                 }
                 batches.add(b)
             }
@@ -106,7 +107,7 @@ object BatchStore {
             batches.toList().forEach { b ->
                 val rs = JSONArray()
                 b.rows.toList().forEach { r ->
-                    rs.put(JSONObject().put("n", r.name).put("q", r.qty).put("b", r.barcode).put("a", r.article))
+                    rs.put(JSONObject().put("n", r.name).put("q", r.qty).put("b", r.barcode).put("a", r.article).put("d", r.done))
                 }
                 a.put(JSONObject().put("id", b.id).put("t", b.title).put("at", b.created).put("l", b.link).put("ph", b.pubHash).put("nm", b.names).put("rows", rs))
             }
@@ -174,7 +175,9 @@ object BatchShare {
     fun json(b: Batch, cfg: AccessCfg? = null, withAuth: Boolean = false): String {
         val rs = JSONArray()
         b.rows.toList().forEach { r ->
-            rs.put(JSONObject().put("n", r.name.trim()).put("q", batchQty(r.qty)).put("b", r.barcode).put("a", r.article))
+            val ro = JSONObject().put("n", r.name.trim()).put("q", batchQty(r.qty)).put("b", r.barcode).put("a", r.article)
+            if (r.done.isNotBlank()) ro.put("d", r.done)
+            rs.put(ro)
         }
         val o = JSONObject().put("v", 1).put("code", b.code).put("title", b.title).put("at", b.created).put("rows", rs)
         if (withAuth) o.put("auth", auth(b, cfg))
@@ -420,6 +423,9 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
     var addDlg by remember { mutableStateOf(false) }
     var scanning by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    /** «Сканирование с ИИ»: что сейчас читается ('' — ничего) и задача, чтобы её можно было отменить */
+    var aiStatus by remember { mutableStateOf("") }
+    var aiJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var delBatch by remember { mutableStateOf<Batch?>(null) }
     /** партия, в которую докидываем товары; null — создаём новую */
     var target by remember { mutableStateOf<Batch?>(null) }
@@ -458,7 +464,7 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
                 } else {
                     val pick = BatchColumns.detect(data)
                     val auto = if (pick.name >= 0) BatchColumns.parse(data, pick) else emptyList()
-                    if (auto.isNotEmpty()) {
+                    if (auto.isNotEmpty() && !pick.ask) {
                         accept(auto, title)
                     } else {
                         colsData = data; colsTitle = title; colsPick = pick
@@ -472,6 +478,28 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
             }
         } else target = null
     }
+
+    val aiScan = rememberBatchScanner(
+        onPdf = { pdf ->
+            aiStatus = "ИИ читает документ…"
+            aiJob = scope.launch {
+                try {
+                    val list = BatchAiScan.read(ctx, pdf) { s -> aiStatus = s }
+                    accept(list, "")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    target = null
+                    throw e
+                } catch (e: Exception) {
+                    Toast.makeText(ctx, "ИИ: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                    target = null
+                } finally {
+                    aiStatus = ""
+                    aiJob = null
+                }
+            }
+        },
+        onCancel = { target = null }
+    )
 
     val cd = colsData
     val cp = colsPick
@@ -572,9 +600,24 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(modifier = Modifier.fillMaxWidth(), onClick = { addDlg = false; scanning = true }) { Text("Сканировать") }
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { addDlg = false; picker.launch(arrayOf("*/*")) }) { Text("Из файла (Excel)") }
+                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                        addDlg = false
+                        if (!AiCfg.ready(ctx)) {
+                            Toast.makeText(ctx, "ИИ не настроен: укажите ключ ИИ в настройках", Toast.LENGTH_LONG).show()
+                            target = null
+                        } else aiScan()
+                    }) { Text("Сканирование с ИИ (отметки ручкой)") }
                     TextButton(modifier = Modifier.fillMaxWidth(), onClick = { addDlg = false; target = null }) { Text("Отмена") }
                 }
             }
+        )
+    }
+    if (aiStatus.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Сканирование с ИИ") },
+            text = { Text(aiStatus) },
+            confirmButton = { TextButton(onClick = { aiJob?.cancel() }) { Text("Отмена") } }
         )
     }
     delBatch?.let { b ->
@@ -737,7 +780,8 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
                         Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         val sub = listOf(
                             if (r.article.isNotBlank()) "арт. ${r.article}" else "",
-                            if (r.barcode.isNotBlank()) "ШК ${r.barcode}" else ""
+                            if (r.barcode.isNotBlank()) "ШК ${r.barcode}" else "",
+                            if (r.done.isNotBlank()) "✓ найдено ${r.done}" else ""
                         ).filter { it.isNotEmpty() }.joinToString(" · ")
                         if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
                     }
