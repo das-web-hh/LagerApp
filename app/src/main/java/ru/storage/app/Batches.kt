@@ -59,6 +59,8 @@ class Batch(val id: String, title: String, val created: Long) {
     var title by mutableStateOf(title)
     /** имена получателей через запятую: по ним HTML пускает внутрь (внутри файла только хеши) */
     var names by mutableStateOf("")
+    /** пустая партия: список изначально пуст, получатель сам добавляет и печатает товары, каждая его партия тоже пустая */
+    var empty = false
     val rows = mutableStateListOf<BatchRow>()
     /** ссылка последней отправки ("" — ещё не отправлялась) */
     var link by mutableStateOf("")
@@ -89,6 +91,7 @@ object BatchStore {
                 b.link = o.optString("l")
                 b.pubHash = o.optString("ph")
                 b.names = o.optString("nm")
+                b.empty = o.optBoolean("em", false)
                 val rs = o.optJSONArray("rows")
                 if (rs != null) for (k in 0 until rs.length()) {
                     val r = rs.optJSONObject(k) ?: continue
@@ -109,16 +112,17 @@ object BatchStore {
                 b.rows.toList().forEach { r ->
                     rs.put(JSONObject().put("n", r.name).put("q", r.qty).put("b", r.barcode).put("a", r.article).put("d", r.done))
                 }
-                a.put(JSONObject().put("id", b.id).put("t", b.title).put("at", b.created).put("l", b.link).put("ph", b.pubHash).put("nm", b.names).put("rows", rs))
+                a.put(JSONObject().put("id", b.id).put("t", b.title).put("at", b.created).put("l", b.link).put("ph", b.pubHash).put("nm", b.names).put("em", b.empty).put("rows", rs))
             }
             file(ctx).writeText(a.toString())
         } catch (e: Exception) {
         }
     }
 
-    fun create(ctx: Context, title: String, rows: List<BatchRow>): Batch {
+    fun create(ctx: Context, title: String, rows: List<BatchRow>, empty: Boolean = false): Batch {
         val now = System.currentTimeMillis()
-        val b = Batch(UUID.randomUUID().toString(), title.ifBlank { "Партия " + fmtTime(now) }, now)
+        val b = Batch(UUID.randomUUID().toString(), title.ifBlank { (if (empty) "Пустая партия " else "Партия ") + fmtTime(now) }, now)
+        b.empty = empty
         b.rows.addAll(rows)
         batches.add(0, b)
         save(ctx)
@@ -180,6 +184,7 @@ object BatchShare {
             rs.put(ro)
         }
         val o = JSONObject().put("v", 1).put("code", b.code).put("title", b.title).put("at", b.created).put("rows", rs)
+        if (b.empty) o.put("empty", true)
         if (withAuth) o.put("auth", auth(b, cfg))
         return o.toString()
     }
@@ -427,6 +432,8 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
     var aiStatus by remember { mutableStateOf("") }
     var aiJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var delBatch by remember { mutableStateOf<Batch?>(null) }
+    /** окно названия для пустой партии (null — закрыто) */
+    var emptyName by remember { mutableStateOf<String?>(null) }
     /** партия, в которую докидываем товары; null — создаём новую */
     var target by remember { mutableStateOf<Batch?>(null) }
 
@@ -562,7 +569,7 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             if (BatchStore.batches.isEmpty()) {
                 Text(
-                    "Партий пока нет. «Добавить» → сканер этикеток или файл Excel.",
+                    "Партий пока нет. «Добавить» → сканер этикеток, файл Excel или пустая партия.",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(8.dp)
                 )
@@ -577,7 +584,7 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
                             Column(Modifier.weight(1f)) {
                                 Text(b.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    fmtTime(b.created) + " · позиций: ${b.rows.size}" + if (b.link.isNotBlank()) " · отправлена" else "",
+                                    fmtTime(b.created) + (if (b.empty) " · пустая" else " · позиций: ${b.rows.size}") + if (b.link.isNotBlank()) " · отправлена" else "",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -595,11 +602,15 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { addDlg = false; target = null },
             title = { Text("Добавить") },
-            text = { Text(if (target != null) "Товары добавятся в эту партию." else "Как создать список товаров?") },
+            text = { Text(if (target != null) "Товары добавятся в эту партию." else "Как создать список товаров? «Пустая партия» — без списка: получатель сам добавляет и печатает товары.") },
             confirmButton = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(modifier = Modifier.fillMaxWidth(), onClick = { addDlg = false; scanning = true }) { Text("Сканировать") }
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { addDlg = false; picker.launch(arrayOf("*/*")) }) { Text("Из файла (Excel)") }
+                    if (target == null) OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                        addDlg = false
+                        emptyName = "Пустая партия " + fmtTime(System.currentTimeMillis())
+                    }) { Text("Пустая партия") }
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                         addDlg = false
                         if (!AiCfg.ready(ctx)) {
@@ -610,6 +621,26 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
                     TextButton(modifier = Modifier.fillMaxWidth(), onClick = { addDlg = false; target = null }) { Text("Отмена") }
                 }
             }
+        )
+    }
+    emptyName?.let { nm ->
+        AlertDialog(
+            onDismissRequest = { emptyName = null },
+            title = { Text("Пустая партия") },
+            text = {
+                Column {
+                    Text("Список пуст: получатель сам добавляет товары (поиск, сканер, «＋») и печатает. Переключатель партий в HTML тоже создаёт пустые партии.", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    CompactField(value = nm, onChange = { emptyName = germanKeys(it) }, hint = "Название партии", modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    BatchStore.openId = BatchStore.create(ctx, nm.trim(), emptyList(), empty = true).id
+                    emptyName = null
+                }) { Text("Создать") }
+            },
+            dismissButton = { TextButton(onClick = { emptyName = null }) { Text("Отмена") } }
         )
     }
     if (aiStatus.isNotEmpty()) {
@@ -706,12 +737,12 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
         // над списком: «Отправить» и «QR»
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                enabled = !busy && b.rows.isNotEmpty() && b.names.isNotBlank(),
+                enabled = !busy && (b.rows.isNotEmpty() || b.empty) && b.names.isNotBlank(),
                 modifier = Modifier.weight(1f).height(48.dp),
                 onClick = { sendDlg = true }
             ) { Text(if (busy) "Загружаю…" else "Отправить") }
             OutlinedButton(
-                enabled = !busy && b.rows.isNotEmpty() && b.names.isNotBlank(),
+                enabled = !busy && (b.rows.isNotEmpty() || b.empty) && b.names.isNotBlank(),
                 modifier = Modifier.weight(1f).height(48.dp),
                 onClick = { publish { link -> if (link.isNotBlank()) qrLink = link } }
             ) { Text("QR-код") }
@@ -768,33 +799,44 @@ private fun BatchEditor(b: Batch, onAddMore: () -> Unit, onClose: () -> Unit) {
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Позиций: ${b.rows.size} · всего: ${fmtQ(b.rows.sumOf { parseQ(batchQty(it.qty)) })}",
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 4.dp)
-        )
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 4.dp)) {
-            items(b.rows.toList(), key = { System.identityHashCode(it) }) { r ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        val sub = listOf(
-                            if (r.article.isNotBlank()) "арт. ${r.article}" else "",
-                            if (r.barcode.isNotBlank()) "ШК ${r.barcode}" else "",
-                            if (r.done.isNotBlank()) "✓ найдено ${r.done}" else ""
-                        ).filter { it.isNotEmpty() }.joinToString(" · ")
-                        if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
-                    }
-                    CompactField(
-                        value = r.qty, onChange = { v -> r.qty = v.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(7) },
-                        hint = "1", modifier = Modifier.width(76.dp)
-                    )
-                    TextButton(onClick = { b.rows.remove(r) }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
-                }
-                HorizontalDivider()
+        if (b.empty) {
+            Spacer(Modifier.height(12.dp))
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Text(
+                    "Пустая партия. Списка нет: получатель открывает HTML (после ввода имени), сам добавляет товары — поиском по каталогу, сканером или «＋» — считает и печатает. Кнопка «Список партии» в HTML создаёт новые партии, и каждая тоже пустая.",
+                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(14.dp)
+                )
             }
+            Spacer(Modifier.weight(1f))
+        } else {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Позиций: ${b.rows.size} · всего: ${fmtQ(b.rows.sumOf { parseQ(batchQty(it.qty)) })}",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 4.dp)
+            )
+            LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 4.dp)) {
+                items(b.rows.toList(), key = { System.identityHashCode(it) }) { r ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            val sub = listOf(
+                                if (r.article.isNotBlank()) "арт. ${r.article}" else "",
+                                if (r.barcode.isNotBlank()) "ШК ${r.barcode}" else "",
+                                if (r.done.isNotBlank()) "✓ найдено ${r.done}" else ""
+                            ).filter { it.isNotEmpty() }.joinToString(" · ")
+                            if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
+                        }
+                        CompactField(
+                            value = r.qty, onChange = { v -> r.qty = v.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(7) },
+                            hint = "1", modifier = Modifier.width(76.dp)
+                        )
+                        TextButton(onClick = { b.rows.remove(r) }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
+                    }
+                    HorizontalDivider()
+                }
+            }
+            OutlinedButton(onClick = onAddMore, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Добавить ещё") }
         }
-        OutlinedButton(onClick = onAddMore, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Добавить ещё") }
     }
 
     ctlAsk?.let { a ->
