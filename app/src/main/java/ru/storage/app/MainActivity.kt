@@ -72,6 +72,7 @@ class MainActivity : FragmentActivity() {
         ScreenCfg.load(applicationContext)
         DateCfg.load(applicationContext)
         SiteCfg.load(applicationContext)
+        SearchCfg.load(applicationContext)
         AutoPause.load(applicationContext)
         FileNavCfg.load(applicationContext)
         Speaker.init(applicationContext)

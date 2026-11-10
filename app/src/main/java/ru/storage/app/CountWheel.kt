@@ -245,6 +245,7 @@ private fun ListSearchField(
     onScan: (() -> Unit)?,
     focusRequester: FocusRequester,
     onFocusChange: (Boolean) -> Unit,
+    busy: Boolean = false,
     onSubmit: () -> Unit
 ) {
     Row(
@@ -276,6 +277,10 @@ private fun ListSearchField(
                 keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester).onFocusChanged { onFocusChange(it.isFocused) }
             )
+        }
+        // анимация ожидания прямо в поле: идёт поиск по каталогу / на сайте
+        if (busy) {
+            CircularProgressIndicator(Modifier.padding(horizontal = 6.dp).size(20.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.primary)
         }
         if (query.isNotEmpty()) {
             TextButton(onClick = { onChange("") }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
@@ -506,22 +511,29 @@ fun CountWheelList(
     val hits = if (query.isBlank()) emptyList() else findRows(rows, query)
     // подсказки из каталога (он синхронизирован с Firebase) — ниже товаров списка; то, что уже есть в списке, не повторяем
     var catHits by remember { mutableStateOf(emptyList<Product>()) }
-    LaunchedEffect(query, rows.size) {
-        catHits = if (onPickProduct == null || query.trim().length < MIN_SEARCH_CHARS) emptyList()
-        else withContext(Dispatchers.IO) {
-            try {
-                val pdb = ProductDb.get(appCtx)
-                ProductGroups.collapse(pdb, pdb.search(query, 12)).take(8)
-            } catch (e: Exception) { emptyList() }
-        }.filter { p ->
-            rows.none { r -> (r.productId.isNotEmpty() && r.productId == p.id) || r.name.trim().equals(p.name.trim(), true) }
+    var catBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(query, rows.size, SearchCfg.hideNoArticle) {
+        if (onPickProduct == null || query.trim().length < MIN_SEARCH_CHARS) {
+            catHits = emptyList()
+            catBusy = false
+        } else {
+            catBusy = true
+            catHits = SearchCfg.filterProducts(withContext(Dispatchers.IO) {
+                try {
+                    val pdb = ProductDb.get(appCtx)
+                    ProductGroups.collapse(pdb, pdb.search(query, 12)).take(8)
+                } catch (e: Exception) { emptyList() }
+            }).filter { p ->
+                rows.none { r -> (r.productId.isNotEmpty() && r.productId == p.id) || r.name.trim().equals(p.name.trim(), true) }
+            }
+            catBusy = false
         }
     }
 
     // сайт stroeh.de по названию и артикулу; совпал артикул с каталогом — одна подсказка с одним именем
     val siteSug = rememberSiteSuggest(query, catHits, enabled = onPickProduct != null && nameMode)
     val siteScope = rememberCoroutineScope()
-    val suggestItems = siteSug.items.filter { sg ->
+    val suggestItems = SearchCfg.filterSuggest(siteSug.items).filter { sg ->
         rows.none { r -> (sg.product != null && r.productId.isNotEmpty() && r.productId == sg.product.id) || r.name.trim().equals(sg.name.trim(), true) }
     }
 
@@ -601,7 +613,7 @@ fun CountWheelList(
                     keyboard?.hide()
                 } else onAdd?.invoke()
             }) else null
-            ListSearchField(query, { onSearchTyped(it) }, addAction, onScan, searchFocus, { searchFocused = it }) {
+            ListSearchField(query, { onSearchTyped(it) }, addAction, onScan, searchFocus, { searchFocused = it }, busy = nameMode && query.trim().length >= MIN_SEARCH_CHARS && (catBusy || siteSug.busy)) {
                 if (scanBurst[1] >= 4L && onScanCode != null) finishScanBurst() else hits.firstOrNull()?.let { pick(it) }
             }
             Spacer(Modifier.height(8.dp))

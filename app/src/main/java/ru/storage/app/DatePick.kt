@@ -49,12 +49,24 @@ import kotlin.math.abs
  */
 object DateCfg {
     var simple by mutableStateOf(false)
+    /** false (по умолчанию) — месяцы с номером и названием («01 Январь»); true — только номера («01»). */
+    var monthNumbersOnly by mutableStateOf(false)
     const val DEFAULT_YEAR = 2027
 
     private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("date_cfg", Context.MODE_PRIVATE)
 
     fun load(ctx: Context) {
         simple = sp(ctx).getBoolean("simple", false)
+        monthNumbersOnly = sp(ctx).getBoolean("monthNumbersOnly", false)
+    }
+
+    fun setMonthNumbersOnly(ctx: Context, on: Boolean) {
+        monthNumbersOnly = on
+        sp(ctx).edit().putBoolean("monthNumbersOnly", on).apply()
+    }
+
+    fun applyCloudMonths(ctx: Context, on: Boolean?) {
+        if (on != null) setMonthNumbersOnly(ctx, on)
     }
 
     fun set(ctx: Context, on: Boolean) {
@@ -91,6 +103,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
     val today = remember { Calendar.getInstance() }
     val parsed = remember(initial) { Regex("""^(\d{2})\.(\d{2})\.(\d{4})$""").find(initial.trim()) }
     val simple = remember { DateCfg.simple }
+    val numbersOnly = DateCfg.monthNumbersOnly
     val startYear = parsed?.groupValues?.get(3)?.toInt() ?: if (simple) DateCfg.DEFAULT_YEAR else today.get(Calendar.YEAR)
     val startMonth = (parsed?.groupValues?.get(2)?.toInt() ?: (today.get(Calendar.MONTH) + 1)).coerceIn(1, 12)
     // упрощённый вид: если день не выбирали, дата — первое число месяца
@@ -245,8 +258,8 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        "%02d %s".format(i + 1, name),
-                                        fontSize = if (sel) 16.sp else 13.sp,
+                                        if (numbersOnly) "%02d".format(i + 1) else "%02d %s".format(i + 1, name),
+                                        fontSize = if (numbersOnly) (if (sel) 20.sp else 16.sp) else (if (sel) 16.sp else 13.sp),
                                         fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
                                         color = if (sel) MaterialTheme.colorScheme.onPrimaryContainer
                                         else MaterialTheme.colorScheme.onSurfaceVariant,

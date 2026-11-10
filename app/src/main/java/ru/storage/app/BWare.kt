@@ -268,7 +268,7 @@ fun CompactField(
 
 /** Поиск товара: лупа, надпись «Товар», «+» справа. */
 @Composable
-private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit, onScan: (() -> Unit)? = null, focusRequester: androidx.compose.ui.focus.FocusRequester? = null) {
+private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit, onScan: (() -> Unit)? = null, focusRequester: androidx.compose.ui.focus.FocusRequester? = null, busy: Boolean = false) {
     Row(
         Modifier.fillMaxWidth()
             .height(44.dp)
@@ -294,6 +294,10 @@ private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: (
                 keyboardActions = KeyboardActions(onDone = { onAdd() }),
                 modifier = Modifier.fillMaxWidth().then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             )
+        }
+        // анимация ожидания прямо в поле: идёт поиск по каталогу / на сайте
+        if (busy) {
+            CircularProgressIndicator(Modifier.padding(horizontal = 6.dp).size(20.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.primary)
         }
         if (query.isNotEmpty()) {
             TextButton(onClick = { onChange("") }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("✕") }
@@ -359,9 +363,16 @@ fun CatalogWheel(
     var detailsRow by remember { mutableStateOf<ItemRow?>(null) }
 
     LaunchedEffect(Unit) { if (!isolated) Cloud.runProducts(db, sync, false) }
+    var catBusy by remember { mutableStateOf(false) }
     LaunchedEffect(query, sync.version) {
-        suggestions = if (isolated || query.trim().length < MIN_SEARCH_CHARS) emptyList()
-        else withContext(Dispatchers.IO) { ProductGroups.collapse(db, db.search(query, 12)).take(8) }
+        if (isolated || query.trim().length < MIN_SEARCH_CHARS) {
+            suggestions = emptyList()
+            catBusy = false
+        } else {
+            catBusy = true
+            suggestions = withContext(Dispatchers.IO) { ProductGroups.collapse(db, db.search(query, 12)).take(8) }
+            catBusy = false
+        }
     }
 
     // сайт stroeh.de по названию и артикулу; совпал артикул с каталогом — одна подсказка с одним именем
@@ -655,6 +666,7 @@ fun CatalogWheel(
     Column(modifier) {
         BWareSearchField(
             query = query,
+            busy = !isolated && query.trim().length >= MIN_SEARCH_CHARS && (catBusy || siteSug.busy || sync.busy),
             onChange = { query = germanKeys(it) },
             onAdd = {
                 val typed = query.trim()
@@ -712,7 +724,7 @@ fun CatalogWheel(
                     elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
                     border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
                 ) {
-                    val siteItems = siteSug.items
+                    val siteItems = SearchCfg.filterSuggest(siteSug.items)
                     if (siteItems.isEmpty() && listHits.isEmpty() && siteSug.busy) {
                         SiteBusyLine(true)
                     } else if (siteItems.isEmpty() && listHits.isEmpty()) {

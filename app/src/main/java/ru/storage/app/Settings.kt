@@ -67,6 +67,8 @@ object CloudSettings {
             "screenOn" to ScreenCfg.enabled,
             "screenMinutes" to ScreenCfg.minutes,
             "dateSimple" to DateCfg.simple,
+            "dateMonthNums" to DateCfg.monthNumbersOnly,
+            "hideNoArticle" to SearchCfg.hideNoArticle,
             "autoPaused" to AutoPause.paused,
             "fileSwipe" to FileNavCfg.dir.toLong(),
             "articlePriority" to SiteCfg.code,
@@ -134,6 +136,8 @@ object CloudSettings {
             PrintCfg.applyCloud(ctx, snap.get("printLangs") as? List<*>, snap.getBoolean("printSign"), snap.getString("docAddress"), snap.getString("invLang"))
             ScreenCfg.applyCloud(ctx, snap.getBoolean("screenOn"), snap.getLong("screenMinutes"))
             DateCfg.applyCloud(ctx, snap.getBoolean("dateSimple"))
+            DateCfg.applyCloudMonths(ctx, snap.getBoolean("dateMonthNums"))
+            SearchCfg.applyCloud(ctx, snap.getBoolean("hideNoArticle"))
             AutoPause.applyCloud(ctx, snap.getBoolean("autoPaused"))
             FileNavCfg.applyCloud(ctx, snap.getLong("fileSwipe"))
             SiteCfg.applyCloud(ctx, snap.getString("articlePriority"))
@@ -379,6 +383,28 @@ private fun SiteSettings(prefs: Prefs, onBack: () -> Unit) {
                 "(при «с сайта» — имя с сайта, при «из системы» — имя из каталога) и запоминаются как связанные. " +
                 "Свайп по подсказке слева направо открывает фото товара, справа налево — закрывает.",
             style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(24.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Не предлагать товары без артикула", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (SearchCfg.hideNoArticle) "Включено: в подсказках поиска товаров нет, если у них нет артикула (ни своего, ни с сайта)."
+                    else "Выключено: в подсказках поиска показываются все товары, в том числе без артикула.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = SearchCfg.hideNoArticle,
+                onCheckedChange = {
+                    SearchCfg.set(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
+        Text(
+            "Касается подсказок из каталога в окнах поиска (Инвентаризация, Приём по имени, B-Ware). Товары, которые уже есть в списке, не скрываются.",
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp)
         )
     }
 }
@@ -802,6 +828,24 @@ private fun ScreenSettings(prefs: Prefs, onBack: () -> Unit) {
                 checked = DateCfg.simple,
                 onCheckedChange = {
                     DateCfg.set(ctx, it)
+                    CloudSettings.save(ctx, prefs)
+                }
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Месяцы только номерами", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (DateCfg.monthNumbersOnly) "Включено: в выборе срока годности месяцы показываются только номерами (01)."
+                    else "Выключено: месяцы показываются с номером и названием (01 Январь). В упрощённом выборе месяцы всегда цифрами.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(
+                checked = DateCfg.monthNumbersOnly,
+                onCheckedChange = {
+                    DateCfg.setMonthNumbersOnly(ctx, it)
                     CloudSettings.save(ctx, prefs)
                 }
             )

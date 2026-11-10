@@ -81,6 +81,38 @@ object SiteCfg {
     }
 }
 
+/**
+ * Настройка поиска: «Не предлагать товары без артикула».
+ * true (по умолчанию) — товары каталога без артикула (ни своего, ни с сайта) в подсказках поиска не показываются;
+ * false — показываются все. Строки, которые уже есть в списке, и товары, найденные на сайте, не скрываются.
+ */
+object SearchCfg {
+    var hideNoArticle by mutableStateOf(true)
+
+    private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("site_cfg", Context.MODE_PRIVATE)
+
+    fun load(ctx: Context) {
+        hideNoArticle = sp(ctx).getBoolean("hideNoArticle", true)
+    }
+
+    fun set(ctx: Context, on: Boolean) {
+        hideNoArticle = on
+        sp(ctx).edit().putBoolean("hideNoArticle", on).apply()
+    }
+
+    fun applyCloud(ctx: Context, on: Boolean?) {
+        if (on != null) set(ctx, on)
+    }
+
+    fun hasArticle(p: Product) = p.article.isNotBlank() || p.webArticle.isNotBlank()
+
+    /** Оставляет в подсказках только товары с артикулом, если настройка включена. */
+    fun filterProducts(list: List<Product>): List<Product> = if (hideNoArticle) list.filter { hasArticle(it) } else list
+
+    fun filterSuggest(list: List<Suggest>): List<Suggest> =
+        if (hideNoArticle) list.filter { it.product == null || it.article.isNotBlank() } else list
+}
+
 /** Одна подсказка в мини-окне: товар каталога, товар сайта или то и другое сразу (связаны по артикулу). */
 class Suggest(
     val product: Product?,
