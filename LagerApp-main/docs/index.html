@@ -91,7 +91,7 @@ const nq=q=>{const m=/\d+(?:[.,]\d+)?/.exec(q||'');return m?m[0].replace(',','.'
 const LS=(k,v)=>{try{if(v===undefined)return JSON.parse(localStorage.getItem(k));localStorage.setItem(k,JSON.stringify(v))}catch(e){return null}};
 let USER=LS('lager_user')||'';
 const P=new URLSearchParams(location.search),CODE=P.get('c')||(()=>{try{return JSON.parse(document.getElementById('lager-batch').textContent).code||''}catch(e){return''}})(),BK='lager_b_'+CODE;
-let BT=LS(BK)||{cur:0,list:[]},AU={},WHO='',CLOSED=0;let EMPTY=!!BT.em;const sid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+let BT=LS(BK)||{cur:0,list:[]},AU={},WHO='',CLOSED=0;let EMPTY=!!BT.em;let EXTB=null;const exb=()=>EXTB&&document.body.contains(EXTB.el)?EXTB:(EXTB=null);const sid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const cloneS=r=>({name:r.name,qty:r.qty,barcode:r.barcode,article:r.article,extra:r.extra,by:r.by||'',sid:r.sid||sid(),fact:'',defect:'',expiry:'',photo:'',dph:[]});
 const newB=n=>({id:Date.now()+Math.random(),name:n,stamp:S?S.stamp:'',items:S&&!EMPTY?S.items.map(cloneS):[],saved:false});
 /* Общий список: структура строк (название, план, штрих-код, артикул) едина для всех партий, количества у каждой партии свои */
@@ -262,7 +262,7 @@ function pickerDlg(title,init,onApply,photos){let val=init,pos=init,tm=0,raf=0,d
  setPos(init)}
 function shot(f,cb){if(!f)return;const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const k=Math.min(1,800/Math.max(im.width,im.height)),c=E('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);cb(c.toDataURL('image/jpeg',.7))};im.src=r.result};r.readAsDataURL(f)}
 function rowDlg(r){dlg('Правка строки','<label>Название<input id=n value="'+esc(r.name)+'"></label><label>Номер артикула<input id=a inputmode=numeric pattern="[0-9]*" value="'+esc(r.article||'')+'"></label><label>Штрих-код<input id=b value="'+esc(r.barcode)+'"></label>'+(r.extra?'':'<label>План (по документу)<input id=p inputmode=decimal value="'+esc(r.qty)+'"></label>'),
- [['Отмена','t'],['Сохранить','',(d,c)=>{const n=V(d,'#n').trim();if(!n)return;r.name=n;r.article=V(d,'#a').trim();r.barcode=V(d,'#b').replace(/\s/g,'');if(!r.extra)r.qty=V(d,'#p');const p=byNm(n);if(p){if(r.barcode)p.barcode=r.barcode;if(r.article)p.article=r.article;saveCat()}c();upd();note('Сохранено')}]],d=>d.querySelector('#n').oninput=e=>e.target.value=gk(e.target.value))}
+ [['Отмена','t'],['Сохранить','',(d,c)=>{const n=V(d,'#n').trim();if(!n)return;r.name=n;r.article=V(d,'#a').trim();r.barcode=V(d,'#b').replace(/\s/g,'');if(!r.extra)r.qty=V(d,'#p');const p=byNm(n);if(p){if(r.barcode)p.barcode=r.barcode;if(r.article)p.article=r.article;saveCat()}c();upd();note('Сохранено')}]],d=>{d.querySelector('#n').oninput=e=>e.target.value=gk(e.target.value);EXTB={el:d,put:c=>{const i=d.querySelector('#b');i.value=c;i.style.outline='2px solid var(--pri)';beep(1);return true}}})}
 /* артикул товара с сайта: берётся только текст (название и артикул), фото не загружаются; результат запоминается */
 const ART=new Map(),getArt=h=>{if(h.article)return Promise.resolve(h.article);if(ART.has(h.url))return Promise.resolve(ART.get(h.url));if(!API||!CODE||!h.url)return Promise.resolve(null);return fj(ap('action=stroeha&code='+encodeURIComponent(CODE)+'&url='+encodeURIComponent(h.url))).then(j=>{if(!j||!j.ok)return null;const a=String(j.article||'');ART.set(h.url,a);return a}).catch(()=>null)};
 /* состояние артикула подсказки: 0 — есть, 1 — ещё узнаём на сайте, 2 — артикула нет (такие идут в самый низ) */
@@ -344,7 +344,7 @@ async function ocrCode(src){const W0=src.videoWidth||src.naturalWidth||src.width
  const w=await ocrWorker(),r=await w.recognize(c);return gtinFrom(r.data.text||'')}
 function scanDlg(mode,cb){let st,stop=0;const off=()=>{stop=1;st&&st.getTracks().forEach(t=>t.stop())};
  const m=E('div','scn','<video id=v playsinline muted autoplay></video><div class=scF></div><div class=scH>Штрих-код в рамку, с расстояния 15–25 см</div><div class=scT><button class=btn id=x>✕ Закрыть</button></div><div class=scB style="display:none"><p id=ss></p><label class="btn o" style="display:block;text-align:center;margin-top:8px">📷 Снять фото камерой телефона<input type=file accept=image/* capture=environment hidden id=fi></label></div>');
- document.body.appendChild(m);const q=x=>m.querySelector(x),ss=t=>{q('#ss').textContent=t;q('.scB').style.display=''},sq=()=>{},close=()=>{off();m.remove()};
+ document.body.appendChild(m);const q=x=>m.querySelector(x),ss=t=>{q('#ss').textContent=t;q('.scB').style.display=''},sq=()=>{},close=()=>{off();m.remove()};if(mode==='bind')EXTB={el:m,put:c=>{close();cb(c);return true}};
  let last='',lt=0;const got=c=>{if(mode==='count'){cb(c)}else{close();cb(c)}};
  q('#x').onclick=close;
  q('#fi').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;ss('Распознаю фото…');try{const det=await mkDet(),im=new Image(),u=URL.createObjectURL(f);await new Promise((ok,no)=>{im.onload=ok;im.onerror=no;im.src=u});
@@ -506,15 +506,16 @@ function printRep(){const mhd=v=>{const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec((v|
  Promise.all([...pd.querySelectorAll('img')].map(i=>i.decode?i.decode().catch(()=>{}):0)).then(()=>setTimeout(()=>window.print(),250))}
 
 /* Bluetooth-сканер (эмулирует клавиатуру): каждый скан = строго +1 */
-(function(){let buf='',last=0,fast=0,tm;const take=()=>{const c=buf,f=fast;buf='';fast=0;clearTimeout(tm);return{c,f}};
+(function(){let buf='',last=0,fast=0,tm,pre=null;const take=()=>{const c=buf,f=fast;buf='';fast=0;clearTimeout(tm);return{c,f}};
  const ok=(c,f)=>c.length>=4&&f>=c.length-1&&/^[\w.\-]+$/.test(c);
- addEventListener('pagehide',flush);document.addEventListener('visibilitychange',()=>document.hidden&&flush());addEventListener('keydown',e=>{if(!S||step!==0||CLOSED||document.querySelector('.dm,.scn'))return;
-  const a=document.activeElement,inQ=a&&a.id==='q';if(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)&&!inQ)return;
+ addEventListener('pagehide',flush);document.addEventListener('visibilitychange',()=>document.hidden&&flush());const route=c=>{const x=exb();if(x){if(pre&&pre.el&&pre.el.value!==undefined)pre.el.value=pre.v;x.put(c);return}if(document.querySelector('.dm,.scn'))return;let sw=null;els.forEach(r=>{if(r._sw<-1&&r.isConnected)sw=r});if(sw){const row=S.items[sw._idx];setSw(sw,0);if(row){setQ('');bindCode(row,c);return}}setQ('');countByCode(c)};
+ addEventListener('keydown',e=>{if(!S||step!==0||CLOSED)return;const X=exb();if(!X&&document.querySelector('.dm,.scn'))return;
+  const a=document.activeElement,inQ=a&&a.id==='q';if(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)&&!inQ&&!X)return;
   const now=performance.now(),gap=now-last;last=now;
-  if(e.key==='Enter'){const{c,f}=take();if(ok(c,f)){e.preventDefault();e.stopImmediatePropagation();setQ('');countByCode(c)}return}
+  if(e.key==='Enter'){const{c,f}=take();if(ok(c,f)){e.preventDefault();e.stopImmediatePropagation();route(c)}return}
   if(e.key.length!==1||e.ctrlKey||e.metaKey||e.altKey)return;
-  if(gap>60){buf='';fast=0}else if(buf)fast++;
-  buf+=e.key;if(inQ&&buf.length>1&&gap<=60)e.preventDefault();
-  clearTimeout(tm);tm=setTimeout(()=>{const{c,f}=take();if(c.length>=6&&ok(c,f)){setQ('');countByCode(c)}},130)},true)})();
+  if(gap>60){buf='';fast=0;pre=a&&a.value!==undefined?{el:a,v:a.value}:null}else if(buf)fast++;
+  buf+=e.key;if((inQ||X)&&buf.length>1&&gap<=60)e.preventDefault();
+  clearTimeout(tm);tm=setTimeout(()=>{const{c,f}=take();if(c.length>=6&&ok(c,f))route(c)},130)},true)})();
 boot();
 </script></body></html>
