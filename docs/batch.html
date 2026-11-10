@@ -48,6 +48,8 @@ footer button.big{flex:2}
 #cam video{flex:1;width:100%;object-fit:cover}
 #cam .t{position:absolute;top:0;left:0;right:0;padding:12px;color:#fff;background:rgba(0,0,0,.5);font-weight:600}
 #cam button{margin:12px}
+#cam .frm{position:absolute;left:5%;right:5%;top:25%;height:42%;border:2px solid rgba(255,255,255,.85);border-radius:14px;box-shadow:0 0 0 100vmax rgba(0,0,0,.28);pointer-events:none}
+#cam .hint{position:absolute;left:0;right:0;top:calc(25% + 42% + 12px);text-align:center;color:#fff;font-size:14px;text-shadow:0 1px 3px #000;pointer-events:none}
 #dlgbg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;display:none;align-items:flex-end;justify-content:center}
 #dlg{background:var(--card);width:100%;max-width:560px;max-height:88vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
 #dlg h3{margin:0 0 10px;font-size:18px}
@@ -72,7 +74,9 @@ footer button.big{flex:2}
   #doc td.c{text-align:center;font-weight:700;font-size:15px}
   #doc tr{page-break-inside:avoid}
   #doc .neg{color:#b00}
-  #doc svg{display:block;height:34px;width:140px}
+  #doc td.bc{text-align:center;white-space:nowrap;padding:6px 8px}
+  #doc svg{display:block;margin:0 auto 2px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #doc .bct{font:12px/1.2 'DejaVu Sans Mono',Consolas,monospace;letter-spacing:1px;text-align:center}
 }
 </style>
 </head>
@@ -97,7 +101,7 @@ footer button.big{flex:2}
   <button class="sec" id="addBtn">+ Товар</button>
   <button id="printBtn" class="big">Печать, след. коробка</button>
 </footer>
-<div id="cam"><div class="t" id="camT">Наведите на штрих-код</div><video id="vid" playsinline muted></video><button id="camClose" class="bad">Закрыть</button></div>
+<div id="cam"><div class="t" id="camT">Наведите на штрих-код</div><video id="vid" playsinline muted autoplay></video><div class="frm"></div><div class="hint">Штрих-код в рамку, с расстояния 15–25 см</div><button id="camClose" class="bad">Закрыть</button></div>
 <div id="dlgbg"><div id="dlg"></div></div>
 <div id="doc"></div>
 
@@ -298,23 +302,48 @@ function unknown(code){
 }
 
 // ——— печать ———
-function ean13(code){
-  var L=['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
-  var G=['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
-  var PAR=['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
-  var d = code.split('').map(Number), p = PAR[d[0]], bits = '101', i;
-  for(i=1;i<=6;i++) bits += (p[i-1]==='L' ? L : G)[d[i]];
-  bits += '01010';
-  for(i=7;i<=12;i++) bits += L[d[i]].split('').map(function(c){ return c==='1'?'0':'1'; }).join('');
-  bits += '101';
-  var x = 0, rects = '';
-  for(i=0;i<bits.length;i++){ if(bits[i]==='1'){ var s=i; while(i+1<bits.length && bits[i+1]==='1') i++; rects += '<rect x="'+(s+5)+'" y="0" width="'+(i-s+1)+'" height="40"/>'; } }
-  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 105 40" preserveAspectRatio="none">'+rects+'</svg>';
+var C128=['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213','221312','231212','112232','122132','122231','113222','123122','123221','223211','221132','221231','213212','223112','312131','311222','321122','321221','312212','322112','322211','212123','212321','232121','111323','131123','131321','112313','132113','132311','211313','231113','231311','112133','112331','132131','113123','113321','133121','313121','211331','231131','213113','213311','213131','311123','311321','331121','312113','312311','332111','314111','221411','431111','111224','111422','121124','121421','141122','141221','112214','112412','122114','122411','142112','142211','241211','221114','413111','241112','134111','111242','121142','121241','114212','124112','124211','411212','421112','421211','212141','214121','412121','111143','111341','131141','114113','114311','411113','411311','113141','114131','311141','411131','211412','211214','211232','2331112'];
+var BL=['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+var BG=['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+var BPAR=['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
+function gtinOk(d){ if(!/^\d+$/.test(d) || [8,12,13,14].indexOf(d.length) < 0) return false; var t=0, w=3, i; for(i=d.length-2;i>=0;i--){ t += w * (+d[i]); w = 4 - w; } return (10 - t % 10) % 10 === +d[d.length-1]; }
+function bcRects(bits, x0){ var r='', i, st; for(i=0;i<bits.length;i++){ if(bits[i]==='1'){ st=i; while(i+1<bits.length && bits[i+1]==='1') i++; r += '<rect x="'+(st+x0)+'" width="'+(i-st+1)+'" height="1"/>'; } } return r; }
+function bcSvg(rects, W, mm){ return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+W+' 1" preserveAspectRatio="none" style="width:'+(W*mm).toFixed(1)+'mm;height:14mm" fill="#000">'+rects+'</svg>'; }
+function inv(b){ return b.split('').map(function(c){ return c==='1'?'0':'1'; }).join(''); }
+/* EAN-13 / EAN-8 / UPC-A с контрольной цифрой; всё остальное — Code 128 (читается любым сканером). Тихие зоны по 10 модулей, модуль 0,5 мм (в 1,5 раза крупнее прежнего) */
+function barcodeHtml(code){
+  var raw = String(code||'').replace(/\s+/g,''); if(!raw) return '';
+  var c = /^\d{12}$/.test(raw) ? '0'+raw : raw, bits = '', i, d;
+  if(/^\d{13}$/.test(c) && gtinOk(c)){
+    d = c.split('').map(Number); bits = '101';
+    for(i=1;i<=6;i++) bits += (BPAR[d[0]].charAt(i-1)==='L' ? BL : BG)[d[i]];
+    bits += '01010';
+    for(i=7;i<=12;i++) bits += inv(BL[d[i]]);
+    bits += '101';
+    return '<div class="bcw">'+bcSvg(bcRects(bits,10), 115, .5)+'<div class="bct">'+esc(c)+'</div></div>';
+  }
+  if(/^\d{8}$/.test(c) && gtinOk(c)){
+    d = c.split('').map(Number); bits = '101';
+    for(i=0;i<4;i++) bits += BL[d[i]];
+    bits += '01010';
+    for(i=4;i<8;i++) bits += inv(BL[d[i]]);
+    bits += '101';
+    return '<div class="bcw">'+bcSvg(bcRects(bits,10), 87, .5)+'<div class="bct">'+esc(c)+'</div></div>';
+  }
+  var t = raw.replace(/[^\x20-\x7e]/g,''); if(!t) return esc(raw);
+  var v = [], k;
+  if(/^\d+$/.test(t) && t.length >= 4){
+    if(t.length % 2){ v.push(104, t.charCodeAt(0)-32, 99); k = 1; } else { v.push(105); k = 0; }
+    for(; k < t.length; k += 2) v.push(parseInt(t.substr(k,2),10));
+  } else { v.push(104); for(k=0;k<t.length;k++) v.push(t.charCodeAt(k)-32); }
+  var sum = v[0]; for(k=1;k<v.length;k++) sum += v[k]*k;
+  v.push(sum % 103, 106);
+  var x = 10, r = '';
+  v.forEach(function(n){ var w = C128[n], q; for(q=0;q<w.length;q++){ var wd = +w[q]; if(q%2===0) r += '<rect x="'+x+'" width="'+wd+'" height="1"/>'; x += wd; } });
+  var W = x + 10;
+  return '<div class="bcw">'+bcSvg(r, W, Math.min(.5, 64/W))+'<div class="bct">'+esc(t)+'</div></div>';
 }
-function codeCell(b){
-  b = String(b||'').replace(/\s+/g,'');
-  return /^\d{13}$/.test(b) ? ean13(b) + '<div style="font-size:11px">'+esc(b)+'</div>' : esc(b);
-}
+function codeCell(b){ return barcodeHtml(b); }
 function boxDoc(bx){
   var h = '<h2>' + esc(title) + ' — коробка №' + bx.n + '</h2><div class="m">' + new Date(bx.at||Date.now()).toLocaleString('ru-RU') + '</div>';
   h += '<table><tr><th>№</th><th>Артикул</th><th>Название товара</th><th>Штрих-код</th><th>Кол-во</th></tr>';
@@ -322,7 +351,7 @@ function boxDoc(bx){
   bx.items.forEach(function(it){
     var r = rowById(it.id); if(!r) return;
     sum += it.q; k++;
-    h += '<tr><td>'+k+'</td><td>'+esc(r.a)+'</td><td>'+esc(r.n)+'</td><td>'+codeCell(r.b)+'</td><td class="c">'+fmt(it.q)+'</td></tr>';
+    h += '<tr><td>'+k+'</td><td>'+esc(r.a)+'</td><td>'+esc(r.n)+'</td><td class="bc">'+codeCell(r.b)+'</td><td class="c">'+fmt(it.q)+'</td></tr>';
   });
   h += '<tr><td colspan="4" style="text-align:right"><b>Итого</b></td><td class="c">'+fmt(sum)+'</td></tr></table>';
   return h;
@@ -333,12 +362,12 @@ function sumDoc(){
   var tp = 0, tf = 0;
   state.rows.forEach(function(r, k){
     var f = inClosed(r.id), d = f - r.q; tp += r.q; tf += f;
-    h += '<tr><td>'+(k+1)+'</td><td>'+esc(r.a)+'</td><td>'+esc(r.n)+'</td><td>'+esc(r.b)+'</td><td class="c">'+fmt(r.q)+'</td><td class="c">'+fmt(f)+'</td><td class="c'+(d<0?' neg':'')+'">'+(d===0?'':(d>0?'+':'')+fmt(d))+'</td></tr>';
+    h += '<tr><td>'+(k+1)+'</td><td>'+esc(r.a)+'</td><td>'+esc(r.n)+'</td><td class="bc">'+codeCell(r.b)+'</td><td class="c">'+fmt(r.q)+'</td><td class="c">'+fmt(f)+'</td><td class="c'+(d<0?' neg':'')+'">'+(d===0?'':(d>0?'+':'')+fmt(d))+'</td></tr>';
   });
   h += '<tr><td colspan="4" style="text-align:right"><b>Итого</b></td><td class="c">'+fmt(tp)+'</td><td class="c">'+fmt(tf)+'</td><td></td></tr></table>';
   return h;
 }
-function printHtml(h){ $('doc').innerHTML = h; setTimeout(function(){ window.print(); }, 60); }
+function printHtml(h){ $('doc').innerHTML = h; requestAnimationFrame(function(){ setTimeout(function(){ window.print(); }, 300); }); }
 function currentBox(){
   var items = [];
   state.rows.forEach(function(r){ if(inBox(r.id) > 0) items.push({id:r.id, q:inBox(r.id)}); });
@@ -386,11 +415,67 @@ function csv(){
   document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 
-// ——— камера: встроенный сканер браузера, а на iPhone — библиотека ZXing ———
-var stream = null, timer = 0, det = null, zx = null, lastCode = '', lastAt = 0;
+// ——— камера: встроенный сканер браузера, а на iPhone — библиотека ZXing (в режиме TRY_HARDER, кадр 1080p, обрезка по рамке) ———
+var stream = null, loopOn = false, det = null, lastCode = '', lastAt = 0, pend = '', pendAt = 0;
+var ZX_URLS = ['https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js','https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.21.3/index.min.js','https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'];
+function loadZx(cb){
+  if(window.ZXing){ cb(true); return; }
+  var i = 0;
+  (function t(){
+    if(i >= ZX_URLS.length){ cb(false); return; }
+    var s = document.createElement('script'); s.src = ZX_URLS[i++];
+    s.onload = function(){ if(window.ZXing) cb(true); else t(); };
+    s.onerror = t; document.head.appendChild(s);
+  })();
+}
+if(!('BarcodeDetector' in window)) loadZx(function(){});   // iPhone: библиотека грузится заранее
+function zxDet(cb){
+  loadZx(function(ok){
+    if(!ok){ cb(null); return; }
+    var Z = ZXing, F = Z.BarcodeFormat, H = new Map(), rd = new Z.MultiFormatReader(), cv = document.createElement('canvas'), cx = cv.getContext('2d', {willReadFrequently:true}), n = 0;
+    H.set(Z.DecodeHintType.POSSIBLE_FORMATS, [F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128,F.CODE_39,F.ITF,F.QR_CODE]);
+    H.set(Z.DecodeHintType.TRY_HARDER, true);
+    function dec(src, sx, sy, sw, sh, mw){
+      var k = Math.min(1, mw/sw), w = Math.max(1, Math.round(sw*k)), h = Math.max(1, Math.round(sh*k));
+      if(cv.width !== w || cv.height !== h){ cv.width = w; cv.height = h; }
+      cx.drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
+      var ls = new Z.HTMLCanvasElementLuminanceSource(cv), bs = [Z.HybridBinarizer, Z.GlobalHistogramBinarizer], i;
+      for(i=0;i<bs.length;i++){ try{ return rd.decode(new Z.BinaryBitmap(new bs[i](ls)), H).getText(); }catch(e){} }
+      return '';
+    }
+    cb(function(v){
+      var W = v.videoWidth, Hh = v.videoHeight; if(!W) return Promise.resolve('');
+      n++;
+      var r = dec(v, Math.floor(W*.04), Math.floor(Hh*.2), Math.floor(W*.92), Math.floor(Hh*.6), 1280);
+      if(!r && n % 2 === 0) r = dec(v, 0, 0, W, Hh, 1280);
+      return Promise.resolve(r);
+    });
+  });
+}
+function makeDet(cb){
+  if('BarcodeDetector' in window){
+    try{
+      BarcodeDetector.getSupportedFormats().then(function(f){
+        if(f.indexOf('ean_13') >= 0 || f.indexOf('code_128') >= 0){
+          var d = new BarcodeDetector({formats:f});
+          cb(function(v){ return d.detect(v).then(function(r){ return (r[0] && r[0].rawValue) || ''; }); });
+        } else zxDet(cb);
+      }).catch(function(){ zxDet(cb); });
+      return;
+    }catch(e){}
+  }
+  zxDet(cb);
+}
+/* цифровые EAN/UPC принимаем сразу (у них контрольная цифра), остальные — после двух одинаковых считываний подряд */
+function vet(c){
+  var now = Date.now();
+  if(/^\d+$/.test(c) && [8,12,13,14].indexOf(c.length) >= 0) return true;
+  if(c === pend && now - pendAt < 2500){ pend = ''; return true; }
+  pend = c; pendAt = now; return false;
+}
 function onCode(code){
   var now = Date.now();
-  if(code === lastCode && now - lastAt < 1800) return;
+  if(code === lastCode && now - lastAt < 1800){ lastAt = now; return; }
   lastCode = code; lastAt = now;
   var r = byCode(code);
   if(r){ $('camT').textContent = r.n; add(r.id, 1); }
@@ -399,36 +484,28 @@ function onCode(code){
 function camShow(){ $('cam').style.display = 'flex'; }
 function camOpen(){
   if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){ say('Камера недоступна — используйте сканер или поиск', false); return; }
-  if('BarcodeDetector' in window){
-    var v = $('vid');
-    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false}).then(function(s){
-      stream = s; v.srcObject = s; v.play(); camShow();
-      det = det || new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf']});
-      timer = setInterval(function(){
-        if(v.readyState < 2) return;
-        det.detect(v).then(function(c){ if(c.length) onCode(c[0].rawValue); }).catch(function(){});
-      }, 220);
-    }).catch(function(){ say('Нет доступа к камере — разрешите её в настройках браузера', false); });
-    return;
-  }
-  function start(){
-    try{
-      zx = new ZXing.BrowserMultiFormatReader(); camShow();
-      zx.decodeFromConstraints({video:{facingMode:{ideal:'environment'}}, audio:false}, 'vid', function(res){ if(res) onCode(res.getText()); })
-        .catch(function(){ camClose(); say('Нет доступа к камере — разрешите её в настройках браузера', false); });
-    }catch(e){ say('Сканер камеры не запустился — используйте поиск', false); }
-  }
-  if(window.ZXing){ start(); return; }
-  var s = document.createElement('script');
-  s.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
-  s.onload = start;
-  s.onerror = function(){ say('Сканер камеры не загрузился (нужен интернет)', false); };
-  document.head.appendChild(s);
+  var v = $('vid'); v.muted = true; v.setAttribute('playsinline', '');
+  navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080}}, audio:false}).then(function(s){
+    stream = s; v.srcObject = s;
+    try{ s.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(function(){}); }catch(e){}
+    var pl = v.play(); if(pl && pl.catch) pl.catch(function(){});
+    camShow();
+    makeDet(function(fn){
+      if(!stream) return;
+      if(!fn){ camClose(); say('Сканер камеры не загрузился (нужен интернет) — используйте поиск', false); return; }
+      det = fn; loopOn = true;
+      (function tick(){
+        if(!loopOn) return;
+        if(v.readyState < 2){ setTimeout(tick, 80); return; }
+        det(v).then(function(c){ if(c && loopOn && vet(c)) onCode(c); }).catch(function(){}).then(function(){ if(loopOn) setTimeout(tick, 40); });
+      })();
+    });
+  }).catch(function(){ say('Нет доступа к камере — разрешите её в настройках браузера', false); });
 }
 function camClose(){
-  clearInterval(timer); timer = 0;
-  if(zx){ try{ zx.reset(); }catch(e){} zx = null; }
+  loopOn = false; det = null; pend = '';
   if(stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+  $('vid').srcObject = null;
   $('cam').style.display = 'none';
 }
 

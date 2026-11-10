@@ -64,7 +64,7 @@ button{font:inherit;border:0;cursor:pointer}
 .dpD i{font-style:normal;font-size:12px;text-align:center;color:var(--osv);line-height:20px}.dpD button{margin:1px;border-radius:50%;background:none;color:var(--tx);font-size:14px;padding:0}.dpD button.on{background:var(--pri);color:var(--onp);font-weight:700}.dpD button.td{box-shadow:inset 0 0 0 1px var(--pri)}
 .scn{position:fixed;inset:0;z-index:70;background:#000;color:#fff}.scn video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .scF{position:absolute;left:8%;right:8%;top:30%;height:22%;border:3px solid rgba(255,255,255,.85);border-radius:16px;box-shadow:0 0 0 100vmax rgba(0,0,0,.35);pointer-events:none}
-.scT{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 12px) 12px 0}.scT .btn{background:rgba(0,0,0,.55);color:#fff}
+.scF{position:absolute;left:5%;right:5%;top:25%;height:50%;border:2px solid rgba(255,255,255,.85);border-radius:14px;box-shadow:0 0 0 100vmax rgba(0,0,0,.28);pointer-events:none}.scH{position:absolute;left:0;right:0;top:calc(25% + 50% + 12px);text-align:center;font-size:14px;color:#fff;text-shadow:0 1px 3px #000;pointer-events:none}.scT{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 12px) 12px 0}.scT .btn{background:rgba(0,0,0,.55);color:#fff}
 .scB{position:absolute;left:0;right:0;bottom:0;padding:12px 12px calc(env(safe-area-inset-bottom) + 12px);background:linear-gradient(transparent,rgba(0,0,0,.8) 25%)}.scB p{margin:0 0 8px;font-size:14px}
 .scR{display:flex;gap:8px}.scR input{flex:1;min-width:0;font:16px system-ui;padding:12px;border-radius:12px;border:1px solid #888;background:rgba(0,0,0,.5);color:#fff}.scB .btn.o{color:#fff;border-color:#aaa}
 @keyframes fi{from{opacity:0}to{opacity:1}}@keyframes up{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}.dm{animation:fi .22s ease-out}.dl{animation:up .26s ease-out}
@@ -318,11 +318,19 @@ function expiryDlg(r){
   ms.onscroll=()=>{const v=Math.min(12,Math.max(1,Math.round(ms.scrollTop/MH)+1));if(v!==mo){mo=v;styM();drawD();changed()}}},60)});
  return false}
 /* ---------- сканер ---------- */
-let zxP;const zx=()=>window.ZXing?Promise.resolve():zxP||(zxP=new Promise((ok,no)=>{const u=['https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js','https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.21.3/index.min.js'];let i=0;(function t(){if(i>=u.length){zxP=null;return no()}const e=document.createElement('script');e.src=u[i++];e.onload=()=>window.ZXing?ok():t();e.onerror=t;document.head.appendChild(e)})()}));
-async function mkDet(){if('BarcodeDetector' in window){try{const f=await BarcodeDetector.getSupportedFormats();if(f.length){const d=new BarcodeDetector({formats:f});return v=>d.detect(v).then(r=>r[0]&&r[0].rawValue)}}catch(e){}}
- await zx();const Z=ZXing,h=new Map(),F=Z.BarcodeFormat;h.set(Z.DecodeHintType.POSSIBLE_FORMATS,[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128,F.CODE_39,F.QR_CODE]);h.set(Z.DecodeHintType.TRY_HARDER,true);
- const rd=new Z.MultiFormatReader();rd.setHints(h);const c=E('canvas'),x=c.getContext('2d',{willReadFrequently:true});
- return async v=>{const W=v.videoWidth||v.width,H=v.videoHeight||v.height;if(!W)return;c.width=W;c.height=H;x.drawImage(v,0,0);try{return rd.decode(new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(c)))).getText()}catch(e){}}}
+let zxP;const zx=()=>window.ZXing?Promise.resolve():zxP||(zxP=new Promise((ok,no)=>{const u=['https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js','https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.21.3/index.min.js','https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'];let i=0;(function t(){if(i>=u.length){zxP=null;return no()}const e=document.createElement('script');e.src=u[i++];e.onload=()=>window.ZXing?ok():t();e.onerror=t;document.head.appendChild(e)})()}));
+/* iPhone/iOS: у Safari нет встроенного BarcodeDetector — библиотеку грузим заранее, чтобы камера читала сразу */
+if(!('BarcodeDetector' in window))zx().catch(()=>{});
+async function mkDet(){if('BarcodeDetector' in window){try{const f=await BarcodeDetector.getSupportedFormats();if(f.includes('ean_13')||f.includes('code_128')){const d=new BarcodeDetector({formats:f});return v=>d.detect(v).then(r=>r[0]&&r[0].rawValue)}}catch(e){}}
+ await zx();const Z=ZXing,F=Z.BarcodeFormat,H=new Map();
+ H.set(Z.DecodeHintType.POSSIBLE_FORMATS,[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128,F.CODE_39,F.ITF,F.QR_CODE]);H.set(Z.DecodeHintType.TRY_HARDER,true);
+ /* важно: hints передаются в decode() — иначе ZXing сбрасывает их и читает без TRY_HARDER */
+ const rd=new Z.MultiFormatReader(),c=E('canvas'),x=c.getContext('2d',{willReadFrequently:true});let n=0;
+ const dec=(src,sx,sy,sw,sh,mw)=>{const k=Math.min(1,mw/sw),w=Math.max(1,Math.round(sw*k)),h=Math.max(1,Math.round(sh*k));if(c.width!==w||c.height!==h){c.width=w;c.height=h}x.drawImage(src,sx,sy,sw,sh,0,0,w,h);const ls=new Z.HTMLCanvasElementLuminanceSource(c);
+  for(const B of[Z.HybridBinarizer,Z.GlobalHistogramBinarizer]){try{return rd.decode(new Z.BinaryBitmap(new B(ls)),H).getText()}catch(e){}}return''};
+ return async(v,full)=>{const W=v.videoWidth||v.width,Hh=v.videoHeight||v.height;if(!W)return;n++;
+  if(full)return dec(v,0,0,W,Hh,2000)||dec(v,0,Hh*.2|0,W,Hh*.6|0,2000);
+  const r=dec(v,W*.04|0,Hh*.2|0,W*.92|0,Hh*.6|0,1280);if(r||n%2)return r;return dec(v,0,0,W,Hh,1280)}}
 /* ---------- распознавание цифр под штрихом (OCR) ---------- */
 const gtinOk=d=>{if(!/^\d+$/.test(d)||![8,12,13,14].includes(d.length))return false;let t=0;for(let i=d.length-2,w=3;i>=0;i--,w=4-w)t+=w*+d[i];return(10-t%10)%10===+d[d.length-1]};
 function gtinFrom(text){const L=text.split('\n').map(l=>l.replace(/\D/g,'')).filter(l=>l.length>=8);L.push(text.replace(/\D/g,''));
@@ -335,13 +343,13 @@ async function ocrCode(src){const W0=src.videoWidth||src.naturalWidth||src.width
  const im=x.getImageData(0,0,c.width,c.height),p=im.data;let lo=255,hi=0;for(let i=0;i<p.length;i+=4){const g=(p[i]*.3+p[i+1]*.59+p[i+2]*.11)|0;p[i]=g;if(g<lo)lo=g;if(g>hi)hi=g}const sc=255/Math.max(1,hi-lo);for(let i=0;i<p.length;i+=4){const g=Math.max(0,Math.min(255,((p[i]-lo)*sc)|0));p[i]=p[i+1]=p[i+2]=g}x.putImageData(im,0,0);
  const w=await ocrWorker(),r=await w.recognize(c);return gtinFrom(r.data.text||'')}
 function scanDlg(mode,cb){let st,stop=0;const off=()=>{stop=1;st&&st.getTracks().forEach(t=>t.stop())};
- const m=E('div','scn','<video id=v playsinline muted autoplay></video><div class=scT><button class=btn id=x>✕ Закрыть</button></div><div class=scB style="display:none"><p id=ss></p><label class="btn o" style="display:block;text-align:center;margin-top:8px">📷 Снять фото камерой телефона<input type=file accept=image/* capture=environment hidden id=fi></label></div>');
+ const m=E('div','scn','<video id=v playsinline muted autoplay></video><div class=scF></div><div class=scH>Штрих-код в рамку, с расстояния 15–25 см</div><div class=scT><button class=btn id=x>✕ Закрыть</button></div><div class=scB style="display:none"><p id=ss></p><label class="btn o" style="display:block;text-align:center;margin-top:8px">📷 Снять фото камерой телефона<input type=file accept=image/* capture=environment hidden id=fi></label></div>');
  document.body.appendChild(m);const q=x=>m.querySelector(x),ss=t=>{q('#ss').textContent=t;q('.scB').style.display=''},sq=()=>{},close=()=>{off();m.remove()};
  let last='',lt=0;const got=c=>{if(mode==='count'){cb(c)}else{close();cb(c)}};
  q('#x').onclick=close;
  q('#fi').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;ss('Распознаю фото…');try{const det=await mkDet(),im=new Image(),u=URL.createObjectURL(f);await new Promise((ok,no)=>{im.onload=ok;im.onerror=no;im.src=u});
-   const k=Math.min(1,1600/Math.max(im.naturalWidth,im.naturalHeight)),c=E('canvas');c.width=im.naturalWidth*k;c.height=im.naturalHeight*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);
-   let r=await det(c);if(!r){ss('Штрихи не читаются, читаю цифры под ними…');r=await ocrCode(c)}if(r)got(r);else{beep(0);ss('Код на фото не найден. Снимите ближе и ровнее.')}}catch(x){ss('Не удалось распознать фото (нужен интернет для распознавателя).')}};
+   const k=Math.min(1,2400/Math.max(im.naturalWidth,im.naturalHeight)),c=E('canvas');c.width=im.naturalWidth*k;c.height=im.naturalHeight*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);
+   let r=await det(c,1);if(!r){ss('Штрихи не читаются, читаю цифры под ними…');r=await ocrCode(c)}if(r)got(r);else{beep(0);ss('Код на фото не найден. Снимите ближе и ровнее.')}}catch(x){ss('Не удалось распознать фото (нужен интернет для распознавателя).')}};
  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return ss('Живая камера недоступна в этом браузере или при открытии файла напрямую. Нажмите «Снять фото».');
  const cons=id=>({video:Object.assign({width:{ideal:1920},height:{ideal:1080}},id?{deviceId:{exact:id}}:{facingMode:{ideal:'environment'}}),audio:false});
  (async()=>{try{st=await navigator.mediaDevices.getUserMedia(cons())}catch(e){return ss(location.protocol==='https:'?'Нет доступа к камере ('+(e.name||'ошибка')+'). Разрешите камеру для сайта в настройках браузера.':'Живая камера не работает, когда страница открыта как файл ('+location.protocol+'). Откройте её по https:// (например GitHub Pages) или нажмите «Снять фото камерой телефона».')}
@@ -351,11 +359,17 @@ function scanDlg(mode,cb){let st,stop=0;const off=()=>{stop=1;st&&st.getTracks()
    v.srcObject=st;try{await v.play()}catch(e){}};
   try{const all=(await navigator.mediaDevices.enumerateDevices()).filter(x=>x.kind==='videoinput'),bk=all.filter(x=>/back|rear|environment|задн/i.test(x.label)),ls=(bk.length?bk:all.filter(x=>!/front|user|перед/i.test(x.label))).sort((a,b)=>a.label.localeCompare(b.label,undefined,{numeric:true}));
    const good=ls.filter(x=>!/ultra|wide|macro|tele|depth|широк|макро/i.test(x.label));cams=ls;try{localStorage.removeItem('scan_cam')}catch(e){}const t=good[0]||ls[0],cur=st.getVideoTracks()[0].getSettings().deviceId;
-   if(t&&t.deviceId!==cur)await setCam(t.deviceId);else await setCam(cur)}catch(e){try{await setCam()}catch(x){}}
+   if(t&&t.deviceId!==cur)await setCam(t.deviceId);else{try{await st.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]})}catch(e){}v.muted=true;v.srcObject=st;try{await v.play()}catch(e){}}}catch(e){try{await setCam()}catch(x){}}
   if(stop)return off();
   let det;try{det=await mkDet()}catch(e){return ss('Не удалось загрузить распознаватель (нужен интернет).')}
-  ocrWorker().catch(()=>{});let ob=0,oc='',ot=0,on=0;
-  while(!stop&&document.body.contains(m)){try{const c=await det(v);if(c){const n=Date.now();if(c!==last||n-lt>800){last=c;lt=n;if(mode==='count')got(c);else{got(c);return}}else lt=n}}catch(e){}if(!ob&&tsW&&Date.now()-ot>900){ob=1;ot=Date.now();ocrCode(v).then(c=>{if(stop||!c){on=0;return}if(c===oc&&Date.now()-on<5000){oc='';on=0;const n=Date.now();if(c!==last||n-lt>800){last=c;lt=n;got(c)}}else{oc=c;on=Date.now()}}).catch(()=>{}).finally(()=>ob=0)}await new Promise(r=>setTimeout(r,120))}
+  let ob=0,oc='',ot=0,on=0,pend='',pt=0,ocrOn=0;const t0=Date.now();
+  /* цифровые коды EAN/UPC принимаем сразу (у них есть контрольная цифра), прочие — после двух одинаковых считываний подряд */
+  const okc=c=>{const n=Date.now();if(/^\d+$/.test(c)&&[8,12,13,14].includes(c.length))return true;if(c===pend&&n-pt<2500){pend='';return true}pend=c;pt=n;return false};
+  while(!stop&&document.body.contains(m)){try{const c=await det(v);if(c&&okc(c)){const n=Date.now();if(c!==last||n-lt>800){last=c;lt=n;if(mode==='count')got(c);else{got(c);return}}else lt=n}}catch(e){}
+   /* чтение цифр под штрихом (OCR) — только если штрих не читается 3.5 с, чтобы не тормозить основной сканер */
+   if(!ocrOn&&Date.now()-t0>3500){ocrOn=1;ocrWorker().catch(()=>{})}
+   if(!ob&&tsW&&Date.now()-ot>1500){ob=1;ot=Date.now();ocrCode(v).then(c=>{if(stop||!c){on=0;return}if(c===oc&&Date.now()-on<6000){oc='';on=0;const n=Date.now();if(c!==last||n-lt>800){last=c;lt=n;got(c)}}else{oc=c;on=Date.now()}}).catch(()=>{}).finally(()=>ob=0)}
+   await new Promise(r=>setTimeout(r,40))}
   off()})()}
 function countByCode(raw){const code=raw.trim();if(!code)return;if(S.saved){banner('Сейчас считать нельзя',0);return}
  const pick=l=>l.find(r=>pq(r.fact)<pq(r.qty))||l[0];let row=pick(S.items.filter(r=>r.barcode===code));
@@ -457,28 +471,37 @@ const fab_=()=>{const f=$('#fab');f&&f.remove()};
 const BL=['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'],BG=['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'],BR=['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'],BP=['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
 function bars(b,l,r,d0,gl,sh){let x='';for(let i=0;i<b.length;){if(b[i]==='1'){let j=i;while(b[j]==='1')j++;const g=gl(i);x+='<rect x="'+i+'" width="'+(j-i)+'" height="'+(g?24.5:19)+'"/>';i=j}else i++}
  const tx=(cx,w,t)=>'<text x="'+cx+'" y="27.5" font-size="7.2" text-anchor="middle" textLength="'+w+'" lengthAdjust="spacing" font-family="DejaVu Sans Mono,Consolas,monospace">'+t+'</text>';
- return'<svg viewBox="-12 0 119 29" style="width:38mm;height:9.2mm;display:block;margin:auto" fill="#000"><g transform="translate('+(sh||0)+',0)">'+x+l+r+'</g>'+(d0?'<text x="-6" y="27.5" font-size="7.2" text-anchor="middle" font-family="DejaVu Sans Mono,Consolas,monospace">'+d0+'</text>':'')+'</svg>'}
-function ean(code){let c=(code||'').replace(/\D/g,'');if(c.length===12)c='0'+c;let b;
+ return'<svg viewBox="-12 0 119 29" style="width:57mm;height:13.8mm;display:block;margin:auto" fill="#000"><g transform="translate('+(sh||0)+',0)">'+x+l+r+'</g>'+(d0?'<text x="-6" y="27.5" font-size="7.2" text-anchor="middle" font-family="DejaVu Sans Mono,Consolas,monospace">'+d0+'</text>':'')+'</svg>'}
+const C128=['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213','221312','231212','112232','122132','122231','113222','123122','123221','223211','221132','221231','213212','223112','312131','311222','321122','321221','312212','322112','322211','212123','212321','232121','111323','131123','131321','112313','132113','132311','211313','231113','231311','112133','112331','132131','113123','113321','133121','313121','211331','231131','213113','213311','213131','311123','311321','331121','312113','312311','332111','314111','221411','431111','111224','111422','121124','121421','141122','141221','112214','112412','122114','122411','142112','142211','241211','221114','413111','241112','134111','111242','121142','121241','114212','124112','124211','411212','421112','421211','212141','214121','412121','111143','111341','131141','114113','114311','411113','411311','113141','114131','311141','411131','211412','211214','211232','2331112'];
+function c128(raw){const s=String(raw).replace(/[^\x20-\x7e]/g,'');if(!s)return'';const v=[];let i=0;
+ if(/^\d+$/.test(s)&&s.length>=4){if(s.length%2){v.push(104,s.charCodeAt(0)-32,99);i=1}else v.push(105);for(;i<s.length;i+=2)v.push(+s.substr(i,2))}
+ else{v.push(104);for(i=0;i<s.length;i++)v.push(s.charCodeAt(i)-32)}
+ let sum=v[0];for(let k=1;k<v.length;k++)sum+=v[k]*k;v.push(sum%103,106);
+ let x=10,r='';v.forEach(n=>{const w=C128[n];for(let k=0;k<w.length;k++){const d=+w[k];if(k%2===0)r+='<rect x="'+x+'" width="'+d+'" height="1"/>';x+=d}});
+ const W=x+10,mm=Math.min(.5,64/W);
+ return'<svg viewBox="0 0 '+W+' 1" preserveAspectRatio="none" style="width:'+(W*mm).toFixed(1)+'mm;height:11mm;display:block;margin:auto" fill="#000">'+r+'</svg><div style="font:9pt/1.15 DejaVu Sans Mono,Consolas,monospace;text-align:center;letter-spacing:.3pt">'+esc(s)+'</div>'}
+function ean(code){const raw=String(code||'').replace(/\s/g,'');if(!raw)return'';let c=raw;if(/^\d{12}$/.test(c))c='0'+c;let b;
  const tx=(cx,w,t)=>'<text x="'+cx+'" y="27.5" font-size="7.2" text-anchor="middle" textLength="'+w+'" lengthAdjust="spacing" font-family="DejaVu Sans Mono,Consolas,monospace" fill="#000">'+t+'</text>';
- if(c.length===13){const p=BP[+c[0]];b='101';for(let i=1;i<7;i++)b+=(p[i-1]==='L'?BL:BG)[+c[i]];b+='01010';for(let i=7;i<13;i++)b+=BR[+c[i]];b+='101';
+ if(/^\d{13}$/.test(c)&&gtinOk(c)){const p=BP[+c[0]];b='101';for(let i=1;i<7;i++)b+=(p[i-1]==='L'?BL:BG)[+c[i]];b+='01010';for(let i=7;i<13;i++)b+=BR[+c[i]];b+='101';
   return bars(b,tx(24,38,c.slice(1,7)),tx(71,38,c.slice(7)),c[0],i=>i<3||(i>=45&&i<50)||i>=92)}
- if(c.length===8){b='101';for(let i=0;i<4;i++)b+=BL[+c[i]];b+='01010';for(let i=4;i<8;i++)b+=BR[+c[i]];b+='101';
+ if(/^\d{8}$/.test(c)&&gtinOk(c)){b='101';for(let i=0;i<4;i++)b+=BL[+c[i]];b+='01010';for(let i=4;i<8;i++)b+=BR[+c[i]];b+='101';
   return bars(b,tx(17,26,c.slice(0,4)),tx(50,26,c.slice(4)),'',i=>i<3||(i>=31&&i<36)||i>=64,14)}
- return code?'<span style="font-size:9pt">'+esc(code)+'</span>':''}
+ return c128(raw)}
 function printRep(){const mhd=v=>{const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec((v||'').trim());return m?m[1]+'.'+m[2]+'.'+m[3].slice(2):esc((v||'').trim())};
  const rows=S.items.filter(r=>r.name.trim()&&pq(r.fact)>0).map((r,i)=>'<tr><td class=n>'+(i+1)+'</td><td class=a>'+esc(art(r))+'</td><td class=t>'+esc(r.name.trim())+'</td><td>'+ean(r.barcode||(byNm(r.name)||{}).barcode)+'</td><td class=q>'+fn(pq(r.fact))+'</td><td class=m>'+mhd(r.expiry)+'</td></tr>').join('');
  if(!rows)return note('Нет посчитанных товаров');
  const ph=S.items.filter(r=>r.photo).map(r=>'<div style="display:inline-block;width:60mm;margin:0 4mm 4mm 0;vertical-align:top"><img src="'+r.photo+'" style="width:60mm;height:80mm;object-fit:cover"><div style="font-size:10px">'+esc(r.name)+'</div></div>').join('');
   const dt=new Date().toLocaleString('ru',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).replace(',','');
- const h='<html><meta charset=utf-8><style>@page{size:A4;margin:12mm}*{box-sizing:border-box}body{margin:0;font-family:"DejaVu Sans",Verdana,Arial,sans-serif;color:#000}'+
- 'h1{font-size:20pt;margin:12mm 0 2mm 2mm;font-weight:700}.sub{font-size:9pt;margin:0 0 8mm 2mm;color:#222}'+
+ const rules='*{box-sizing:border-box}h1{font-size:20pt;margin:12mm 0 2mm 2mm;font-weight:700}.sub{font-size:9pt;margin:0 0 8mm 2mm;color:#222}'+
  'table{border-collapse:collapse;width:100%;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}'+
- 'th,td{border:.35mm solid #000;text-align:center;vertical-align:middle;padding:0}th{background:#e6e6e6;font-size:9.5pt;height:9.5mm;font-weight:700}td{height:17.8mm}'+
- 'td.n{font-size:13pt}td.a{font-size:11pt}td.t{text-align:left;font-size:10.5pt;line-height:1.25;padding:1.5mm 2.5mm;word-wrap:break-word;overflow-wrap:anywhere}td.q{font-size:13pt}td.m{font-size:11pt}'+
- '</style>'+
- '<h1>'+esc(S.name)+'</h1><div class=sub>'+dt+(USER?' · '+esc(USER):'')+'</div><table><thead><tr><th style="width:7.8%">Nr.</th><th style="width:14.9%">Artikel-Nr.</th><th style="width:23.9%">Artikelbezeichnung</th><th style="width:26.7%">EAN</th><th style="width:10%">Stück</th><th style="width:16.7%">MHD</th></tr></thead><tbody>'+rows+'</tbody></table>'+
- (ph?'<div style="page-break-before:always"><h2>Фото</h2>'+ph+'</div>':'')+'</html>';
- const f=E('iframe');f.style.cssText='position:fixed;width:0;height:0;border:0';document.body.appendChild(f);f.srcdoc=h;f.onload=()=>{f.contentWindow.print();setTimeout(()=>f.remove(),60000)}}
+ 'th,td{border:.35mm solid #000;text-align:center;vertical-align:middle;padding:0}th{background:#e6e6e6;font-size:9.5pt;height:9.5mm;font-weight:700}td{height:20mm}'+
+ 'td.n{font-size:13pt}td.a{font-size:11pt}td.t{text-align:left;font-size:10.5pt;line-height:1.25;padding:1.5mm 2.5mm;word-wrap:break-word;overflow-wrap:anywhere}td.q{font-size:13pt}td.m{font-size:11pt}td svg{overflow:visible}',
+ css='@page{size:A4;margin:12mm}@media screen{#prDoc{display:none}}@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;padding:0!important;margin:0!important}body>*:not(#prDoc){display:none!important}#prDoc{display:block;font-family:"DejaVu Sans",Verdana,Arial,sans-serif;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+  rules.replace(/(^|\})([^{}]+)\{/g,(m,a,t)=>a+t.split(',').map(x=>'#prDoc '+x.trim()).join(',')+'{')+'}';
+ const body='<h1>'+esc(S.name)+'</h1><div class=sub>'+dt+(USER?' · '+esc(USER):'')+'</div><table><thead><tr><th style="width:6.5%">Nr.</th><th style="width:12.5%">Artikel-Nr.</th><th style="width:22.5%">Artikelbezeichnung</th><th style="width:36%">EAN</th><th style="width:9%">Stück</th><th style="width:13.5%">MHD</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+ (ph?'<div style="page-break-before:always"><h2>Фото</h2>'+ph+'</div>':'');
+ let pd=document.getElementById('prDoc');if(pd)pd.remove();pd=E('div');pd.id='prDoc';pd.innerHTML='<style>'+css+'</style>'+body;document.body.appendChild(pd);
+ Promise.all([...pd.querySelectorAll('img')].map(i=>i.decode?i.decode().catch(()=>{}):0)).then(()=>setTimeout(()=>window.print(),250))}
 
 /* Bluetooth-сканер (эмулирует клавиатуру): каждый скан = строго +1 */
 (function(){let buf='',last=0,fast=0,tm;const take=()=>{const c=buf,f=fast;buf='';fast=0;clearTimeout(tm);return{c,f}};

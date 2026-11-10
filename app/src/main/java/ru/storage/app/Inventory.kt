@@ -166,14 +166,14 @@ table.inv th,table.inv td{border:1px solid #444;text-align:center;vertical-align
 table.inv th{background:#f1f1f1;font-size:7.5pt;font-weight:bold;height:11mm}
 table.inv thead{display:table-header-group}
 table.inv tr{page-break-inside:avoid}
-table.inv td{height:17.5mm}
+table.inv td{height:19mm}
 td.n{font-size:12pt;font-weight:bold;word-break:break-all;line-height:1.05}
 td.a{font-size:9pt;font-weight:bold;word-break:break-all}
 td.t{text-align:left;font-size:11pt;font-weight:600;line-height:1.25;padding-left:5px}
 td.q{font-size:14pt;font-weight:bold}
 td.q .d{font-size:7.5pt;font-weight:normal;color:#b00}
 td.e{font-size:10pt;font-weight:bold}
-svg.bc{width:38mm;height:11.5mm}
+svg.bc{width:38.3mm;height:17.25mm;display:block;margin:0 auto}
 .bt{font-size:10pt;letter-spacing:.5px}
 tr.tot td{height:9mm;font-weight:bold;font-size:10pt;background:#f7f7f7}
 .sg{margin-top:6mm}
