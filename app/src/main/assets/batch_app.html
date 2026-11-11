@@ -92,20 +92,21 @@ const LS=(k,v)=>{try{if(v===undefined)return JSON.parse(localStorage.getItem(k))
 let USER=LS('lager_user')||'';
 const P=new URLSearchParams(location.search),CODE=P.get('c')||(()=>{try{return JSON.parse(document.getElementById('lager-batch').textContent).code||''}catch(e){return''}})(),BK='lager_b_'+CODE;
 let BT=LS(BK)||{cur:0,list:[]},AU={},WHO='',CLOSED=0;let EMPTY=!!BT.em;let EXTB=null;const exb=()=>EXTB&&document.body.contains(EXTB.el)?EXTB:(EXTB=null);const sid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-const cloneS=r=>({name:r.name,qty:r.qty,barcode:r.barcode,article:r.article,extra:r.extra,by:r.by||'',sid:r.sid||sid(),fact:'',defect:'',expiry:'',photo:'',dph:[]});
+const cloneS=r=>({name:r.name,qty:r.qty,barcode:r.barcode,article:r.article,extra:r.extra,by:r.by||'',sid:r.sid||sid(),al:r.al,fx:r.fx,orph:r.orph,st:r.st,fact:'',defect:'',expiry:'',photo:'',dph:[]});
 const newB=n=>({id:Date.now()+Math.random(),name:n,stamp:S?S.stamp:'',items:S&&!EMPTY?S.items.map(cloneS):[],saved:false});
 /* Общий список: структура строк (название, план, штрих-код, артикул) едина для всех партий, количества у каждой партии свои */
 function syncAll(){if(EMPTY||!S||BT.list.length<2)return;S.items.forEach(r=>{if(!r.sid)r.sid=sid()});
  BT.list.forEach(o=>{if(o===S)return;const ms=new Map(),mn=new Map();(o.items||[]).forEach(r=>{if(r.sid)ms.set(r.sid,r);mn.set((r.name||'').trim().toLowerCase(),r)});
-  o.items=S.items.map(r=>{const x=ms.get(r.sid)||(!ms.size?mn.get(r.name.trim().toLowerCase()):null);if(x){x.sid=r.sid;x.name=r.name;x.qty=r.qty;x.barcode=r.barcode;x.article=r.article;x.extra=r.extra;x.by=r.by||'';return x}return cloneS(r)})})}
+  o.items=S.items.map(r=>{const x=ms.get(r.sid)||(!ms.size?mn.get(r.name.trim().toLowerCase()):null);if(x){x.sid=r.sid;x.name=r.name;x.qty=r.qty;x.barcode=r.barcode;x.article=r.article;x.extra=r.extra;x.by=r.by||'';x.al=r.al;x.fx=r.fx;x.orph=r.orph;x.st=r.st;return x}return cloneS(r)})})}
 let S=BT.list.find(b=>b.id===BT.cur)||BT.list[0]||null;
 const defName=()=>{let n=BT.list.length+1;while(BT.list.some(b=>b.name==='Партия '+n))n++;return'Партия '+n};
 let CAT=LS('lager_cat')||[],step=0,query='',pos=0,vel=0,selRow=null,err='',drum=null,series=0,serKey=null;
-let svT=0;const flush=()=>{if(svT){clearTimeout(svT);svT=0;syncAll();BT.cur=S?S.id:0;LS(BK,BT);push()}},save=()=>{if(!svT)svT=setTimeout(flush,600)},saveCat=()=>LS('lager_cat',CAT);
-const mk=(n,q,x)=>({sid:sid(),name:n,qty:q||'0',fact:'',defect:'',extra:!!x,by:x?WHO:'',barcode:'',article:'',photo:'',expiry:'',dph:[]});
-const canDel=r=>!!r.extra&&!!r.by&&r.by===WHO;
-const byBc=c=>CAT.find(p=>p.barcode&&p.barcode===c.trim());
-const byNm=n=>CAT.find(p=>p.name.trim().toLowerCase()===n.trim().toLowerCase());
+let svT=0;const flush=()=>{if(svT){clearTimeout(svT);svT=0;syncAll();BT.cur=S?S.id:0;LS(BK,BT);push();logPush()}},save=()=>{if(!svT)svT=setTimeout(flush,600)},saveCat=()=>LS('lager_cat',CAT);
+const mk=(n,q,x)=>({sid:sid(),ts:Date.now(),name:n,qty:q||'0',fact:'',defect:'',extra:!!x,by:x?WHO:'',barcode:'',article:'',photo:'',expiry:'',dph:[]});
+const canDel=r=>!!r.extra&&((!!r.by&&r.by===WHO)||!!r.orph);
+const cv=p=>!(EMPTY&&p.fx);
+const byBc=c=>CAT.find(p=>cv(p)&&p.barcode&&p.barcode===c.trim());
+const byNm=n=>CAT.find(p=>cv(p)&&p.name.trim().toLowerCase()===n.trim().toLowerCase());
 const art=r=>r.article||(byNm(r.name)||{}).article||(r.barcode&&(byBc(r.barcode)||{}).article)||'';
 const FC=new WeakMap(),fnm=r=>{let c=FC.get(r);if(!c||c[0]!==r.name){c=[r.name,fold(r.name)];FC.set(r,c)}return c[1]};
 function findRows(q){const w=fold(q.trim()).split(' ').filter(Boolean);if(!w.length)return[];const w0=w[0];
@@ -140,8 +141,8 @@ hash=[(t1+t2)|0].concat(hash);hash[4]=(hash[4]+t1)|0}
 for(var i=0;i<8;i++)hash[i]=(hash[i]+old[i])|0}
 for(var i=0;i<8;i++)for(var j=3;j+1;j--){var b=(hash[i]>>(j*8))&255;r+=((b<16)?0:'')+b.toString(16)}return r}
 const nmz=s=>String(s||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim(),hsh=s=>sha(unescape(encodeURIComponent(nmz(s))));
-const API=P.get('s')||'',ap=k=>API+(API.indexOf('?')<0?'?':'&')+k;let T0=0,P0=0,LOADED=0,ASK=0,RM=new Map(),DEV='',pushT=0,tm=0,ST='',LD=0,RST=0;
-const nowS=()=>T0?T0+(performance.now()-P0):Date.now(),oth=r=>(OT.get(r.sid)||0)+(RM.get(r.sid)||0)+pq(r.pre);
+const API=P.get('s')||'',ap=k=>API+(API.indexOf('?')<0?'?':'&')+k;let T0=0,P0=0,LOADED=0,ASK=0,RM=new Map(),DEV='',pushT=0,tm=0,ST='',LD=0,RST=0,PUS=0,LSG='',LSA='';
+const nowS=()=>T0?T0+(performance.now()-P0):Date.now(),oth=r=>(OT.get(r.sid)||0)+(RM.get(r.sid)||0)+(r.al?r.al.reduce((s,a)=>s+(RM.get(a)||0),0):0)+pq(r.pre);
 const fj=(u,o)=>fetch(u,Object.assign({redirect:'follow',cache:'no-store'},o||{})).then(r=>r.json());
 let WEB={q:'',items:[]},webT=0;
 /* каталог товаров (из Firebase, его кладёт на Диск приложение) — в подсказки «из базы»; артикулы и штрих-коды дополняются */
@@ -186,18 +187,61 @@ function enter(){if(ST)return;if(!inWin()){closedUI(1);return}closedUI(0);if(LOA
   .catch(e=>{LD=0;loadUI(0);if(e==='stopped')stateUI('stop');else if(e==='deleted')wipeLocal();else if(e==='name'){lock()}else if(e==='hours')closedUI(1);else closedUI(1,'Не удалось загрузить список. Проверьте интернет — попробуем снова.')})}
 function tick(){if(!WHO||ST==='del')return;if(!inWin()){if(LOADED)lock();else closedUI(1);return}chk();if(!ST&&(CLOSED||!LOADED))enter()}
 /* общий счёт с других людей: у каждого свой счёт и своя печать, а «всего» складывается */
-function myCounts(){const c={},src=BT.list.filter(b=>b.src===CODE);src.forEach(b=>b.items.forEach(r=>{const v=pq(r.fact);if(v>0&&!r.extra)c[r.sid]=(c[r.sid]||0)+v}));return c}
+function myCounts(){const c={},src=BT.list.filter(b=>b.src===CODE);src.forEach(b=>b.items.forEach(r=>{const v=pq(r.fact);if(v>0&&(!r.extra||!EMPTY))c[r.sid]=(c[r.sid]||0)+v}));return c}
 /* после входа свой счёт, сохранённый на сервере, возвращается в пустые строки (если память браузера очищена); потом отправка разрешается */
-function applyDevs(dv){RM=new Map();(dv||[]).forEach(d=>{if(d.dev===DEV)return;for(const k in d.c)RM.set(k,(RM.get(k)||0)+d.c[k])});
- if(RST&&LOADED){RST=0;const me=(dv||[]).find(d=>d.dev===DEV),b=BT.list.find(x=>x.src===CODE);let ch=0;if(me&&b)b.items.forEach(r=>{const v=+(me.c||{})[r.sid]||0;if(v>0&&!r.extra&&pq(r.fact)<=0){r.fact=fq(v);ch=1}});if(ch)save();else push()}
- if(LOADED&&S){paint(1);top_()}}
-function push(){if(!LOADED||!API||ST||RST)return;clearTimeout(pushT);pushT=setTimeout(()=>{fetch(API,{method:'POST',redirect:'follow',body:JSON.stringify({action:'count',code:CODE,dev:DEV,name:USER,counts:myCounts()})}).then(r=>r.json()).then(j=>j.ok&&applyDevs(j.devs)).catch(()=>{})},1200)}
-function pull(){if(!LOADED||!API||document.hidden)return;fj(ap('action=counts&code='+encodeURIComponent(CODE))).then(j=>j.ok&&applyDevs(j.devs)).catch(()=>{})}
+function applyDevs(dv,items){RM=new Map();(dv||[]).forEach(d=>{if(d.dev===DEV)return;for(const k in d.c)RM.set(k,(RM.get(k)||0)+d.c[k])});
+ const xc=!EMPTY&&LOADED?mergeX(items):0;
+ if(RST&&LOADED){RST=0;const me=(dv||[]).find(d=>d.dev===DEV),b=BT.list.find(x=>x.src===CODE);let ch=0;if(me&&b)b.items.forEach(r=>{const v=[r.sid].concat(r.al||[]).reduce((t,k)=>t+(+(me.c||{})[k]||0),0);if(v>0&&(!r.extra||!EMPTY)&&pq(r.fact)<=0){r.fact=fq(v);ch=1}});if(ch||xc)save();else push()}else if(xc)save();
+ if(LOADED&&S){if(xc)rebuild();else paint(1);top_()}}
+/* ---------- обмен позициями между получателями: ТОЛЬКО обычная партия. В EMPTY ничего не отправляется и не принимается ---------- */
+/* свои добавленные строки (extra, автор — я) для сервера; t меняется только когда меняются название, артикул или штрих-код */
+const myItems=()=>{if(EMPTY)return null;const b=BT.list.find(x=>x.src===CODE);if(!b)return null;const xt=BT.xt||(BT.xt={}),o=[],now=Date.now();
+ b.items.forEach(r=>{if(!r.extra||!r.by||r.by!==WHO||r.orph||!(r.name||'').trim()||o.length>=3000)return;const g=(r.name||'').trim()+'|'+(r.article||'')+'|'+(r.barcode||''),e=xt[r.sid];if(!e||e.s!==g)xt[r.sid]={s:g,t:now};
+  o.push({sid:r.sid,name:r.name.trim().slice(0,200),article:String(r.article||''),barcode:String(r.barcode||''),by:WHO,t:xt[r.sid].t})});return o};
+const sidsOf=it=>[String(it.sid||'')].concat((it.al||[]).map(String)).filter(Boolean);
+/* список позиций с сервера → каталог и все локальные коробки; та же позиция (sid, штрих-код, название) не дублируется, чужой sid привязывается (al) */
+function mergeX(items){if(EMPTY||!LOADED||!Array.isArray(items)||!BT.list.some(b=>b.src===CODE))return 0;
+ const tb=BT.tb||(BT.tb={}),seen=new Set();let ch=0,cc=0;
+ items.forEach(it=>{const nm=String(it.name||'').trim(),ids=sidsOf(it);if(!nm||!ids.length)return;ids.forEach(s=>seen.add(s));
+  const bc=String(it.barcode||'').trim(),ar=String(it.article||'').trim(),mine=!!it.by&&it.by===WHO,key=nmz(nm),tm=+it.t||0,set=new Set(ids);
+  if(!mine){const p=byNm(nm);if(p){if(!p.barcode&&bc){p.barcode=bc;cc=1}if(!p.article&&ar){p.article=ar;cc=1}}else{CAT.push({id:Date.now()+Math.random(),name:nm,barcode:bc,article:ar,fx:1});cc=1}}
+  BT.list.forEach(b=>{const L=b.items||(b.items=[]);
+   const x=L.find(r=>set.has(r.sid)||(r.al||[]).some(a=>set.has(a)))||(bc?L.find(r=>r.barcode&&String(r.barcode).trim()===bc):null)||L.find(r=>nmz(r.name)===key)||null;
+   if(!x){if(ids.some(s=>tb[s]))return;L.push({sid:ids[0],name:nm,qty:'0',fact:'',defect:'',extra:true,by:String(it.by||''),barcode:bc,article:ar,photo:'',expiry:'',dph:[],fx:1,al:ids.slice(1),st:tm});ch=1;return}
+   const cur=x.al||[],add=ids.filter(s=>s!==x.sid&&!cur.includes(s));if(add.length){x.al=cur.concat(add);ch=1}
+   if(x.fx&&x.by!==WHO){if(tm>(x.st||0)){if(x.name!==nm)x.name=nm;if(ar)x.article=ar;if(bc&&x.barcode!==bc&&!L.some(r=>r!==x&&r.barcode===bc))x.barcode=bc;x.st=tm;ch=1}}
+   else{if(!x.barcode&&bc&&!L.some(r=>r!==x&&r.barcode===bc)){x.barcode=bc;ch=1}if(!x.article&&ar){x.article=ar;ch=1}}})});
+ /* автор удалил позицию: у остальных строка исчезает, если у них по ней нет подсчёта (иначе остаётся, и её можно удалить вручную) */
+ BT.list.forEach(b=>{const L=b.items||[];for(let i=L.length-1;i>=0;i--){const r=L[i];if(!r.fx||r.orph||r.by===WHO)continue;if([r.sid].concat(r.al||[]).some(s=>seen.has(s)))continue;
+  if(BT.list.some(o=>(o.items||[]).some(y=>y.sid===r.sid&&(pq(y.fact)>0||pq(y.defect)>0)))){r.orph=1;ch=1;continue}L.splice(i,1);ch=1}});
+ if(cc)saveCat();return ch}
+const rebuild=()=>{if(step!==0||!wh())return paint(1);S.items.length&&$('#vp')?build():render()};
+/* отправка счёта и своих позиций: не чаще раза в 20 секунд; сразу (now) — при сворачивании, pagehide и «Далее» */
+function sendX(){if(EMPTY||!LOADED||!API||ST||RST)return;clearTimeout(pushT);const c=myCounts(),it=myItems(),sg=JSON.stringify([c,it]);if(sg===LSG||(sg===LSA&&Date.now()-PUS<3000))return;LSA=sg;PUS=Date.now();
+ const o={action:'count',code:CODE,dev:DEV,name:USER,counts:c};if(it)o.items=it;const body=JSON.stringify(o);
+ fetch(API,{method:'POST',redirect:'follow',keepalive:body.length<60000,body}).then(r=>r.json()).then(j=>{if(j&&j.ok){LSG=sg;applyDevs(j.devs,j.items)}}).catch(()=>{})}
+function push(now){if(!LOADED||!API||ST||RST)return;clearTimeout(pushT);
+ if(EMPTY){pushT=setTimeout(()=>{fetch(API,{method:'POST',redirect:'follow',body:JSON.stringify({action:'count',code:CODE,dev:DEV,name:USER,counts:myCounts()})}).then(r=>r.json()).then(j=>j.ok&&applyDevs(j.devs)).catch(()=>{})},1200);return}
+ if(now)return sendX();pushT=setTimeout(sendX,Math.max(1200,PUS+20000-Date.now()))}
+function pull(){if(!LOADED||!API||document.hidden)return;fj(ap('action=counts&code='+encodeURIComponent(CODE))).then(j=>j.ok&&(EMPTY?applyDevs(j.devs):applyDevs(j.devs,j.items))).catch(()=>{})}
+/* ---------- личный журнал инвентаризации: кто, что, сколько и когда. Только запись на сервер; читает его один администратор.
+   Никуда не возвращается и со счётом/списками других работников не смешивается (в пустой партии тоже). ---------- */
+let LGS='',LGT=0,logT=0;
+function logRows(){const T=BT.lg||(BT.lg={}),now=Date.now(),out=[];
+ BT.list.forEach(b=>{const bid=String(b.id).replace(/\D/g,'').slice(0,16)||'0',rows=[];
+  (b.items||[]).forEach(r=>{const q=pq(r.fact);if(q<=0||!(r.name||'').trim())return;const k=bid+'|'+r.sid;let z=T[k];
+   if(!z)z=T[k]={f:r.fact,t0:now,t1:now};else if(z.f!==r.fact){z.f=r.fact;z.t1=now}
+   rows.push({n:r.name.trim().slice(0,200),a:String(r.article||art(r)||'').slice(0,40),b:String(r.barcode||'').slice(0,40),q:q,t0:z.t0,t1:z.t1,ad:r.extra?(r.ts||0):0,x:r.extra?1:0})});
+  out.push({k:DEV.slice(0,16)+'_'+bid,box:b.name||'',rows})});return out}
+function logPush(now){if(!LOADED||!API||ST||!WHO||!DEV)return;const parts=logRows(),sg=JSON.stringify(parts);if(sg===LGS)return;
+ if(!now&&Date.now()-LGT<20000){clearTimeout(logT);logT=setTimeout(()=>logPush(),LGT+20050-Date.now());return}
+ LGT=Date.now();const body=JSON.stringify({action:'log',code:CODE,dev:DEV,name:USER,src:'h',parts});
+ fetch(API,{method:'POST',redirect:'follow',keepalive:body.length<60000,body}).then(r=>r.json()).then(j=>{if(j&&j.ok)LGS=sg}).catch(()=>{})}
 function boot(){const msg=t=>{$('#app').innerHTML='<p style="margin:40px 16px;text-align:center">'+t+'</p>'};
  if(!CODE||!/^https:\/\/script\.google(usercontent)?\.com\//.test(API))return msg('Ссылка неполная. Откройте её целиком или отсканируйте QR-код ещё раз.');
  msg('Проверяю доступ…');
  const go=()=>sync().then(()=>{$('#app').innerHTML='';askName()}).catch(()=>{msg('Нет связи с сервером. Проверьте интернет.<br><br><button class=btn id=rt>Повторить</button>');$('#rt').onclick=()=>{msg('Проверяю доступ…');go()}});go();
- setInterval(()=>{tick()},15000);setInterval(pull,8000);setInterval(()=>{if(WHO)sync().catch(()=>{})},300000);document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(WHO)sync().then(tick).catch(tick);pull()}})}
+ setInterval(()=>{tick();logPush()},15000);setInterval(()=>{if(EMPTY)pull()},8000);setInterval(()=>{if(!EMPTY)pull()},120000);setInterval(()=>{if(WHO)sync().catch(()=>{})},300000);document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(WHO)sync().then(tick).catch(tick);pull()}})}
 function addSlider(d){const db=d.querySelector('.db'),tr=E('div','sl'),th=E('div','th');tr.appendChild(th);d.appendChild(tr);
  const up=()=>{const ch=db.clientHeight,sh=db.scrollHeight;if(sh<=ch+1){tr.style.display='none';return}tr.style.display='block';tr.style.top=db.offsetTop+'px';tr.style.height=ch+'px';const h=Math.max(44,ch*ch/sh);th.style.height=h+'px';th.style.top=(db.scrollTop/(sh-ch))*(ch-h)+'px'};
  db.addEventListener('scroll',up);if(window.ResizeObserver)new ResizeObserver(up).observe(db);new MutationObserver(up).observe(db,{childList:true,subtree:true});requestAnimationFrame(up);
@@ -295,7 +339,7 @@ function nameSugg(n,g){let tm=0,last='',pend='',web=[],art='',pn='';
  const note=s=>{g.innerHTML='';const e=E('div','wt',s);e.style.color='var(--er)';e.style.fontWeight='600';g.appendChild(e);g.style.display='block'};
  const draw=()=>{const v=n.value.trim();g.innerHTML='';if(v.length<3){g.style.display='none';return}
   const w=fold(v).split(' ').filter(Boolean),seen=new Set(),list=[];
-  CAT.filter(p=>w.every(x=>fold(p.name).includes(x)||String(p.article||'').toLowerCase().includes(x))).slice(0,5).forEach(p=>{seen.add(p.name.trim().toLowerCase());list.push({name:p.name,article:p.article||'',src:'из базы'})});
+  CAT.filter(p=>cv(p)&&w.every(x=>fold(p.name).includes(x)||String(p.article||'').toLowerCase().includes(x))).slice(0,5).forEach(p=>{seen.add(p.name.trim().toLowerCase());list.push({name:p.name,article:p.article||'',src:'из базы'})});
   if(last===v)web.forEach(h=>{const k=h.name.trim().toLowerCase();if(!seen.has(k)&&list.length<10){seen.add(k);list.push({name:h.name,article:h.article||'',url:h.url,fetched:h.fetched,src:'сайт stroeh.de'})}});
   list.forEach((x,i)=>{x.st=x.article?0:(x.url&&!x.fetched?1:2);x.i=i});list.sort((a,b)=>a.st-b.st||a.i-b.i);
   list.forEach(x=>{const e=E('div','','<b>'+esc(x.name)+'</b><small>'+x.src+(x.article?' · арт. '+esc(x.article):x.st===2?' · <span style="color:var(--er);font-weight:600">нет артикула</span>':x.st===1?' · артикул…':'')+'</small>');
@@ -449,7 +493,7 @@ function wheelInit(){const w=wh();let g=null,lp;
   if(a!=='x')setSw(re,0);
   if(0)pickerDlg('Брак: '+r.name,Math.min(9999,Math.round(pq(r.defect))),v=>{r.defect=String(v);picked('Брак '+v,'брак '+v);upd()},r.dph||(r.dph=[]));
   if(a==='e')scanDlg('bind',c=>bindCode(r,c));if(a==='q')qtyDlg(r);
-  if(a==='x'){if(!canDel(r)){setSw(re,0);return}S.items.splice(re._idx,1);save();if(S.items.length){build();top_()}else render()}}}
+  if(a==='x'){if(!canDel(r)){setSw(re,0);return}if(!EMPTY){const tb=BT.tb||(BT.tb={});[r.sid].concat(r.al||[]).forEach(k=>tb[k]=1)}S.items.splice(re._idx,1);save();if(S.items.length){build();top_()}else render()}}}
 const drumLive=r=>drum&&drum.row===r&&Date.now()-drum.at<30000&&pq(r.fact)===drum.last;
 const drumBase=r=>drumLive(r)?drum.base:pq(r.fact),drumInit=r=>drumLive(r)?Math.min(9999,Math.max(0,Math.round(pq(r.fact)-drum.base))):0;
 /* ---------- экран ---------- */
@@ -465,7 +509,7 @@ function webPick(h){const fin=(nm,ar)=>{const n=String(nm||h.name).trim(),a=Stri
  fj(ap('action=stroeha&code='+encodeURIComponent(CODE)+'&url='+encodeURIComponent(h.url))).then(j=>{if(!j||!j.ok)throw 0;fin(j.name,j.article)}).catch(()=>banner('Не удалось получить артикул с сайта',0))}
 function suggItems(q){const w=fold(q.trim()).split(' ').filter(Boolean);if(!w.length)return[];const w0=w[0],rk=(n,b)=>{n=fold(n);return b&&b.startsWith(w0)||n.startsWith(w0)?0:n.split(/[ ,\-\/()]/).some(x=>x.startsWith(w0))?1:2};
  const rows=findRows(q).map(r=>({name:r.name,row:r,k:rk(r.name,r.barcode.toLowerCase())})),seen=new Set(rows.map(e=>e.name.trim().toLowerCase()));
- const cat=CAT.filter(p=>{const n=fold(p.name),b=(p.barcode||'').toLowerCase();return w.every(x=>n.includes(x)||(b&&b.includes(x)))&&!seen.has(p.name.trim().toLowerCase())}).map(p=>({name:p.name,cat:p,k:rk(p.name,(p.barcode||'').toLowerCase())}));
+ const cat=CAT.filter(p=>{if(!cv(p))return false;const n=fold(p.name),b=(p.barcode||'').toLowerCase();return w.every(x=>n.includes(x)||(b&&b.includes(x)))&&!seen.has(p.name.trim().toLowerCase())}).map(p=>({name:p.name,cat:p,k:rk(p.name,(p.barcode||'').toLowerCase())}));
  const all=rows.concat(cat.sort((a,b)=>a.k-b.k)),sn=new Set(all.map(e=>e.name.trim().toLowerCase())),
   wb=WEB.q===q.trim()?WEB.items.filter(h=>!sn.has(h.name.trim().toLowerCase())).slice(0,5).map(h=>({name:h.name,web:h,k:3})):[];
  return all.slice(0,24).concat(wb).map((x,i)=>[x,i]).sort((a,b)=>artSt(a[0])-artSt(b[0])||a[1]-b[1]).map(e=>e[0])}
@@ -477,7 +521,7 @@ function sugg(){const g=$('#sg'),h=!noSg&&query.trim().length>=3?suggItems(query
 function render(){mkOT();const A=$('#app');A.innerHTML='';els.clear();if(!S){fab_();A.innerHTML='<div style="margin:auto;text-align:center"><button class=btn id=nb>Создать партию</button></div>';const mkB=n=>{S=newB(n);BT.list.push(S);save();render();note('Добавлено\n«'+n+'»')};const go=()=>nameDlg(defName(),mkB,1);$('#nb').onclick=go;go();return}
  if(step===1)return summary(A);
  A.innerHTML='<div class=top><div class=who id=who></div><button class=btn id=nx>Далее</button></div><div id=er class=err></div><div id=sv class=ok></div><div class=sf><svg width=24 height=24 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><circle cx=11 cy=11 r=7 /><path d="M20 20l-4-4"/></svg><input id=q placeholder="Поиск" autocomplete=off><button id=cl style="display:none;font-size:16px">✕</button><button id=sc>'+scIco('var(--pri)')+'</button><button id=ad>＋</button></div><div id=wh><div id=lst></div><div id=sg></div></div>';
- $('#who').onclick=batchDlg;$('#nx').onclick=()=>{const bad=S.items.find(r=>pq(r.defect)>pq(r.fact));if(!S.items.length)err='Нет товаров';else if(bad)err='Брак больше фактического количества: '+bad.name.trim();else{err='';step=1;render();return}top_()};
+ $('#who').onclick=batchDlg;$('#nx').onclick=()=>{const bad=S.items.find(r=>pq(r.defect)>pq(r.fact));if(!S.items.length)err='Нет товаров';else if(bad)err='Брак больше фактического количества: '+bad.name.trim();else{err='';if(!EMPTY){flush();push(1)}logPush(1);step=1;render();return}top_()};
  const q=$('#q');let bs=0,bt=0;q.value=query;$('#cl').style.display=query?'':'none';
  q.oninput=()=>{const raw=q.value;if(raw.length-query.length>=20&&(raw.length>40||/[:\/{}\[\]<>=&?@;|\\]/.test(raw))){setQ('');banner('Это не штрих-код — в поиск не вставлено',0);return}q.value=gk(raw);setQ(q.value)};
  q.onkeydown=e=>{if(e.key==='Enter'){const h=findRows(q.value)[0];if(h){setQ('');q.blur();goTo(h,1)}}};
@@ -512,7 +556,7 @@ function ean(code){const raw=String(code||'').replace(/\s/g,'');if(!raw)return''
  if(/^\d{8}$/.test(c)&&gtinOk(c)){b='101';for(let i=0;i<4;i++)b+=BL[+c[i]];b+='01010';for(let i=4;i<8;i++)b+=BR[+c[i]];b+='101';
   return bars(b,tx(17,26,c.slice(0,4)),tx(50,26,c.slice(4)),'',i=>i<3||(i>=31&&i<36)||i>=64,14)}
  return c128(raw)}
-function printRep(){const mhd=v=>{const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec((v||'').trim());return m?m[1]+'.'+m[2]+'.'+m[3].slice(2):esc((v||'').trim())};
+function printRep(){logPush(1);const mhd=v=>{const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec((v||'').trim());return m?m[1]+'.'+m[2]+'.'+m[3].slice(2):esc((v||'').trim())};
  const rows=S.items.filter(r=>r.name.trim()&&pq(r.fact)>0).map((r,i)=>'<tr><td class=n>'+(i+1)+'</td><td class=a>'+esc(art(r))+'</td><td class=t>'+esc(r.name.trim())+'</td><td>'+ean(r.barcode||(byNm(r.name)||{}).barcode)+'</td><td class=q>'+fn(pq(r.fact))+'</td><td class=m>'+mhd(r.expiry)+'</td></tr>').join('');
  if(!rows)return note('Нет посчитанных товаров');
  const ph=S.items.filter(r=>r.photo).map(r=>'<div style="display:inline-block;width:60mm;margin:0 4mm 4mm 0;vertical-align:top"><img src="'+r.photo+'" style="width:60mm;height:80mm;object-fit:cover"><div style="font-size:10px">'+esc(r.name)+'</div></div>').join('');
@@ -531,7 +575,7 @@ function printRep(){const mhd=v=>{const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec((v|
 /* Bluetooth-сканер (эмулирует клавиатуру): каждый скан = строго +1 */
 (function(){let buf='',last=0,fast=0,tm,pre=null;const take=()=>{const c=buf,f=fast;buf='';fast=0;clearTimeout(tm);return{c,f}};
  const ok=(c,f)=>c.length>=4&&f>=c.length-1&&/^[\w.\-]+$/.test(c);
- addEventListener('pagehide',flush);document.addEventListener('visibilitychange',()=>document.hidden&&flush());const route=c=>{const x=exb();if(x){if(pre&&pre.el&&pre.el.value!==undefined)pre.el.value=pre.v;x.put(c);return}if(document.querySelector('.dm,.scn'))return;let sw=null;els.forEach(r=>{if(r._sw<-1&&r.isConnected)sw=r});if(sw){const row=S.items[sw._idx];setSw(sw,0);if(row){setQ('');bindCode(row,c);return}}setQ('');countByCode(c)};
+ const hideP=()=>{flush();if(!EMPTY)push(1);logPush(1)};addEventListener('pagehide',hideP);document.addEventListener('visibilitychange',()=>document.hidden&&hideP());const route=c=>{const x=exb();if(x){if(pre&&pre.el&&pre.el.value!==undefined)pre.el.value=pre.v;x.put(c);return}if(document.querySelector('.dm,.scn'))return;let sw=null;els.forEach(r=>{if(r._sw<-1&&r.isConnected)sw=r});if(sw){const row=S.items[sw._idx];setSw(sw,0);if(row){setQ('');bindCode(row,c);return}}setQ('');countByCode(c)};
  addEventListener('keydown',e=>{if(!S||step!==0||CLOSED)return;const X=exb();if(!X&&document.querySelector('.dm,.scn'))return;
   const a=document.activeElement,inQ=a&&a.id==='q';if(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)&&!inQ&&!X)return;
   const now=performance.now(),gap=now-last;last=now;

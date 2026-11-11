@@ -93,6 +93,7 @@ fun OtherScreen(prefs: Prefs) {
         current == "Итог приёма" -> ReceiveTotalScreen { section = null }
         current == "Партии" -> BatchesScreen(prefs) { section = null }
         current == "Сборка" -> AssemblyScreen(prefs, Session.user?.name.orEmpty()) { section = null }
+        current == "Отчёт инвентаризации" -> InvReportScreen { section = null }
         current != null -> SectionScreen(current) { section = null }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("Прочее", style = MaterialTheme.typography.headlineMedium)
@@ -101,6 +102,7 @@ fun OtherScreen(prefs: Prefs) {
                 listOf(
                     TileSpec("Партии", Icons.Default.Add) { section = "Партии" },
                     TileSpec("Сборка", Icons.Default.ShoppingCart) { section = "Сборка" },
+                    *(if (Session.isAdmin) arrayOf(TileSpec("Отчёт инвентаризации", Icons.Default.Done) { section = "Отчёт инвентаризации" }) else emptyArray<TileSpec>()),
                     TileSpec("Шаблоны накладных", Icons.Default.Edit, InvoiceProfiles.newCount) { section = "Шаблоны накладных" },
                     TileSpec("Каталог товаров", Icons.Default.Menu) { section = "Каталог товаров" },
                     TileSpec("EAN", Icons.Default.Search) { section = "EAN" },

@@ -337,6 +337,26 @@ object DriveApi {
         return r.getString("folderId") to r.getString("url")
     }
 
+    /** Общий счёт и позиции партии (публичное действие скрипта counts, токен не нужен). Ответ скрипта как есть. */
+    fun batchCounts(ctx: Context, code: String): JSONObject =
+        http(DriveCfg.url(ctx) + "?action=counts&code=" + enc(code), null)
+
+    /** Отправка своего счёта и добавленных позиций (публичное действие count). В ответе то же, что у counts. */
+    fun batchCount(ctx: Context, payload: JSONObject): JSONObject =
+        http(DriveCfg.url(ctx), payload.toString())
+
+    /** Личный журнал инвентаризации устройства (публичное действие log; из приложения с токеном входа). */
+    fun batchLog(ctx: Context, payload: JSONObject): JSONObject = http(DriveCfg.url(ctx), payload.toString())
+
+    /** Журнал инвентаризации партии (код APPINV — инвентаризация в приложении). Только администратор. */
+    fun invLog(ctx: Context, code: String): JSONObject = http(query(ctx, "invlog", "code" to code), null)
+
+    /** Очистка журнала партии. Только администратор. */
+    fun invLogClear(ctx: Context, code: String): JSONObject = http(
+        DriveCfg.url(ctx),
+        JSONObject().put("action", "invlogclear").put("folderId", DriveCfg.folder(ctx)).put("token", DriveCfg.token(ctx)).put("code", code).toString()
+    )
+
     /** Содержимое файла по имени; null, если файла на Диске нет. */
     fun download(ctx: Context, name: String): ByteArray? {
         val r = http(query(ctx, "get", "name" to name), null)

@@ -1077,7 +1077,11 @@ private fun WheelRow(
             Box(
                 Modifier.weight(1f).fillMaxHeight()
                     .background(scheme.errorContainer)
-                    .clickable(enabled = canEdit) { onDelete() },
+                    .clickable(enabled = canEdit) {
+                        // «Сборка»: позицию, добавленную другим получателем, удаляет только её автор
+                        if (row.fromOthers && !row.orphan) Toast.makeText(ctx, "Удалить может только тот, кто добавил позицию", Toast.LENGTH_SHORT).show()
+                        else onDelete()
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -1184,6 +1188,7 @@ private fun WheelRow(
                             if (art.isNotEmpty()) add("арт. $art")
                         }
                         if (defD > 0) add("брак ${fmtQ(defD)}")
+                        if (row.others > 0.0) add("другие ${fmtQ(row.others)}")
                         if (row.expiry.isNotBlank()) add("срок ${row.expiry}")
                     }.joinToString(" · ")
                     // «Инвентаризация»: срок не выбран — слово «срок» красным в этой же строке (после артикула); выбрали срок — слово становится серым

@@ -58,6 +58,7 @@ object AsmStore {
                 val j = InvJob(o.optString("id"), o.optString("addr"), o.optLong("at"))
                 j.step = o.optInt("step", 0)
                 val rs = o.optJSONArray("rows")
+                var planNo = 0
                 if (rs != null) for (k in 0 until rs.length()) {
                     val r = rs.optJSONObject(k) ?: continue
                     // строка из списка партии (extra = false) хранит план в количестве; найденное сверх списка — extra
@@ -68,6 +69,18 @@ object AsmStore {
                     row.barcode = r.optString("b")
                     row.photo = r.optString("ph")
                     row.article = r.optString("a")
+                    row.ts = r.optLong("ts", row.ts)
+                    row.tc = r.optLong("tc")
+                    row.tu = r.optLong("tu")
+                    row.tf = r.optString("tf")
+                    // sid: у старых сохранений его нет — строка плана получает «r<номер>» (как в HTML), остальные уже имеют UUID
+                    val no = if (!row.extra) planNo++ else -1
+                    row.sid = r.optString("sid").ifBlank { if (no >= 0) "r$no" else row.sid }
+                    row.author = r.optString("by")
+                    row.fromOthers = r.optBoolean("fx", false)
+                    row.seenT = r.optLong("st", 0L)
+                    row.orphan = r.optBoolean("orph", false)
+                    r.optJSONArray("al")?.let { a -> row.alias = (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() } }
                     j.rows.add(row)
                 }
                 jobs.add(j)
@@ -86,6 +99,9 @@ object AsmStore {
                     rs.put(
                         JSONObject().put("n", r.name).put("q", r.qty).put("x", r.extra).put("f", r.fact).put("d", r.defect)
                             .put("e", r.expiry).put("b", r.barcode).put("pid", r.productId).put("ph", r.photo).put("a", r.article)
+                            .put("sid", r.sid).put("by", r.author).put("fx", r.fromOthers).put("st", r.seenT).put("orph", r.orphan)
+                            .put("al", JSONArray(r.alias))
+                            .put("ts", r.ts).put("tc", r.tc).put("tu", r.tu).put("tf", r.tf)
                     )
                 }
                 a.put(JSONObject().put("id", j.id).put("addr", j.address).put("at", j.created).put("step", j.step).put("rows", rs))
@@ -139,7 +155,7 @@ object AsmStore {
         saveBases(ctx)
     }
 
-    private fun codeOf(j: InvJob): String? =
+    internal fun codeOf(j: InvJob): String? =
         if (j.id.startsWith("asm_")) j.id.removePrefix("asm_").substringBefore('_') else null
 
     /** Новая сборка с нуля: строки базы с планом, факт пустой. */
@@ -149,6 +165,7 @@ object AsmStore {
         if (rs != null) for (k in 0 until rs.length()) {
             val r = rs.optJSONObject(k) ?: continue
             val row = ItemRow(r.optString("n"), r.optString("q"), extra = false)
+            row.sid = "r$k" // тот же sid, что у строки плана в HTML-странице: счёт складывается между устройствами
             row.barcode = r.optString("b")
             row.article = r.optString("a")
             j.rows.add(row)
@@ -370,7 +387,17 @@ private fun AssemblyEditor(job: InvJob, receiver: String, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     BackHandler { if (job.step == 1) job.step = 0 else { AsmStore.save(ctx); onClose() } }
     LaunchedEffect(job) { while (true) { delay(2000); AsmStore.save(ctx) } }
-    DisposableEffect(job) { onDispose { AsmStore.save(ctx) } }
+    // обычная партия: свои позиции и счёт уходят на сервер, чужие приходят (опрос раз в 120 с, отправка не чаще 20 с); пустая партия — ничего
+    LaunchedEffect(job) { AsmSync.run(ctx, job, receiver) }
+    // личный журнал для администратора (кто, что, сколько, когда); задание без кода партии идёт в журнал инвентаризации приложения
+    LaunchedEffect(job) { while (true) { delay(5000); InvLog.push(ctx, job, receiver, AsmStore.codeOf(job) ?: InvLog.APP_CODE) } }
+    DisposableEffect(job) {
+        onDispose {
+            InvLog.push(ctx, job, receiver, AsmStore.codeOf(job) ?: InvLog.APP_CODE, force = true)
+            AsmSync.pushFinal(ctx, job, receiver)
+            AsmStore.save(ctx)
+        }
+    }
 
     if (job.step == 1) {
         val stamp = remember { System.currentTimeMillis() }
@@ -511,7 +538,12 @@ private fun AssemblyEditor(job: InvJob, receiver: String, onClose: () -> Unit) {
             )
             Spacer(Modifier.width(8.dp))
             Button(
-                onClick = { error = ""; job.step = 1 },
+                onClick = {
+                    error = ""
+                    AsmSync.pushFinal(ctx, job, receiver)
+                    InvLog.push(ctx, job, receiver, AsmStore.codeOf(job) ?: InvLog.APP_CODE, force = true)
+                    job.step = 1
+                },
                 enabled = job.rows.isNotEmpty(),
                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
                 modifier = Modifier.height(36.dp)

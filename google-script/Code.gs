@@ -55,6 +55,7 @@ function checkWorker_(jwt) {
   var blocked = !!(f.blocked && f.blocked.booleanValue === true);
   var strikes = f.strikes ? Number(f.strikes.integerValue || 0) : 0;
   if (status !== 'active' || blocked || strikes >= 2) throw new Error('Профиль не активен.');
+  return f;
 }
 
 function checkToken_(value) {
@@ -87,6 +88,7 @@ function doGet(e) {
     if (action === 'stroehart') return json_(stroehArticle_(params.url));
     var folder = getFolder_(params.folderId);
     if (action === 'organize') return organize_(params);
+    if (action === 'invlog') return getInvLog_(params);
 
     if (action === 'ping') {
       return json_({
@@ -406,12 +408,114 @@ function devList_(data) {
   return out;
 }
 
+// ───────── общие позиции обычной партии (items) ─────────
+// Позиции, добавленные получателем сверх плана, лежат в том же файле счёта: devs[<dev>].items = [{sid, name, article, barcode, by, t}].
+// Список своих позиций устройство присылает целиком (замена), в ответе counts отдаётся объединённый список всех устройств.
+// ПУСТАЯ партия ("empty": true в BATCH_<код>.json): items не сохраняются и не отдаются никогда — у каждого работника свой отдельный список.
+
+function isArr_(v) { return Object.prototype.toString.call(v) === '[object Array]'; }
+
+// Нормализованное название (как nmz в HTML): регистр, ё = е, пробелы
+function nmz_(s) { return String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim(); }
+
+// true — партия пустая ИЛИ определить не удалось (на всякий случай обмен позициями закрыт). Ответ кешируется на 5 минут.
+function isEmptyBatch_(code) {
+  var cache = null, key = 'em_' + code;
+  try {
+    cache = CacheService.getScriptCache();
+    var c = cache.get(key);
+    if (c === '1') return true;
+    if (c === '0') return false;
+  } catch (e) { cache = null; }
+  var r;
+  try { r = readBatch_(code); } catch (e) { return true; }
+  if (r.err || !r.batch) return true;
+  var em = r.batch.empty;
+  var isEm = em === true || em === 1 || String(em).toLowerCase() === 'true';
+  try { if (cache) cache.put(key, isEm ? '1' : '0', 300); } catch (e) {}
+  return isEm;
+}
+
+// Проверка и чистка присланного списка: не больше 3000 позиций, название до 200 символов
+function cleanItems_(src) {
+  var out = [], seen = {}, now = Date.now();
+  if (!isArr_(src)) return out;
+  for (var i = 0; i < src.length; i++) {
+    var it = src[i];
+    if (!it || typeof it !== 'object') continue;
+    var sid = String(it.sid || '');
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(sid) || seen[sid]) continue;
+    var name = String(it.name || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200);
+    if (!name) continue;
+    var t = Number(it.t);
+    if (!isFinite(t) || t <= 0 || t > now) t = now;
+    if (out.length >= 3000) break;
+    seen[sid] = 1;
+    out.push({
+      sid: sid,
+      name: name,
+      article: String(it.article || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 40),
+      barcode: String(it.barcode || '').replace(/\s/g, '').slice(0, 40),
+      by: String(it.by || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64),
+      t: t
+    });
+  }
+  return out;
+}
+
+// Объединённый список позиций всех устройств. Одна позиция — это одинаковый sid ИЛИ одинаковый штрих-код ИЛИ одинаковое
+// нормализованное название. В группе побеждает более новое t (поля берутся у него, пустые артикул и штрих-код — у остальных);
+// sid группы — наименьший (не меняется от правок), остальные sid уходят в al: клиенты складывают счёт по всем sid группы.
+function mergeItems_(data) {
+  var list = [], devs = (data && data.devs) || {}, d, i;
+  for (d in devs) {
+    var its = devs[d] && devs[d].items;
+    if (isArr_(its)) for (i = 0; i < its.length; i++) if (its[i] && its[i].sid) list.push(its[i]);
+  }
+  var par = [];
+  for (i = 0; i < list.length; i++) par[i] = i;
+  var find = function (x) { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
+  var first = {};
+  for (i = 0; i < list.length; i++) {
+    var it = list[i];
+    var keys = ['s:' + it.sid, 'n:' + nmz_(it.name)];
+    if (it.barcode) keys.push('b:' + it.barcode);
+    for (var k = 0; k < keys.length; k++) {
+      if (first.hasOwnProperty(keys[k])) { var ra = find(i), rb = find(first[keys[k]]); if (ra !== rb) par[ra] = rb; }
+      else first[keys[k]] = i;
+    }
+  }
+  var groups = {};
+  for (i = 0; i < list.length; i++) { var r = find(i); (groups[r] = groups[r] || []).push(list[i]); }
+  var out = [];
+  for (var g in groups) {
+    var m = groups[g];
+    m.sort(function (x, y) { return (y.t || 0) - (x.t || 0) || (x.sid < y.sid ? -1 : 1); });
+    var win = m[0], sids = {}, art = '', bc = '';
+    for (i = 0; i < m.length; i++) {
+      sids[m[i].sid] = 1;
+      if (!art && m[i].article) art = m[i].article;
+      if (!bc && m[i].barcode) bc = m[i].barcode;
+    }
+    var all = Object.keys(sids).sort(), main = all[0];
+    out.push({
+      sid: main, name: win.name, article: win.article || art, barcode: win.barcode || bc,
+      by: win.by || '', t: win.t || 0, al: all.slice(1)
+    });
+  }
+  out.sort(function (x, y) { return x.sid < y.sid ? -1 : x.sid > y.sid ? 1 : 0; });
+  return out.slice(0, 3000);
+}
+
 function getCounts_(code) {
   code = String(code || '');
   if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
   var f = countsFile_(code, false);
-  if (!f) return json_({ok: true, devs: []});
-  return json_({ok: true, devs: devList_(JSON.parse(f.getBlob().getDataAsString('UTF-8')))});
+  var data = f ? JSON.parse(f.getBlob().getDataAsString('UTF-8')) : {devs: {}};
+  var out = {ok: true, devs: devList_(data)};
+  // items есть в ответе только у обычной партии; у пустой (и если тип партии не удалось определить) их нет совсем
+  if (!isEmptyBatch_(code)) out.items = mergeItems_(data);
+  return json_(out);
 }
 
 function saveCounts_(p) {
@@ -426,6 +530,9 @@ function saveCounts_(p) {
     if (++n > 3000) break;
     clean[k] = Math.round(v * 1000) / 1000;
   }
+  // items: необязательное поле. Нет поля — прежний список устройства не трогаем (старые страницы). Партия пустая — items не принимаем.
+  var hasItems = isArr_(p.items), batchEmpty = isEmptyBatch_(code), cleanIt = [];
+  if (hasItems && !batchEmpty) cleanIt = cleanItems_(p.items);
   var lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
@@ -433,13 +540,127 @@ function saveCounts_(p) {
     var data = JSON.parse(f.getBlob().getDataAsString('UTF-8'));
     data.devs = data.devs || {};
     if (!data.devs[dev] && Object.keys(data.devs).length >= 30) return json_({ok: false, error: 'Слишком много устройств.'});
-    data.devs[dev] = {name: String(p.name || '').slice(0, 40), t: Date.now(), c: clean};
+    var rec = {name: String(p.name || '').slice(0, 40), t: Date.now(), c: clean};
+    if (batchEmpty) {
+      // пустая партия: ничего лишнего в файле не остаётся
+    } else if (hasItems) rec.items = cleanIt;
+    else if (data.devs[dev] && data.devs[dev].items) rec.items = data.devs[dev].items;
+    data.devs[dev] = rec;
     f.setContent(JSON.stringify(data));
-    return json_({ok: true, devs: devList_(data)});
+    var out = {ok: true, devs: devList_(data)};
+    if (!batchEmpty) out.items = mergeItems_(data);
+    return json_(out);
   } finally {
     lock.releaseLock();
   }
 }
+
+// ───────── журнал инвентаризации (кто, что, сколько, когда) ─────────
+// Файл INVLOG_<код>.json: parts[<ключ>] = {dev, name, src: 'h' браузер | 'a' приложение, box, t, rows: [{n,a,b,q,t0,t1,ad,x}]}.
+// Каждое устройство присылает свой личный снимок по каждой своей коробке/паллете (замена). Другим работникам журнал НЕ отдаётся
+// никогда и в счёт/списки партии не попадает — читает его только администратор (action=invlog). Код APPINV — инвентаризация в приложении.
+function invLogFile_(code, create) {
+  var it = DriveApp.getFilesByName('INVLOG_' + code + '.json');
+  while (it.hasNext()) { var f = it.next(); if (!f.isTrashed()) return f; }
+  if (!create) return null;
+  return DriveApp.createFile('INVLOG_' + code + '.json', '{"parts":{}}', 'application/json');
+}
+
+function checkAdmin_(value) {
+  var v = String(value || '');
+  if (v.indexOf('eyJ') === 0 && v.split('.').length === 3) {
+    var f = checkWorker_(v);
+    if (!(f && f.role && f.role.stringValue === 'admin')) throw new Error('Только для администратора.');
+    return;
+  }
+  var token = getToken_();
+  if (!token) throw new Error('На сервере не задан TOKEN (Script properties).');
+  if (!safeEqual_(v, token)) throw new Error('Неверный токен.');
+}
+
+function cleanLogRows_(src) {
+  var out = [], now = Date.now();
+  if (!isArr_(src)) return out;
+  var ts = function (v) { v = Number(v); return isFinite(v) && v > 0 && v <= now + 60000 ? Math.round(v) : 0; };
+  for (var i = 0; i < src.length && out.length < 3000; i++) {
+    var r = src[i];
+    if (!r || typeof r !== 'object') continue;
+    var q = Number(r.q), n = String(r.n || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200);
+    if (!n || !isFinite(q) || q <= 0 || q > 1000000) continue;
+    out.push({
+      n: n, q: Math.round(q * 1000) / 1000,
+      a: String(r.a || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 40),
+      b: String(r.b || '').replace(/\s/g, '').slice(0, 40),
+      t0: ts(r.t0), t1: ts(r.t1), ad: ts(r.ad), x: r.x ? 1 : 0
+    });
+  }
+  return out;
+}
+
+function saveLog_(p) {
+  var code = String(p.code || ''), dev = String(p.dev || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code) || !/^[A-Za-z0-9]{6,40}$/.test(dev)) return json_({ok: false, error: 'Некорректный код.'});
+  var viaApp = false;
+  if (p.token) { checkToken_(p.token); viaApp = true; }
+  var hasBatch = DriveApp.getFilesByName('BATCH_' + code + '.json').hasNext();
+  if (!hasBatch && !(viaApp && code === 'APPINV')) return json_({ok: false, error: 'Партия не найдена.'});
+  if (hasBatch && ctlState_(code, dev) !== 'run') return json_({ok: false, error: 'blocked'});
+  var name = String(p.name || '').slice(0, 40), src = p.src === 'a' ? 'a' : 'h', clean = [];
+  var parts = isArr_(p.parts) ? p.parts : [];
+  for (var i = 0; i < parts.length && clean.length < 50; i++) {
+    var pt = parts[i], key = String((pt && pt.k) || '');
+    if (!/^[A-Za-z0-9_-]{1,60}$/.test(key)) continue;
+    clean.push({k: key, box: String(pt.box || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 60), rows: cleanLogRows_(pt.rows)});
+  }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var f = invLogFile_(code, true);
+    var data = JSON.parse(f.getBlob().getDataAsString('UTF-8'));
+    data.parts = data.parts || {};
+    for (var j = 0; j < clean.length; j++) {
+      var c = clean[j], old = data.parts[c.k];
+      if (old && old.dev !== dev) continue;                                   // чужую запись не трогаем
+      if (!old && Object.keys(data.parts).length >= 300) continue;
+      data.parts[c.k] = {dev: dev, name: name, src: src, box: c.box, t: Date.now(), rows: c.rows};
+    }
+    f.setContent(JSON.stringify(data));
+    return json_({ok: true});
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Только администратор (токен входа с ролью admin или общий TOKEN)
+function getInvLog_(params) {
+  checkAdmin_(params.token);
+  var code = String(params.code || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
+  var f = invLogFile_(code, false), list = [];
+  if (f) {
+    var parts = (JSON.parse(f.getBlob().getDataAsString('UTF-8')).parts) || {};
+    for (var k in parts) list.push({key: k, dev: parts[k].dev, name: parts[k].name, src: parts[k].src, box: parts[k].box, t: parts[k].t, rows: parts[k].rows || []});
+  }
+  var title = code === 'APPINV' ? 'Inventur (App)' : '', empty = false;
+  if (!title) { var r = readBatch_(code); if (r.batch) { title = String(r.batch.title || ''); empty = r.batch.empty === true; } }
+  return json_({ok: true, code: code, title: title, empty: empty, parts: list});
+}
+
+function clearInvLog_(p) {
+  checkAdmin_(p.token);
+  var code = String(p.code || '');
+  if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var f = invLogFile_(code, false);
+    if (f) f.setContent('{"parts":{}}');
+    return json_({ok: true});
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 
 // Страница партии: HTML-файл с Диска (BATCHPAGE_<код>.html) открывается в браузере получателя по ссылке/QR.
 function getBatchPage_(code) {
@@ -459,12 +680,15 @@ function doPost(e) {
     var payload = readPayload_(e);
     // Публично, по коду партии: устройство отправляет свой счёт (запись только в BATCHCOUNT_<код>.json)
     if (String(payload.action || '').toLowerCase() === 'count') return saveCounts_(payload);
+    // Публично, по коду партии: журнал инвентаризации (только запись; читает его один администратор)
+    if (String(payload.action || '').toLowerCase() === 'log') return saveLog_(payload);
     checkToken_(payload.token);
     var action = String(payload.action || 'upload').toLowerCase();
     if (action === 'delete') return deleteByName_(payload);
     if (action === 'init') return initResumable_(payload);
     if (action === 'mkshare') return makeShare_(payload);
     if (action === 'organize') return organize_(payload);
+    if (action === 'invlogclear') return clearInvLog_(payload);
     if (action !== 'upload') {
       return json_({ok: false, error: 'Неизвестное действие: ' + action});
     }

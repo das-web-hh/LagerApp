@@ -73,6 +73,10 @@ object InventoryStore {
                     row.barcode = r.optString("b")
                     row.photo = r.optString("ph")
                     row.article = r.optString("a")
+                    row.ts = r.optLong("ts", row.ts)
+                    row.tc = r.optLong("tc")
+                    row.tu = r.optLong("tu")
+                    row.tf = r.optString("tf")
                     j.rows.add(row)
                 }
                 jobs.add(j)
@@ -91,6 +95,7 @@ object InventoryStore {
                     rs.put(
                         JSONObject().put("n", r.name).put("q", r.qty).put("f", r.fact).put("d", r.defect)
                             .put("e", r.expiry).put("b", r.barcode).put("pid", r.productId).put("ph", r.photo).put("a", r.article)
+                            .put("ts", r.ts).put("tc", r.tc).put("tu", r.tu).put("tf", r.tf)
                     )
                 }
                 a.put(JSONObject().put("id", j.id).put("addr", j.address).put("at", j.created).put("step", j.step).put("rows", rs))
@@ -404,7 +409,9 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
     BackHandler { if (job.step == 1) job.step = 0 else { InventoryStore.save(ctx); onClose() } }
     // состояние пишем на телефон каждые пару секунд и при выходе: не пропадёт при закрытии приложения
     LaunchedEffect(job) { while (true) { delay(2000); InventoryStore.save(ctx) } }
-    DisposableEffect(job) { onDispose { InventoryStore.save(ctx) } }
+    // личный журнал для администратора (кто, что, сколько, когда): раз в несколько секунд при изменениях и при выходе
+    LaunchedEffect(job) { while (true) { delay(5000); InvLog.push(ctx, job, receiver, InvLog.APP_CODE) } }
+    DisposableEffect(job) { onDispose { InvLog.push(ctx, job, receiver, InvLog.APP_CODE, force = true); InventoryStore.save(ctx) } }
 
     if (job.step == 1) {
         val stamp = remember { System.currentTimeMillis() }
@@ -577,6 +584,7 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
                     // сразу в каталог и в Firebase (не ждём «Сохранить»): новые товары, исправленные артикулы и штрих-коды
                     val app = ctx.applicationContext
                     scope.launch(Dispatchers.IO) { try { invSaveBarcodes(app, job) } catch (e: Exception) { } }
+                    InvLog.push(ctx, job, receiver, InvLog.APP_CODE, force = true)
                     job.step = 1
                 },
                 enabled = job.rows.isNotEmpty(),
