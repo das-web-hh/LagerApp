@@ -46,7 +46,10 @@ object BatchAiScan {
     }
 
     /** Все листы PDF → строки партии. Вызывать из корутины; [onStatus] сообщает, какой лист читается. */
-    suspend fun read(ctx: Context, pdf: Uri, onStatus: (String) -> Unit): List<BatchRow> = withContext(Dispatchers.IO) {
+    suspend fun read(ctx: Context, pdf: Uri, onStatus: (String) -> Unit): List<BatchRow> =
+        KeepAlive.run(ctx, "ИИ читает список товаров…") { readInner(ctx, pdf, onStatus) }
+
+    private suspend fun readInner(ctx: Context, pdf: Uri, onStatus: (String) -> Unit): List<BatchRow> = withContext(Dispatchers.IO) {
         val app = ctx.applicationContext
         val tmp = File(app.cacheDir, "batchscan_" + System.nanoTime() + ".pdf")
         val input = app.contentResolver.openInputStream(pdf) ?: throw RuntimeException("Не удалось открыть скан")

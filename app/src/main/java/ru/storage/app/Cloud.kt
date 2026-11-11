@@ -382,6 +382,7 @@ object Cloud {
         val empty = withContext(Dispatchers.IO) { db.countProducts() } == 0
         if (!force && !empty && System.currentTimeMillis() - lastProducts < PRODUCTS_INTERVAL) return
         st.busy = true
+        KeepAlive.begin(null, "Загрузка каталога…")
         try {
             val col = fs.collection("products")
             val added = if (empty) full(col, st) { applyProducts(db, it) }
@@ -396,6 +397,7 @@ object Cloud {
             st.text = errorText(e)
         } finally {
             st.busy = false
+            KeepAlive.end()
         }
     }
 
@@ -429,6 +431,7 @@ object Cloud {
         if (st.busy) return
         if (!force && System.currentTimeMillis() - lastReceipts < RECEIPTS_INTERVAL) return
         st.busy = true
+        KeepAlive.begin(null, "Загрузка истории приёмок…")
         try {
             val localMax = withContext(Dispatchers.IO) { db.maxReceiptUpdated() }
             // при пустой истории берём только последние 50 приёмок (5 страниц по 10)
@@ -441,6 +444,7 @@ object Cloud {
             st.text = errorText(e)
         } finally {
             st.busy = false
+            KeepAlive.end()
         }
     }
 

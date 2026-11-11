@@ -534,9 +534,9 @@ fun CardSitePhoto(article: String, own: List<String>, modifier: Modifier = Modif
 
 /** Строка подсказки: одно имя, артикул, пометка «связан с сайтом» / «сайт stroeh.de»; свайп вправо — фото. */
 @Composable
-fun SuggestRow(s: Suggest, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SuggestRow(s: Suggest, onClick: () -> Unit, modifier: Modifier = Modifier, zebra: Boolean = false) {
     PhotoSwipeBox(if (s.hit != null || s.members.any { it.photos.isNotEmpty() }) s else null, modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth().clickable { PhotoMark.mark(s); onClick() }.padding(horizontal = 14.dp, vertical = 10.dp)) {
+        Column(Modifier.fillMaxWidth().background(if (zebra) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent).clickable { PhotoMark.mark(s); onClick() }.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Text(s.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             val sub = listOf(
                 s.article.takeIf { it.isNotBlank() }?.let { "арт. $it" } ?: "",

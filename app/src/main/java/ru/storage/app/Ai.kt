@@ -245,8 +245,14 @@ object Ai {
         ctx: Context, id: String, params: JSONObject, png: ByteArray?, json: Boolean = png != null,
         local: () -> String
     ): String {
-        if (!Session.isAdmin) return AiProxy.call(ctx, id, params, png, json)
-        return direct(ctx, local(), png, json)
+        // экран выключили — запрос к ИИ всё равно доходит до конца
+        KeepAlive.begin(ctx, "ИИ обрабатывает данные…")
+        try {
+            if (!Session.isAdmin) return AiProxy.call(ctx, id, params, png, json)
+            return direct(ctx, local(), png, json)
+        } finally {
+            KeepAlive.end()
+        }
     }
 
     /** Прямой запрос к ИИ со своим ключом (только администратор): текст + (необязательно) картинка. */

@@ -31,7 +31,10 @@ object CatalogOcr {
     private class Raw(val text: String, val cx: Float, val cy: Float, val w: Float, val h: Float, val angle: Float)
     private class Cell(val text: String, val x: Float, val w: Float, val y: Float, val h: Float)
 
-    suspend fun read(ctx: Context, uri: Uri, onStatus: (String) -> Unit): Table {
+    suspend fun read(ctx: Context, uri: Uri, onStatus: (String) -> Unit): Table =
+        KeepAlive.run(ctx, "Распознаю таблицу товаров…") { readInner(ctx, uri, onStatus) }
+
+    private suspend fun readInner(ctx: Context, uri: Uri, onStatus: (String) -> Unit): Table {
         val pages = withContext(Dispatchers.IO) { loadPages(ctx, uri) }
         if (pages.isEmpty()) throw RuntimeException("Не удалось открыть файл (нужна картинка или PDF)")
         val phone = try { fromPhone(pages) } catch (e: Exception) { null }

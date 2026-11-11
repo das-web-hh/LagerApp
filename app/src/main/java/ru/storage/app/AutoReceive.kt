@@ -571,6 +571,8 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
         running = true
         if (!saved) autoState = ""
         message = "Подготовка…"
+        // экран выключили — распознавание документа идёт до конца
+        KeepAlive.begin(app, "ИИ распознаёт документ…")
         scope.launch {
             var doc: PageSource? = null
             try {
@@ -746,6 +748,7 @@ class AutoJob(private val app: Context, val file: IncomingFile, startNameMode: B
             } finally {
                 doc?.close()
                 running = false
+                KeepAlive.end()
             }
         }
     }

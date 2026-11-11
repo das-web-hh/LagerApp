@@ -10,6 +10,7 @@ class LagerApp : Application() {
     override fun onCreate() {
         super.onCreate()
         ConnCfg.init(this)
+        KeepAlive.init(this)
         BWareDraft.app = this
         ArticleLookup.app = this
         watchNetwork()

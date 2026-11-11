@@ -376,7 +376,29 @@ fun CatalogWheel(
     }
 
     // сайт stroeh.de по названию и артикулу; совпал артикул с каталогом — одна подсказка с одним именем
-    val siteSug = rememberSiteSuggest(query, suggestions, enabled = !(isolated || strict))
+    val siteSug = rememberSiteSuggest(query, suggestions, enabled = !strict)
+
+    // созданный список (партия) тоже связан с сайтом stroeh.de: у строк без артикула он подтягивается по названию
+    val siteTried = remember { HashSet<String>() }
+    LaunchedEffect(rows.size) {
+        if (!isolated || strict || !DriveCfg.ready(ctx)) return@LaunchedEffect
+        for (r in rows.toList()) {
+            val n = r.name.trim()
+            if (r.article.isNotBlank() || n.length < MIN_SEARCH_CHARS || !SiteSearch.eligible(n) || !siteTried.add(n.lowercase())) continue
+            val hits = try {
+                SiteSearch.search(ctx, n)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val h = hits.firstOrNull { it.name.trim().equals(n, true) } ?: continue
+            val info = try { SiteSearch.infoOf(ctx, Suggest(null, emptyList(), h, null)) } catch (e: Exception) { null }
+            val a = info?.article.orEmpty().trim()
+            if (a.isNotBlank() && r.article.isBlank()) r.article = a
+            delay(300)
+        }
+    }
 
     fun addRow(name: String, productId: String, fact: String = "", barcode: String = "") {
         val n = name.trim()
@@ -534,7 +556,7 @@ fun CatalogWheel(
             dbHits = if (picked || nm.trim().length < MIN_SEARCH_CHARS) emptyList()
             else withContext(Dispatchers.IO) { ProductGroups.collapse(db, db.search(nm, 12)).take(8) }
         }
-        val nameSug = rememberSiteSuggest(nm, dbHits, enabled = !picked && !isolated)
+        val nameSug = rememberSiteSuggest(nm, dbHits, enabled = !picked && !strict)
         // порядок: сначала база с артикулом, затем сайт stroeh.de, затем база без артикула
         val sugItems = if (picked) emptyList() else nameSug.items
         val ordered = sugItems.filter { it.product != null && it.article.isNotBlank() } +
@@ -573,7 +595,7 @@ fun CatalogWheel(
                         ) {
                             Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
                                 ordered.forEachIndexed { i, sg ->
-                                    SuggestRow(sg, onClick = { pickSug(sg) })
+                                    SuggestRow(sg, zebra = i % 2 == 1, onClick = { pickSug(sg) })
                                     if (i < ordered.lastIndex) HorizontalDivider()
                                 }
                                 SiteBusyLine(nameSug.busy)
@@ -734,9 +756,9 @@ fun CatalogWheel(
                         )
                     } else {
                         Column(Modifier.verticalScroll(rememberScrollState())) {
-                            listHits.forEach { r ->
+                            listHits.forEachIndexed { zi, r ->
                                 Column(
-                                    Modifier.fillMaxWidth().clickable {
+                                    Modifier.fillMaxWidth().background(if (zi % 2 == 1) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent).clickable {
                                         r.fact = fmtQ(bwQty(r.fact) + 1)
                                         focusTarget = r; addTick++; query = ""
                                         Haptics.pulse(ctx, Haptics.TAP)
@@ -753,7 +775,7 @@ fun CatalogWheel(
                                 HorizontalDivider()
                             }
                             siteItems.forEachIndexed { i, sg ->
-                                SuggestRow(sg, onClick = {
+                                SuggestRow(sg, zebra = (listHits.size + i) % 2 == 1, onClick = {
                                     val p = sg.product
                                     if (p != null) {
                                         scope.launch(Dispatchers.IO) { SiteSearch.bind(ctx, sg) }
