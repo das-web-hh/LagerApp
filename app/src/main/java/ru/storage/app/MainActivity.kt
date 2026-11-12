@@ -358,6 +358,8 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
         }
     }
     LaunchedEffect(Unit) { WorkTracker.ensureService(ctx) }
+    // первый запуск новой версии: все сохранённые на телефоне задания уходят в журнал
+    LaunchedEffect(Unit) { delay(3000); InvLog.syncAll(ctx) }
     // общие настройки рабочего времени от администратора подтягиваются на этот телефон
     LaunchedEffect(Unit) {
         while (true) {
@@ -507,6 +509,17 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                             2 -> OtherScreen(prefs)
                             else -> MoreScreen(profile, prefs, onLogout)
                         }
+                    }
+                    // журнал инвентаризации не ушёл на Диск (ошибка, остановка админом, лимит): сообщение не молчит
+                    val logErr = InvLog.status
+                    if (logErr.isNotBlank() && tab == selected) {
+                        Text(
+                            logErr,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
                     }
                 }
             }

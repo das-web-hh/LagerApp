@@ -565,7 +565,7 @@ function saveCounts_(p) {
 }
 
 // ───────── журнал инвентаризации (кто, что, сколько, когда) ─────────
-// Файл INVLOG_<код>.json: parts[<ключ>] = {dev, name, src: 'h' браузер | 'a' приложение, box, t, rows: [{n,a,b,q,t0,t1,ad,x}]}.
+// Файл INVLOG_<код>.json: parts[<ключ>] = {dev, name, src: 'h' браузер | 'a' приложение, ver, box, t, rows: [{n,a,b,q,t0,t1,ad,x}]}.
 // Каждое устройство присылает свой личный снимок по каждой своей коробке/паллете (замена). Другим работникам журнал НЕ отдаётся
 // никогда и в счёт/списки партии не попадает — читает его только администратор (action=invlog). Код APPINV — инвентаризация в приложении.
 function invLogFile_(code, create) {
@@ -612,10 +612,16 @@ function saveLog_(p) {
   if (!/^[A-Za-z0-9]{6,40}$/.test(code) || !/^[A-Za-z0-9]{6,40}$/.test(dev)) return json_({ok: false, error: 'Некорректный код.'});
   var viaApp = false;
   if (p.token) { checkToken_(p.token); viaApp = true; }
-  var hasBatch = DriveApp.getFilesByName('BATCH_' + code + '.json').hasNext();
-  if (!hasBatch && !(viaApp && code === 'APPINV')) return json_({ok: false, error: 'Партия не найдена.'});
-  if (hasBatch && ctlState_(code, dev) !== 'run') return json_({ok: false, error: 'blocked'});
-  var name = String(p.name || '').slice(0, 40), src = p.src === 'a' ? 'a' : 'h', clean = [];
+  var isApp = /^APPINV(\d{8})?$/.test(code);
+  var hasBatch = !isApp && DriveApp.getFilesByName('BATCH_' + code + '.json').hasNext();
+  if (!hasBatch && !(viaApp && isApp)) return json_({ok: false, error: 'Партия не найдена.'});
+  if (hasBatch) {
+    var st = ctlState_(code, dev);
+    if (st === 'del') return json_({ok: false, error: 'blocked', state: 'del'});
+    if (st === 'stop') return json_({ok: false, error: 'blocked', state: 'stop'});
+  }
+  var ver = String(p.ver || '').replace(/[^0-9A-Za-z._-]/g, '').slice(0, 20);
+  var name = String(p.name || '').slice(0, 40), src = p.src === 'a' ? 'a' : 'h', clean = [], skipped = 0;
   var parts = isArr_(p.parts) ? p.parts : [];
   for (var i = 0; i < parts.length && clean.length < 50; i++) {
     var pt = parts[i], key = String((pt && pt.k) || '');
@@ -631,10 +637,11 @@ function saveLog_(p) {
     for (var j = 0; j < clean.length; j++) {
       var c = clean[j], old = data.parts[c.k];
       if (old && old.dev !== dev) continue;                                   // чужую запись не трогаем
-      if (!old && Object.keys(data.parts).length >= 300) continue;
-      data.parts[c.k] = {dev: dev, name: name, src: src, box: c.box, t: Date.now(), rows: c.rows};
+      if (!old && Object.keys(data.parts).length >= 300) { skipped++; continue; }
+      data.parts[c.k] = {dev: dev, name: name, src: src, ver: ver, box: c.box, t: Date.now(), rows: c.rows};
     }
     f.setContent(JSON.stringify(data));
+    if (skipped > 0) return json_({ok: false, error: 'limit', message: 'Журнал заполнен: максимум 300 частей на файл, ' + skipped + ' не сохранено.'});
     return json_({ok: true});
   } finally {
     lock.releaseLock();
@@ -649,9 +656,9 @@ function getInvLog_(params) {
   var f = invLogFile_(code, false), list = [];
   if (f) {
     var parts = (JSON.parse(f.getBlob().getDataAsString('UTF-8')).parts) || {};
-    for (var k in parts) list.push({key: k, dev: parts[k].dev, name: parts[k].name, src: parts[k].src, box: parts[k].box, t: parts[k].t, rows: parts[k].rows || []});
+    for (var k in parts) list.push({key: k, dev: parts[k].dev, name: parts[k].name, src: parts[k].src, ver: parts[k].ver || '', box: parts[k].box, t: parts[k].t, rows: parts[k].rows || []});
   }
-  var title = code === 'APPINV' ? 'Inventur (App)' : '', empty = false;
+  var title = /^APPINV(\d{8})?$/.test(code) ? 'Inventur (App)' + (code.length === 14 ? ' ' + code.substr(12, 2) + '.' + code.substr(10, 2) + '.' + code.substr(6, 4) : '') : '', empty = false;
   if (!title) { var r = readBatch_(code); if (r.batch) { title = String(r.batch.title || ''); empty = r.batch.empty === true; } }
   return json_({ok: true, code: code, title: title, empty: empty, parts: list});
 }
