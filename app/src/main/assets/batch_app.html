@@ -570,19 +570,26 @@ function ean(code){const raw=String(code||'').replace(/\s/g,'');if(!raw)return''
   return bars(b,tx(17,26,c.slice(0,4)),tx(50,26,c.slice(4)),'',i=>i<3||(i>=31&&i<36)||i>=64,14)}
  return c128(raw)}
 function printRep(){logPush(1);const mhd=v=>{const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec((v||'').trim());return m?m[1]+'.'+m[2]+'.'+m[3].slice(2):esc((v||'').trim())};
- const rows=mgRows().map(({r,f},i)=>'<tr><td class=n>'+(i+1)+'</td><td class=a>'+esc(art(r))+'</td><td class=t>'+esc(r.name.trim())+'</td><td>'+ean(r.barcode||(byNm(r.name)||{}).barcode)+'</td><td class=q>'+fn(f)+'</td><td class=m>'+mhd(r.expiry)+'</td></tr>').join('');
- if(!rows)return note('Нет посчитанных товаров');
- const ph=S.items.filter(r=>r.photo).map(r=>'<div style="display:inline-block;width:60mm;margin:0 4mm 4mm 0;vertical-align:top"><img src="'+r.photo+'" style="width:60mm;height:80mm;object-fit:cover"><div style="font-size:10px">'+esc(r.name)+'</div></div>').join('');
-  const dt=new Date().toLocaleString('ru',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).replace(',','');
- const rules='*{box-sizing:border-box}h1{font-size:20pt;margin:12mm 0 2mm 2mm;font-weight:700}.sub{font-size:9pt;margin:0 0 8mm 2mm;color:#222}'+
- 'table{border-collapse:collapse;width:100%;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}'+
- 'th,td{border:.35mm solid #000;text-align:center;vertical-align:middle;padding:0}th{background:#e6e6e6;font-size:9.5pt;height:9.5mm;font-weight:700}td{height:20mm}'+
- 'td.n{font-size:13pt}td.a{font-size:11pt}td.t{text-align:left;font-size:10.5pt;line-height:1.25;padding:1.5mm 2.5mm;word-wrap:break-word;overflow-wrap:anywhere}td.q{font-size:13pt}td.m{font-size:11pt}td svg{overflow:visible}',
- css='@page{size:A4;margin:12mm}@media screen{#prDoc{display:none}}@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;padding:0!important;margin:0!important}body>*:not(#prDoc){display:none!important}#prDoc{display:block;font-family:"DejaVu Sans",Verdana,Arial,sans-serif;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
-  rules.replace(/(^|\})([^{}]+)\{/g,(m,a,t)=>a+t.split(',').map(x=>'#prDoc '+x.trim()).join(',')+'{')+'}';
- const body='<h1>'+esc(S.name)+'</h1><div class=sub>'+dt+(USER?' · '+esc(USER):'')+'</div><table><thead><tr><th style="width:6.5%">Nr.</th><th style="width:12.5%">Artikel-Nr.</th><th style="width:22.5%">Artikelbezeichnung</th><th style="width:36%">EAN</th><th style="width:9%">Stück</th><th style="width:13.5%">MHD</th></tr></thead><tbody>'+rows+'</tbody></table>'+
- (ph?'<div style="page-break-before:always"><h2>Фото</h2>'+ph+'</div>':'');
- let pd=document.getElementById('prDoc');if(pd)pd.remove();pd=E('div');pd.id='prDoc';pd.innerHTML='<style>'+css+'</style>'+body;document.body.appendChild(pd);
+ const list=mgRows();if(!list.length)return note('Нет посчитанных товаров');
+ /* Страницы режем сами (счётчики страниц в CSS на iPhone не работают): на каждом листе «Seite N von M», последний лист без лишнего разрыва — иначе выходит пустая оборотная сторона */
+ const nf=t=>{const n=t.length;return n<=38?13:n<=66?11.5:n<=90?10:8.5};
+ const row=({r,f},i)=>{const t=r.name.trim();return'<tr><td class=n>'+(i+1)+'</td><td class=a>'+esc(art(r))+'</td><td class=t><div style="font-size:'+nf(t)+'pt">'+esc(t)+'</div></td><td>'+ean(r.barcode||(byNm(r.name)||{}).barcode)+'</td><td class=q>'+fn(f)+'</td><td class=m>'+mhd(r.expiry)+'</td></tr>'};
+ const FP=11,NP=12,pgs=[list.slice(0,FP)];for(let i=FP;i<list.length;i+=NP)pgs.push(list.slice(i,i+NP));
+ const phs=S.items.filter(r=>r.photo),PP=6,pn=Math.ceil(phs.length/PP),total=pgs.length+pn;
+ const dt=new Date().toLocaleString('de',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).replace(',','');
+ const foot=n=>'<div class=ft>Seite '+n+' von '+total+'</div>';
+ const thead='<thead><tr><th style="width:5%">Nr.</th><th style="width:12%">Artikel-Nr.</th><th style="width:37%">Artikelbezeichnung</th><th style="width:28%">EAN</th><th style="width:8%">Stück</th><th style="width:10%">MHD</th></tr></thead>';
+ let off=0;const out=pgs.map((p,k)=>{const s0=off;off+=p.length;return'<div class=pg>'+(k?'<div class=hd>'+esc(S.name)+' · '+dt+'</div>':'<h1>'+esc(S.name)+'</h1><div class=sub>'+dt+(USER?' · '+esc(USER):'')+'</div>')+'<table>'+thead+'<tbody>'+p.map((x,j)=>row(x,s0+j)).join('')+'</tbody></table>'+foot(k+1)+'</div>'});
+ for(let k=0;k<pn;k++)out.push('<div class=pg><h2>Fotos</h2><div class=gr>'+phs.slice(k*PP,k*PP+PP).map(r=>'<div><img src="'+r.photo+'"><div class=pl>'+esc(r.name)+'</div></div>').join('')+'</div>'+foot(pgs.length+k+1)+'</div>');
+ const rules='*{box-sizing:border-box}h1{font-size:18pt;margin:0 0 1mm 1mm;font-weight:700}h2{font-size:14pt;margin:0 0 4mm 1mm}.sub{font-size:9pt;margin:0 0 4mm 1mm;color:#222}.hd{font-size:8.5pt;margin:0 0 3mm 1mm;color:#222}'+
+ '.pg{position:relative;height:266mm;overflow:hidden;break-after:page;page-break-after:always}.pg:last-child{break-after:auto;page-break-after:auto}.ft{position:absolute;left:0;right:0;bottom:0;text-align:center;font-size:10pt}'+
+ 'table{border-collapse:collapse;width:100%;table-layout:fixed}tr{break-inside:avoid;page-break-inside:avoid}'+
+ 'th,td{border:.35mm solid #000;text-align:center;vertical-align:middle;padding:0}th{background:#e6e6e6;font-size:8.5pt;height:9.5mm;font-weight:700}td{height:19mm}'+
+ 'td.n{font-size:12pt}td.a{font-size:10pt;overflow-wrap:anywhere;padding:0 1mm}td.t{text-align:left;padding:1mm 2mm}td.t div{line-height:1.2;max-height:16.5mm;overflow:hidden;overflow-wrap:anywhere;word-wrap:break-word}td.q{font-size:13pt;font-weight:700}td.m{font-size:10pt}td svg{overflow:visible;max-width:94%}'+
+ '.gr{display:grid;grid-template-columns:repeat(3,60mm);gap:4mm}.gr img{width:60mm;height:80mm;object-fit:cover;display:block}.pl{font-size:9pt;height:6mm;overflow:hidden}',
+ css='@page{size:A4;margin:10mm}@media screen{#prDoc{display:none}}@media print{html,body{height:auto!important;overflow:visible!important;background:#fff!important;padding:0!important;margin:0!important}body>*:not(#prDoc){display:none!important}#prDoc{display:block;font-family:"DejaVu Sans",Verdana,Arial,sans-serif;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+ rules.replace(/(^|\})([^{}]+)\{/g,(m,a,t)=>a+t.split(',').map(x=>'#prDoc '+x.trim()).join(',')+'{')+'}';
+ let pd=document.getElementById('prDoc');if(pd)pd.remove();pd=E('div');pd.id='prDoc';pd.innerHTML='<style>'+css+'</style>'+out.join('');document.body.appendChild(pd);
  Promise.all([...pd.querySelectorAll('img')].map(i=>i.decode?i.decode().catch(()=>{}):0)).then(()=>setTimeout(()=>window.print(),250))}
 
 /* Bluetooth-сканер (эмулирует клавиатуру): каждый скан = строго +1 */
