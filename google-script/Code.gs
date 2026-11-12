@@ -648,11 +648,41 @@ function saveLog_(p) {
   }
 }
 
+// Список дней yyyyMMdd от from до to включительно (не больше 62)
+function dayList_(from, to) {
+  var out = [];
+  if (!/^\d{8}$/.test(from) || !/^\d{8}$/.test(to) || from > to) return out;
+  var t = Date.UTC(+from.substr(0, 4), +from.substr(4, 2) - 1, +from.substr(6, 2));
+  for (var i = 0; i < 62; i++) {
+    var d = new Date(t + i * 86400000);
+    var s = d.getUTCFullYear() + ('0' + (d.getUTCMonth() + 1)).slice(-2) + ('0' + d.getUTCDate()).slice(-2);
+    if (s > to) break;
+    out.push(s);
+  }
+  return out;
+}
+
 // Только администратор (токен входа с ролью admin или общий TOKEN)
 function getInvLog_(params) {
   checkAdmin_(params.token);
   var code = String(params.code || '');
   if (!/^[A-Za-z0-9]{6,40}$/.test(code)) return json_({ok: false, error: 'Некорректный код партии.'});
+  // инвентаризация в приложении за период: файлы APPINV<день> (+ старый общий APPINV для частей, которых нет в дневных файлах)
+  if (code === 'APPINV' && /^\d{8}$/.test(String(params.from || '')) && /^\d{8}$/.test(String(params.to || ''))) {
+    var days = dayList_(String(params.from), String(params.to)), plist = [], seen = {}, di, pk;
+    for (di = 0; di < days.length; di++) {
+      var df = invLogFile_('APPINV' + days[di], false);
+      if (!df) continue;
+      var dp = (JSON.parse(df.getBlob().getDataAsString('UTF-8')).parts) || {};
+      for (pk in dp) { seen[pk] = 1; plist.push({key: pk, day: days[di], dev: dp[pk].dev, name: dp[pk].name, src: dp[pk].src, ver: dp[pk].ver || '', box: dp[pk].box, t: dp[pk].t, rows: dp[pk].rows || []}); }
+    }
+    var lf = invLogFile_('APPINV', false);
+    if (lf) {
+      var lp = (JSON.parse(lf.getBlob().getDataAsString('UTF-8')).parts) || {};
+      for (pk in lp) if (!seen[pk]) plist.push({key: pk, day: '', dev: lp[pk].dev, name: lp[pk].name, src: lp[pk].src, ver: lp[pk].ver || '', box: lp[pk].box, t: lp[pk].t, rows: lp[pk].rows || []});
+    }
+    return json_({ok: true, code: code, title: 'Inventur (App)', empty: false, parts: plist});
+  }
   var f = invLogFile_(code, false), list = [];
   if (f) {
     var parts = (JSON.parse(f.getBlob().getDataAsString('UTF-8')).parts) || {};
@@ -670,6 +700,11 @@ function clearInvLog_(p) {
   var lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
+    if (code === 'APPINV' && /^\d{8}$/.test(String(p.from || '')) && /^\d{8}$/.test(String(p.to || ''))) {
+      var ds = dayList_(String(p.from), String(p.to));
+      for (var di = 0; di < ds.length; di++) { var df = invLogFile_('APPINV' + ds[di], false); if (df) df.setContent('{"parts":{}}'); }
+      return json_({ok: true});
+    }
     var f = invLogFile_(code, false);
     if (f) f.setContent('{"parts":{}}');
     return json_({ok: true});

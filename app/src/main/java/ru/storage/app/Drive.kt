@@ -349,12 +349,15 @@ object DriveApi {
     fun batchLog(ctx: Context, payload: JSONObject): JSONObject = http(DriveCfg.url(ctx), payload.toString())
 
     /** Журнал инвентаризации партии (код APPINV — инвентаризация в приложении). Только администратор. */
-    fun invLog(ctx: Context, code: String): JSONObject = http(query(ctx, "invlog", "code" to code), null)
+    fun invLog(ctx: Context, code: String, from: String = "", to: String = ""): JSONObject =
+        if (from.isNotEmpty() && to.isNotEmpty()) http(query(ctx, "invlog", "code" to code, "from" to from, "to" to to), null)
+        else http(query(ctx, "invlog", "code" to code), null)
 
     /** Очистка журнала партии. Только администратор. */
-    fun invLogClear(ctx: Context, code: String): JSONObject = http(
+    fun invLogClear(ctx: Context, code: String, from: String = "", to: String = ""): JSONObject = http(
         DriveCfg.url(ctx),
-        JSONObject().put("action", "invlogclear").put("folderId", DriveCfg.folder(ctx)).put("token", DriveCfg.token(ctx)).put("code", code).toString()
+        JSONObject().put("action", "invlogclear").put("folderId", DriveCfg.folder(ctx)).put("token", DriveCfg.token(ctx)).put("code", code)
+            .put("from", from).put("to", to).toString()
     )
 
     /** Содержимое файла по имени; null, если файла на Диске нет. */

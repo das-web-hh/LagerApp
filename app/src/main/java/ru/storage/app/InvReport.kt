@@ -24,6 +24,7 @@ import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -33,7 +34,9 @@ class InvRow(
     val name: String, val article: String, val barcode: String, val qty: Double,
     val tAdd: Long, val tFirst: Long, val tLast: Long, val extra: Boolean,
     /** срок годности (MHD) строки; одинаковый товар с разными сроками — разные строки */
-    val expiry: String = ""
+    val expiry: String = "",
+    /** версия приложения, с которой отправлена запись (пусто — браузер или старая версия) */
+    val ver: String = ""
 )
 
 /**
@@ -46,11 +49,17 @@ object InvReport {
     private fun num(d: Double): String = BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
     private fun key(r: InvRow) = r.barcode.trim().ifBlank { r.article.trim() }.ifBlank { r.name.trim().lowercase() }
 
-    /** Журналы выбранных партий (код → название). Не в главном потоке; при ошибке бросает исключение. */
-    fun fetch(ctx: Context, codes: List<String>): List<InvRow> {
+    /** День yyyyMMdd (Берлин) → «dd.MM.yyyy» для подписей. */
+    fun dayLabel(d: String) = if (d.length == 8) d.substring(6, 8) + "." + d.substring(4, 6) + "." + d.substring(0, 4) else d
+
+    /**
+     * Журналы выбранных партий (код → название) за период from..to (yyyyMMdd, по Берлину, включительно).
+     * Запись относится к дню первого ввода. Не в главном потоке; при ошибке бросает исключение.
+     */
+    fun fetch(ctx: Context, codes: List<String>, from: String, to: String): List<InvRow> {
         val out = ArrayList<InvRow>()
         for (code in codes) {
-            val j = DriveApi.invLog(ctx, code)
+            val j = if (code == InvLog.APP_CODE) DriveApi.invLog(ctx, code, from, to) else DriveApi.invLog(ctx, code)
             if (!j.optBoolean("ok")) throw RuntimeException(j.optString("error", "ошибка Диска"))
             val party = j.optString("title").ifBlank { code }
             val parts = j.optJSONArray("parts") ?: continue
@@ -61,11 +70,14 @@ object InvReport {
                     val r = rows.optJSONObject(k) ?: continue
                     val first = r.optLong("t0").takeIf { it > 0L } ?: r.optLong("ad")
                     val last = r.optLong("t1").takeIf { it > 0L } ?: first
+                    val day = InvLog.dayOf(if (first > 0L) first else last)
+                    if (first <= 0L && last <= 0L) continue
+                    if (day < from || day > to) continue
                     out.add(
                         InvRow(
                             code, party, p.optString("name").ifBlank { "?" }, p.optString("src"), p.optString("box"),
                             r.optString("n"), r.optString("a"), r.optString("b"), r.optDouble("q", 0.0),
-                            r.optLong("ad"), first, last, r.optInt("x") == 1, r.optString("e").trim()
+                            r.optLong("ad"), first, last, r.optInt("x") == 1, r.optString("e").trim(), p.optString("ver")
                         )
                     )
                 }
@@ -81,12 +93,12 @@ object InvReport {
         val m = LinkedHashMap<String, InvRow>()
         for (r in rows) {
             val bc = r.barcode.trim().ifBlank { bcByName[r.worker + "|" + r.party + "|" + r.box + "|" + r.name.trim().lowercase()] ?: "" }
-            val k = r.worker + "|" + r.party + "|" + r.box + "|" + bc.ifBlank { r.name.trim().lowercase() } + "|" + r.expiry.trim().lowercase().replace(" ", "")
+            val k = r.worker + "|" + r.party + "|" + InvLog.dayOf(r.tFirst) + "|" + r.box + "|" + bc.ifBlank { r.name.trim().lowercase() } + "|" + r.expiry.trim().lowercase().replace(" ", "")
             val o = m[k]
             m[k] = if (o == null) r else InvRow(
                 o.code, o.party, o.worker, o.src, o.box, o.name, o.article.ifBlank { r.article }, o.barcode.ifBlank { r.barcode }, o.qty + r.qty,
                 listOf(o.tAdd, r.tAdd).filter { it > 0L }.minOrNull() ?: 0L, listOf(o.tFirst, r.tFirst).filter { it > 0L }.minOrNull() ?: 0L,
-                maxOf(o.tLast, r.tLast), o.extra || r.extra, o.expiry
+                maxOf(o.tLast, r.tLast), o.extra || r.extra, o.expiry, o.ver.ifBlank { r.ver }
             )
         }
         return m.values.toList()
@@ -140,19 +152,19 @@ object InvReport {
         val prot = listOf<List<Any?>>(
             listOf(
                 H("Letzte Änderung"), H("Erste Erfassung"), H("Hinzugefügt"), H("Mitarbeiter"), H("Partie"), H("Palette / Liste"),
-                H("Artikel-Nr."), H("Artikelbezeichnung"), H("EAN"), H("Menge"), H("MHD"), H("Quelle"), H("Zusatzartikel")
+                H("Artikel-Nr."), H("Artikelbezeichnung"), H("EAN"), H("Menge"), H("MHD"), H("Quelle"), H("Zusatzartikel"), H("Version")
             )
         ) + rows.map {
             listOf<Any?>(
                 fmt(it.tLast), fmt(it.tFirst), fmt(it.tAdd), it.worker, it.party, it.box, it.article, it.name, it.barcode, it.qty, it.expiry,
-                srcName(it.src), if (it.extra) "Ja" else "Nein"
+                srcName(it.src), if (it.extra) "Ja" else "Nein", it.ver
             )
         }
         return listOf(
             Sheet("Zusammenfassung", sum, listOf(26, 60), false),
             Sheet("Mitarbeiter", mit, listOf(24, 12, 16, 14, 18, 18, 16, 20), true),
             Sheet("Artikel", art, listOf(16, 52, 18, 12, 14, 12, 12), true),
-            Sheet("Protokoll", prot, listOf(18, 18, 18, 22, 24, 20, 14, 52, 18, 10, 12, 16, 13), true)
+            Sheet("Protokoll", prot, listOf(18, 18, 18, 22, 24, 20, 14, 52, 18, 10, 12, 16, 13, 10), true)
         )
     }
 
@@ -268,9 +280,9 @@ object InvReport {
         sb.append("<div>Mitarbeiter: ${wk.size} · Artikel: ${rows.map { key(it) }.distinct().size} · Erfassungszeilen: ${rows.size} · <b>Stück gesamt: ${num(rows.sumOf { it.qty })}</b></div>")
         sb.append("<h2>Mitarbeiter</h2><table><tr><th>Mitarbeiter</th><th>Positionen</th><th>Stück gesamt</th><th>Erste Erfassung</th><th>Letzte Erfassung</th><th>Quelle</th></tr>")
         wk.forEach { sb.append("<tr><td>${he(it.name)}</td><td class=n>${it.items}</td><td class=n>${num(it.pcs)}</td><td>${fmt(it.first)}</td><td>${fmt(it.last)}</td><td>${he(it.src)}</td></tr>") }
-        sb.append("</table><h2>Protokoll</h2><table><tr><th>Zeit</th><th>Mitarbeiter</th><th>Palette / Liste</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Menge</th><th>MHD</th><th>Hinzugefügt</th></tr>")
+        sb.append("</table><h2>Protokoll</h2><table><tr><th>Zeit</th><th>Mitarbeiter</th><th>Palette / Liste</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Menge</th><th>MHD</th><th>Hinzugefügt</th><th>Quelle</th><th>Version</th></tr>")
         rows.forEach {
-            sb.append("<tr><td>${fmt(it.tLast)}</td><td>${he(it.worker)}</td><td>${he(it.box)}</td><td>${he(it.article)}</td><td>${he(it.name)}</td><td>${he(it.barcode)}</td><td class=n>${num(it.qty)}</td><td>${he(it.expiry)}</td><td>${fmt(it.tAdd)}</td></tr>")
+            sb.append("<tr><td>${fmt(it.tLast)}</td><td>${he(it.worker)}</td><td>${he(it.box)}</td><td>${he(it.article)}</td><td>${he(it.name)}</td><td>${he(it.barcode)}</td><td class=n>${num(it.qty)}</td><td>${he(it.expiry)}</td><td>${fmt(it.tAdd)}</td><td>${he(srcName(it.src))}</td><td>${he(it.ver)}</td></tr>")
         }
         sb.append("</table></body></html>")
         return sb.toString()
@@ -296,6 +308,17 @@ private fun invErr(e: Exception): String {
         "Суточный лимит Google Apps Script исчерпан (сбросится ночью). Повторите позже. ($m)" else m
 }
 
+private fun berlinFmt() = SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).apply { timeZone = TimeZone.getTimeZone("Europe/Berlin"); isLenient = false }
+
+/** Дата «dd.MM.yyyy» за daysAgo дней до сегодняшней (по Берлину). */
+private fun dayText(daysAgo: Int): String = berlinFmt().format(Date(System.currentTimeMillis() - daysAgo * 86_400_000L))
+
+/** «dd.MM.yyyy» → yyyyMMdd; null, если дата записана неверно. */
+private fun dayKey(text: String): String? = try {
+    val d = berlinFmt().parse(text.trim())
+    if (d == null) null else InvLog.dayOf(d.time)
+} catch (e: Exception) { null }
+
 /** «Прочее → Отчёт инвентаризации»: только администратор. Загрузка журналов, просмотр, печать, отправка Excel, очистка. */
 @Composable
 fun InvReportScreen(onBack: () -> Unit) {
@@ -308,6 +331,13 @@ fun InvReportScreen(onBack: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf("") }
     var clearDlg by remember { mutableStateOf(false) }
+    // период отчёта: по умолчанию сегодня (Berlin)
+    var fromTxt by remember { mutableStateOf(dayText(0)) }
+    var toTxt by remember { mutableStateOf(dayText(0)) }
+    val fromKey = dayKey(fromTxt)
+    val toKey = dayKey(toTxt)
+    val rangeOk = fromKey != null && toKey != null && fromKey <= toKey
+    fun setRange(a: String, b: String) { fromTxt = a; toTxt = b; rows = null; msg = "" }
     val list = listOf(InvLog.APP_CODE to "Инвентаризация в приложении") +
         BatchStore.batches.toList().filter { it.link.isNotBlank() }.map { it.code to (it.title + if (it.empty) " (пустая)" else "") }
     fun chosen() = list.map { it.first }.filter { sel[it] != false }
@@ -325,6 +355,23 @@ fun InvReportScreen(onBack: () -> Unit) {
             "Кто, что, сколько, артикул, штрих-код и время — по всем работникам (браузер и приложение). Отчёт на немецком.",
             style = MaterialTheme.typography.bodySmall
         )
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = fromTxt, onValueChange = { setRange(it, toTxt) }, singleLine = true, isError = fromKey == null,
+                label = { Text("С (дд.мм.гггг)") }, modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                value = toTxt, onValueChange = { setRange(fromTxt, it) }, singleLine = true, isError = toKey == null,
+                label = { Text("По") }, modifier = Modifier.weight(1f)
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = { setRange(dayText(0), dayText(0)) }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Сегодня") }
+            TextButton(onClick = { setRange(dayText(1), dayText(1)) }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Вчера") }
+            TextButton(onClick = { setRange(dayText(6), dayText(0)) }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("7 дней") }
+        }
+        if (fromKey != null && toKey != null && fromKey > toKey) Text("Дата «С» позже даты «По».", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        Text("Партии и дни (отметьте нужные):", style = MaterialTheme.typography.labelMedium)
         Column(Modifier.heightIn(max = 190.dp).verticalScroll(rememberScrollState())) {
             list.forEach { (code, title) ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -335,18 +382,21 @@ fun InvReportScreen(onBack: () -> Unit) {
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                enabled = !busy && chosen().isNotEmpty(),
+                enabled = !busy && rangeOk && chosen().isNotEmpty(),
                 modifier = Modifier.weight(1f),
                 onClick = {
                     busy = true
                     msg = ""
                     val app = ctx.applicationContext
                     val codes = chosen()
+                    val dFrom = fromKey ?: return@Button
+                    val dTo = toKey ?: return@Button
                     scope.launch {
                         try {
-                            val r = KeepAlive.run(app, "Отчёт инвентаризации") { withContext(Dispatchers.IO) { InvReport.fetch(app, codes) } }
+                            val r = KeepAlive.run(app, "Отчёт инвентаризации") { withContext(Dispatchers.IO) { InvReport.fetch(app, codes, dFrom, dTo) } }
                             rows = r
-                            msg = if (r.isEmpty()) "Записей пока нет." else "Записей: ${r.size}, работников: ${r.map { it.worker }.distinct().size}"
+                            val per = if (dFrom == dTo) InvReport.dayLabel(dFrom) else InvReport.dayLabel(dFrom) + " – " + InvReport.dayLabel(dTo)
+                            msg = if (r.isEmpty()) "За $per записей нет." else "$per: записей ${r.size}, работников ${r.map { it.worker }.distinct().size}"
                         } catch (e: Exception) {
                             msg = "Не удалось загрузить: ${invErr(e)}"
                         } finally {
@@ -396,7 +446,7 @@ fun InvReportScreen(onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { clearDlg = false },
             title = { Text("Очистить журнал?") },
-            text = { Text("Журналы выбранных партий на Диске будут стёрты (счёт партий не затрагивается). Сначала отправьте Excel.") },
+            text = { Text("Журналы выбранных партий на Диске будут стёрты целиком, а инвентаризация в приложении — только за выбранные дни (счёт партий не затрагивается). Сначала отправьте Excel.") },
             confirmButton = {
                 Button(onClick = {
                     clearDlg = false
@@ -406,7 +456,7 @@ fun InvReportScreen(onBack: () -> Unit) {
                         try {
                             withContext(Dispatchers.IO) {
                                 for (c in codes) {
-                                    val j = DriveApi.invLogClear(app, c)
+                                    val j = if (c == InvLog.APP_CODE) DriveApi.invLogClear(app, c, fromKey ?: "", toKey ?: "") else DriveApi.invLogClear(app, c)
                                     if (!j.optBoolean("ok")) throw RuntimeException(j.optString("error", "ошибка Диска"))
                                 }
                             }

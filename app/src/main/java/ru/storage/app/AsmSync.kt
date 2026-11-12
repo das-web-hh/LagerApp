@@ -68,6 +68,16 @@ object AsmSync {
             .put("name", receiver.take(40)).put("counts", counts).put("items", items)
     }
 
+    /** Админ остановил работника или партию (stopped / deleted на сервере): показываем сообщение, а не молчим. Ответ ok снимает его. */
+    private fun stopNote(job: InvJob, r: JSONObject) {
+        val key = "sync_" + job.id
+        if (r.optBoolean("ok")) { InvLog.note(key, null); return }
+        when (r.optString("error")) {
+            "stopped" -> InvLog.note(key, "Администратор остановил вас или партию. Ваша работа не отправляется.")
+            "deleted" -> InvLog.note(key, "Администратор удалил партию или ваш доступ. Ваша работа не отправляется.")
+        }
+    }
+
     private fun sigOf(p: JSONObject) = p.optJSONObject("counts").toString() + p.optJSONArray("items").toString()
 
     private suspend fun <T> net(app: Context, block: () -> T): T =
@@ -90,6 +100,7 @@ object AsmSync {
             try {
                 if (now >= nextPull) {
                     val r = net(app) { DriveApi.batchCounts(app, code) }
+                    stopNote(job, r)
                     synced = apply(job, receiver, r) || synced
                     nextPull = now + (if (synced) PULL_MS else 15_000L)
                 } else if (synced && now - lastPush >= PUSH_MIN_MS) {
@@ -97,6 +108,7 @@ object AsmSync {
                     val sig = sigOf(p)
                     if (sig != lastSig) {
                         val r = net(app) { DriveApi.batchCount(app, p) }
+                        stopNote(job, r)
                         if (r.optBoolean("ok")) {
                             lastSig = sig
                             lastPush = now
