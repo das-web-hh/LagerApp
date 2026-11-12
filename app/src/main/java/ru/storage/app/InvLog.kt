@@ -38,7 +38,7 @@ object InvLog {
             }
             val art = r.article.trim().ifBlank { try { ArticleLookup.find(r) } catch (e: Exception) { "" } }
             rows.put(
-                JSONObject().put("n", r.name.trim().take(200)).put("a", art).put("b", r.barcode.trim()).put("q", q)
+                JSONObject().put("n", r.name.trim().take(200)).put("a", art).put("b", r.barcode.trim()).put("e", r.expiry.trim()).put("q", q)
                     .put("t0", r.tc).put("t1", r.tu).put("ad", if (r.extra) r.ts else 0L).put("x", if (r.extra) 1 else 0)
             )
         }

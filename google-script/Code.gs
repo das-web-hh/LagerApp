@@ -591,6 +591,7 @@ function cleanLogRows_(src) {
       n: n, q: Math.round(q * 1000) / 1000,
       a: String(r.a || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 40),
       b: String(r.b || '').replace(/\s/g, '').slice(0, 40),
+      e: String(r.e || '').replace(/[^0-9A-Za-z.\/ -]/g, '').trim().slice(0, 12),
       t0: ts(r.t0), t1: ts(r.t1), ad: ts(r.ad), x: r.x ? 1 : 0
     });
   }

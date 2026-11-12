@@ -31,7 +31,9 @@ import java.util.zip.ZipOutputStream
 class InvRow(
     val code: String, val party: String, val worker: String, val src: String, val box: String,
     val name: String, val article: String, val barcode: String, val qty: Double,
-    val tAdd: Long, val tFirst: Long, val tLast: Long, val extra: Boolean
+    val tAdd: Long, val tFirst: Long, val tLast: Long, val extra: Boolean,
+    /** срок годности (MHD) строки; одинаковый товар с разными сроками — разные строки */
+    val expiry: String = ""
 )
 
 /**
@@ -63,13 +65,31 @@ object InvReport {
                         InvRow(
                             code, party, p.optString("name").ifBlank { "?" }, p.optString("src"), p.optString("box"),
                             r.optString("n"), r.optString("a"), r.optString("b"), r.optDouble("q", 0.0),
-                            r.optLong("ad"), first, last, r.optInt("x") == 1
+                            r.optLong("ad"), first, last, r.optInt("x") == 1, r.optString("e").trim()
                         )
                     )
                 }
             }
         }
-        return out.sortedByDescending { it.tLast }
+        return merge(out).sortedByDescending { it.tLast }
+    }
+
+    /** Одинаковый товар с одинаковым сроком у одного работника на одной паллете — одна строка; разные сроки остаются отдельными. */
+    private fun merge(rows: List<InvRow>): List<InvRow> {
+        val bcByName = HashMap<String, String>()
+        rows.forEach { if (it.barcode.isNotBlank()) bcByName.putIfAbsent(it.worker + "|" + it.party + "|" + it.box + "|" + it.name.trim().lowercase(), it.barcode.trim()) }
+        val m = LinkedHashMap<String, InvRow>()
+        for (r in rows) {
+            val bc = r.barcode.trim().ifBlank { bcByName[r.worker + "|" + r.party + "|" + r.box + "|" + r.name.trim().lowercase()] ?: "" }
+            val k = r.worker + "|" + r.party + "|" + r.box + "|" + bc.ifBlank { r.name.trim().lowercase() } + "|" + r.expiry.trim().lowercase().replace(" ", "")
+            val o = m[k]
+            m[k] = if (o == null) r else InvRow(
+                o.code, o.party, o.worker, o.src, o.box, o.name, o.article.ifBlank { r.article }, o.barcode.ifBlank { r.barcode }, o.qty + r.qty,
+                listOf(o.tAdd, r.tAdd).filter { it > 0L }.minOrNull() ?: 0L, listOf(o.tFirst, r.tFirst).filter { it > 0L }.minOrNull() ?: 0L,
+                maxOf(o.tLast, r.tLast), o.extra || r.extra, o.expiry
+            )
+        }
+        return m.values.toList()
     }
 
     private class Wk(val name: String, val items: Int, val lines: Int, val pcs: Double, val first: Long, val last: Long, val src: String, val boxes: Int)
@@ -109,30 +129,30 @@ object InvReport {
             listOf(H("Mitarbeiter"), H("Positionen"), H("Erfassungszeilen"), H("Stück gesamt"), H("Erste Erfassung"), H("Letzte Erfassung"), H("Paletten / Listen"), H("Quelle"))
         ) + wk.map { listOf<Any?>(it.name, it.items.toLong(), it.lines.toLong(), it.pcs, fmt(it.first), fmt(it.last), it.boxes.toLong(), it.src) }
         val art = listOf<List<Any?>>(
-            listOf(H("Artikel-Nr."), H("Artikelbezeichnung"), H("EAN"), H("Gesamtmenge"), H("Mitarbeiter"), H("Erfassungen"))
-        ) + rows.groupBy { key(it) }.values.map { l ->
+            listOf(H("Artikel-Nr."), H("Artikelbezeichnung"), H("EAN"), H("MHD"), H("Gesamtmenge"), H("Mitarbeiter"), H("Erfassungen"))
+        ) + rows.groupBy { key(it) + "|" + it.expiry.trim().lowercase().replace(" ", "") }.values.map { l ->
             listOf<Any?>(
                 l.map { it.article }.firstOrNull { it.isNotBlank() } ?: "", l.first().name,
-                l.map { it.barcode }.firstOrNull { it.isNotBlank() } ?: "",
+                l.map { it.barcode }.firstOrNull { it.isNotBlank() } ?: "", l.first().expiry,
                 l.sumOf { it.qty }, l.map { it.worker }.distinct().size.toLong(), l.size.toLong()
             )
-        }.sortedBy { (it[1] as String).lowercase() }
+        }.sortedWith(compareBy<List<Any?>>({ (it[1] as String).lowercase() }, { it[3] as String }))
         val prot = listOf<List<Any?>>(
             listOf(
                 H("Letzte Änderung"), H("Erste Erfassung"), H("Hinzugefügt"), H("Mitarbeiter"), H("Partie"), H("Palette / Liste"),
-                H("Artikel-Nr."), H("Artikelbezeichnung"), H("EAN"), H("Menge"), H("Quelle"), H("Zusatzartikel")
+                H("Artikel-Nr."), H("Artikelbezeichnung"), H("EAN"), H("Menge"), H("MHD"), H("Quelle"), H("Zusatzartikel")
             )
         ) + rows.map {
             listOf<Any?>(
-                fmt(it.tLast), fmt(it.tFirst), fmt(it.tAdd), it.worker, it.party, it.box, it.article, it.name, it.barcode, it.qty,
+                fmt(it.tLast), fmt(it.tFirst), fmt(it.tAdd), it.worker, it.party, it.box, it.article, it.name, it.barcode, it.qty, it.expiry,
                 srcName(it.src), if (it.extra) "Ja" else "Nein"
             )
         }
         return listOf(
             Sheet("Zusammenfassung", sum, listOf(26, 60), false),
             Sheet("Mitarbeiter", mit, listOf(24, 12, 16, 14, 18, 18, 16, 20), true),
-            Sheet("Artikel", art, listOf(16, 52, 18, 14, 12, 12), true),
-            Sheet("Protokoll", prot, listOf(18, 18, 18, 22, 24, 20, 14, 52, 18, 10, 16, 13), true)
+            Sheet("Artikel", art, listOf(16, 52, 18, 12, 14, 12, 12), true),
+            Sheet("Protokoll", prot, listOf(18, 18, 18, 22, 24, 20, 14, 52, 18, 10, 12, 16, 13), true)
         )
     }
 
@@ -248,9 +268,9 @@ object InvReport {
         sb.append("<div>Mitarbeiter: ${wk.size} · Artikel: ${rows.map { key(it) }.distinct().size} · Erfassungszeilen: ${rows.size} · <b>Stück gesamt: ${num(rows.sumOf { it.qty })}</b></div>")
         sb.append("<h2>Mitarbeiter</h2><table><tr><th>Mitarbeiter</th><th>Positionen</th><th>Stück gesamt</th><th>Erste Erfassung</th><th>Letzte Erfassung</th><th>Quelle</th></tr>")
         wk.forEach { sb.append("<tr><td>${he(it.name)}</td><td class=n>${it.items}</td><td class=n>${num(it.pcs)}</td><td>${fmt(it.first)}</td><td>${fmt(it.last)}</td><td>${he(it.src)}</td></tr>") }
-        sb.append("</table><h2>Protokoll</h2><table><tr><th>Zeit</th><th>Mitarbeiter</th><th>Palette / Liste</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Menge</th><th>Hinzugefügt</th></tr>")
+        sb.append("</table><h2>Protokoll</h2><table><tr><th>Zeit</th><th>Mitarbeiter</th><th>Palette / Liste</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Menge</th><th>MHD</th><th>Hinzugefügt</th></tr>")
         rows.forEach {
-            sb.append("<tr><td>${fmt(it.tLast)}</td><td>${he(it.worker)}</td><td>${he(it.box)}</td><td>${he(it.article)}</td><td>${he(it.name)}</td><td>${he(it.barcode)}</td><td class=n>${num(it.qty)}</td><td>${fmt(it.tAdd)}</td></tr>")
+            sb.append("<tr><td>${fmt(it.tLast)}</td><td>${he(it.worker)}</td><td>${he(it.box)}</td><td>${he(it.article)}</td><td>${he(it.name)}</td><td>${he(it.barcode)}</td><td class=n>${num(it.qty)}</td><td>${he(it.expiry)}</td><td>${fmt(it.tAdd)}</td></tr>")
         }
         sb.append("</table></body></html>")
         return sb.toString()
