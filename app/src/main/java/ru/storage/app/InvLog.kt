@@ -56,6 +56,8 @@ object InvLog {
 
     private fun isAppCode(code: String) = code.startsWith(APP_CODE)
 
+    private fun devOf(receiver: String) = BatchShare.sha(BatchShare.normName(receiver.ifBlank { Session.login })).take(32)
+
     fun versionName(ctx: Context): String =
         try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "" } catch (e: Exception) { "" }
 
