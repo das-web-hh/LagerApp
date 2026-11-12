@@ -40,6 +40,14 @@ function safeEqual_(a, b) {
 // Работники входят не по общему TOKEN, а по токену входа Firebase (JWT): скрипт сам проверяет профиль в Firestore.
 // Нужно свойство скрипта FB_PROJECT = ID проекта Firebase. Общий TOKEN остаётся для администратора и сайта.
 function checkWorker_(jwt) {
+  // Каждая проверка — это вызов UrlFetch (суточный лимит скрипта). Успешный ответ кешируем на 10 минут по хешу токена.
+  var cache = null, ckey = '';
+  try {
+    cache = CacheService.getScriptCache();
+    ckey = 'w_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, jwt)).slice(0, 40);
+    var hit = cache.get(ckey);
+    if (hit) return JSON.parse(hit);
+  } catch (e) { cache = null; }
   var project = String(PropertiesService.getScriptProperties().getProperty('FB_PROJECT') || '');
   if (!project) throw new Error('На сервере не задан FB_PROJECT (Script properties).');
   if (jwt.length > 4000) throw new Error('Неверный токен.');
@@ -55,6 +63,7 @@ function checkWorker_(jwt) {
   var blocked = !!(f.blocked && f.blocked.booleanValue === true);
   var strikes = f.strikes ? Number(f.strikes.integerValue || 0) : 0;
   if (status !== 'active' || blocked || strikes >= 2) throw new Error('Профиль не активен.');
+  try { if (cache) cache.put(ckey, JSON.stringify({role: {stringValue: (f.role && f.role.stringValue) || ''}}), 600); } catch (e) {}
   return f;
 }
 

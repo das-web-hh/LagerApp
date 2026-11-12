@@ -289,6 +289,13 @@ object InvReport {
     }
 }
 
+/** Понятный текст ошибки: суточный лимит вызовов Google Apps Script (urlfetch) — не поломка, а ожидание до завтра. */
+private fun invErr(e: Exception): String {
+    val m = e.message ?: e.javaClass.simpleName
+    return if (m.contains("urlfetch", true) || m.contains("too many times", true) || m.contains("zu häufig", true))
+        "Суточный лимит Google Apps Script исчерпан (сбросится ночью). Повторите позже. ($m)" else m
+}
+
 /** «Прочее → Отчёт инвентаризации»: только администратор. Загрузка журналов, просмотр, печать, отправка Excel, очистка. */
 @Composable
 fun InvReportScreen(onBack: () -> Unit) {
@@ -341,7 +348,7 @@ fun InvReportScreen(onBack: () -> Unit) {
                             rows = r
                             msg = if (r.isEmpty()) "Записей пока нет." else "Записей: ${r.size}, работников: ${r.map { it.worker }.distinct().size}"
                         } catch (e: Exception) {
-                            msg = "Не удалось загрузить: ${e.message ?: e.javaClass.simpleName}"
+                            msg = "Не удалось загрузить: ${invErr(e)}"
                         } finally {
                             busy = false
                         }
@@ -406,7 +413,7 @@ fun InvReportScreen(onBack: () -> Unit) {
                             rows = null
                             msg = "Журнал очищен."
                         } catch (e: Exception) {
-                            msg = "Не удалось очистить: ${e.message ?: e.javaClass.simpleName}"
+                            msg = "Не удалось очистить: ${invErr(e)}"
                         }
                     }
                 }) { Text("Очистить") }
