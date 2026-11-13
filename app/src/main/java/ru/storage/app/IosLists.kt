@@ -274,6 +274,43 @@ object IosLists {
         return ImpPlan(bodies, who, at, codes.joinToString(", "), title, kind, rowsN, qty, partsN, lg != null || lgs != null)
     }
 
+    /**
+     * Строки отчёта прямо из файлов (без записи в базу и без интернета). Одна и та же часть (устройство + k + код) из нескольких файлов
+     * берётся один раз — из самого свежего файла, поэтому старый и новый файлы одного работника не удваивают количество.
+     * Автор — работник из файла, источник помечается «(Import)». Не в главном потоке.
+     */
+    fun reportRows(plans: List<ImpPlan>): List<InvRow> {
+        val best = LinkedHashMap<String, Pair<Long, List<InvRow>>>()
+        for (p in plans) for (b in p.bodies) {
+            val code = b.optString("code")
+            val dev = b.optString("dev")
+            val worker = b.optString("name").ifBlank { p.user.ifBlank { "?" } }
+            val party = if (code.startsWith(InvLog.APP_CODE)) "Inventur (App)" else if (p.code == code) p.title else code
+            val ps = b.optJSONArray("parts") ?: continue
+            for (pi in 0 until ps.length()) {
+                val pt = ps.optJSONObject(pi) ?: continue
+                val rs = pt.optJSONArray("rows") ?: continue
+                val out = ArrayList<InvRow>()
+                for (ri in 0 until rs.length()) {
+                    val r = rs.optJSONObject(ri) ?: continue
+                    val first = r.optLong("t0").takeIf { it > 0L } ?: r.optLong("ad")
+                    val last = r.optLong("t1").takeIf { it > 0L } ?: first
+                    if (first <= 0L && last <= 0L) continue
+                    out.add(
+                        InvRow(
+                            code, party, worker, b.optString("src") + "i", pt.optString("box"), r.optString("n"), r.optString("a"), r.optString("b"),
+                            r.optDouble("q", 0.0), r.optLong("ad"), first, last, r.optInt("x") == 1, r.optString("e").trim(), b.optString("ver"), p.kind
+                        )
+                    )
+                }
+                val key = dev + "|" + pt.optString("k") + "|" + code
+                val old = best[key]
+                if (old == null || p.at >= old.first) best[key] = Pair(p.at, out)
+            }
+        }
+        return InvReport.finish(best.values.flatMap { it.second })
+    }
+
     private fun impPrefs(ctx: Context) = ctx.applicationContext.getSharedPreferences("ioslists_imp", Context.MODE_PRIVATE)
 
     /** Записывался ли файл в базу с этого телефона (по имени файла); null — нет. */
@@ -309,7 +346,10 @@ object IosLists {
             val ps = b.optJSONArray("parts")
             if (ps != null) for (i in 0 until ps.length()) n += ps.optJSONObject(i)?.optJSONArray("rows")?.length() ?: 0
             try {
-                b.put("token", DriveCfg.token(app)).put("imp", 1).put("impBy", Session.displayName).put("impAt", now).put("at", plan.at)
+                // токен берётся не в главном потоке (Tasks.await там молча даёт пустую строку, и сервер считал запрос обычным без токена)
+                val token = withContext(Dispatchers.IO) { DriveCfg.token(app) }
+                if (token.isBlank()) { fatal = "не удалось получить токен входа администратора (проверьте интернет и войдите в приложение заново)"; break }
+                b.put("token", token).put("imp", 1).put("impBy", Session.displayName).put("impAt", now).put("at", plan.at)
                 val r = withContext(Dispatchers.IO) { DriveApi.batchLog(app, b) }
                 if (r.optBoolean("ok")) written += n
                 else {
@@ -475,6 +515,8 @@ fun IosListsScreen(onBack: () -> Unit) {
     var impMsg by remember { mutableStateOf("") }
     var impTick by remember { mutableStateOf(0) }
     var impProg by remember { mutableStateOf("") }
+    val picked = remember { mutableStateMapOf<String, Boolean>() }
+    var xlBusy by remember { mutableStateOf(false) }
     val admin = Session.isAdmin
     BackHandler { if (viewing != null) viewing = null else onBack() }
 
@@ -574,6 +616,43 @@ fun IosListsScreen(onBack: () -> Unit) {
                 Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = { reload() }) { Text(if (busy) "Ищу…" else "Обновить список") }
                 if (msg.isNotBlank()) Text(msg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                 if (impMsg.isNotBlank()) Text(impMsg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                if (admin && list.isNotEmpty()) {
+                    val sel = list.filter { picked[it.file.absolutePath] == true }
+                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            enabled = sel.isNotEmpty() && !xlBusy, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 8.dp),
+                            onClick = {
+                                xlBusy = true
+                                impMsg = ""
+                                scope.launch {
+                                    try {
+                                        val app = ctx.applicationContext
+                                        val res = withContext(Dispatchers.IO) {
+                                            var bad = 0
+                                            val plans = ArrayList<IosLists.ImpPlan>()
+                                            for (i in sel) {
+                                                try { plans.add(IosLists.planOf(i.file.name, IosLists.htmlOf(i), i.sentAt)) } catch (e: Exception) { bad++ }
+                                            }
+                                            val f: File? = if (plans.isEmpty()) null else InvReport.writeXlsx(app, IosLists.reportRows(plans))
+                                            Pair(f, bad)
+                                        }
+                                        if (res.second > 0) impMsg = "Не прочитано файлов: ${res.second}"
+                                        val xf = res.first
+                                        if (xf == null) impMsg = "Не удалось прочитать выбранные файлы" else InvReport.share(ctx, xf)
+                                    } catch (e: Exception) {
+                                        impMsg = "Не удалось создать Excel: ${e.message ?: e.javaClass.simpleName}"
+                                    } finally {
+                                        xlBusy = false
+                                    }
+                                }
+                            }
+                        ) { Text(if (xlBusy) "Собираю…" else "Один Excel из выбранных (${sel.size})") }
+                        OutlinedButton(contentPadding = PaddingValues(horizontal = 10.dp), onClick = {
+                            val all = sel.size == list.size
+                            list.forEach { picked[it.file.absolutePath] = !all }
+                        }) { Text(if (sel.size == list.size) "Снять" else "Все") }
+                    }
+                }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
                     items(list, key = { it.file.absolutePath }) { i ->
                         Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -582,6 +661,10 @@ fun IosListsScreen(onBack: () -> Unit) {
                                 Text(iosKind(i.kind) + (if (i.user.isNotBlank()) i.user + " · " else "") + iosTime(i.sentAt), style = MaterialTheme.typography.bodySmall)
                                 if (i.rows > 0) Text("Позиций: ${i.rows} · Stück: ${iosQty(i.qty)}", style = MaterialTheme.typography.bodySmall)
                                 Text(i.file.name, style = MaterialTheme.typography.bodySmall)
+                                if (admin) Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = picked[i.file.absolutePath] == true, onCheckedChange = { picked[i.file.absolutePath] = it })
+                                    Text("В общий Excel", style = MaterialTheme.typography.bodySmall)
+                                }
                                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Button(contentPadding = PaddingValues(horizontal = 10.dp), onClick = {
                                         scope.launch {

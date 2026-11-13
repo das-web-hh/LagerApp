@@ -112,6 +112,9 @@ object InvReport {
         return m.values.toList()
     }
 
+    /** Строки, собранные не с Диска, а из файлов работников: та же склейка одинаковых позиций и сортировка, что и в fetch. */
+    fun finish(rows: List<InvRow>): List<InvRow> = merge(rows).sortedByDescending { it.tLast }
+
     private class Wk(val name: String, val items: Int, val lines: Int, val pcs: Double, val first: Long, val last: Long, val src: String, val boxes: Int)
 
     private fun workers(rows: List<InvRow>): List<Wk> = rows.groupBy { it.worker }.map { (n, l) ->
