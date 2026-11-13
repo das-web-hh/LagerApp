@@ -295,32 +295,44 @@ object IosLists {
      * Запись в журнал на Диске от имени работника (action=log, токен администратора, imp=1). Ничего не глотает:
      * итог (в том числе ошибка) возвращается и запоминается. Файл не удаляется. Повторная запись заменяет ту же часть.
      */
-    suspend fun doImport(ctx: Context, name: String, plan: ImpPlan): ImpState {
+    suspend fun doImport(ctx: Context, name: String, plan: ImpPlan, onProgress: (Int, Int) -> Unit = { _, _ -> }): ImpState {
         val app = ctx.applicationContext
         val now = System.currentTimeMillis()
         var written = 0
-        var err = ""
-        if (!DriveCfg.ready(app)) err = "Google Диск не настроен"
-        else for (b in plan.bodies) {
+        var fatal = ""
+        val failed = ArrayList<String>()   // «код (причина)» по заданиям, которые сервер не принял
+        var failedRows = 0
+        if (!DriveCfg.ready(app)) fatal = "Google Диск не настроен"
+        else for ((idx, b) in plan.bodies.withIndex()) {
+            onProgress(idx, plan.bodies.size)
             var n = 0
             val ps = b.optJSONArray("parts")
             if (ps != null) for (i in 0 until ps.length()) n += ps.optJSONObject(i)?.optJSONArray("rows")?.length() ?: 0
             try {
                 b.put("token", DriveCfg.token(app)).put("imp", 1).put("impBy", Session.displayName).put("impAt", now).put("at", plan.at)
                 val r = withContext(Dispatchers.IO) { DriveApi.batchLog(app, b) }
-                if (r.optBoolean("ok")) written += n else { err = impErr(r); break }
+                if (r.optBoolean("ok")) written += n
+                else {
+                    // ошибка одного задания (партия удалена, свежие данные и т.п.) не мешает остальным
+                    failedRows += n
+                    val why = impErr(r)
+                    val label = b.optString("code") + " (" + why + ")"
+                    if (label !in failed) failed.add(label)
+                }
             } catch (e: Exception) {
-                err = impNetErr(e)
+                fatal = impNetErr(e)   // нет сети: дальше пробовать бессмысленно
                 break
             }
         }
+        val rest = if (fatal.isNotEmpty()) fatal else failed.take(4).joinToString("; ") + (if (failed.size > 4) "; и ещё ${failed.size - 4}" else "")
+        val ok = fatal.isEmpty() && failed.isEmpty()
         val msg = when {
-            err.isEmpty() -> "Записано в базу: $written строк"
-            written > 0 -> "Записано частично: $written из ${plan.rows} строк. Не записано: $err"
-            else -> "Не записано: $err"
+            ok -> "Записано в базу: $written строк"
+            written > 0 -> "Записано: $written из ${plan.rows} строк. Не записано: $rest"
+            else -> "Не записано: $rest"
         }
-        val st = ImpState(now, err.isEmpty(), msg)
-        try { impPrefs(app).edit().putString("f_$name", JSONObject().put("at", now).put("ok", st.ok).put("msg", msg).toString()).apply() } catch (e: Exception) { }
+        val st = ImpState(now, ok, msg)
+        try { impPrefs(app).edit().putString("f_$name", JSONObject().put("at", now).put("ok", ok).put("msg", msg).toString()).apply() } catch (e: Exception) { }
         return st
     }
 
@@ -462,6 +474,7 @@ fun IosListsScreen(onBack: () -> Unit) {
     var impBusy by remember { mutableStateOf(false) }
     var impMsg by remember { mutableStateOf("") }
     var impTick by remember { mutableStateOf(0) }
+    var impProg by remember { mutableStateOf("") }
     val admin = Session.isAdmin
     BackHandler { if (viewing != null) viewing = null else onBack() }
 
@@ -620,9 +633,10 @@ fun IosListsScreen(onBack: () -> Unit) {
             confirmButton = {
                 Button(enabled = !impBusy, onClick = {
                     impBusy = true
+                    impProg = ""
                     scope.launch {
                         try {
-                            val st = IosLists.doImport(ctx, nm, p)
+                            val st = IosLists.doImport(ctx, nm, p) { i, n -> impProg = " " + (i + 1) + "/" + n }
                             impMsg = st.msg
                             impTick++
                         } finally {
@@ -630,7 +644,7 @@ fun IosListsScreen(onBack: () -> Unit) {
                             impAsk = null
                         }
                     }
-                }) { Text(if (impBusy) "Пишу…" else "Записать в базу") }
+                }) { Text(if (impBusy) "Пишу…" + impProg else "Записать в базу") }
             },
             dismissButton = { TextButton(enabled = !impBusy, onClick = { impAsk = null }) { Text("Отмена") } }
         )
