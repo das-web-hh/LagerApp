@@ -53,7 +53,7 @@ object InvLog {
 
     private fun errText(r: JSONObject): String = when (r.optString("error")) {
         "blocked" -> if (r.optString("state") == "del") "администратор удалил партию или ваш доступ" else "администратор остановил вас или партию"
-        "limit" -> r.optString("message").ifBlank { "журнал заполнен (лимит 300 частей на файл)" }
+        "limit" -> r.optString("message").ifBlank { "журнал заполнен (лимит 1000 частей на файл)" }
         else -> r.optString("error").ifBlank { "ошибка Диска" }
     }
 

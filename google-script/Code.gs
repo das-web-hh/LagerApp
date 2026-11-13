@@ -608,6 +608,8 @@ function cleanLogRows_(src) {
   return out;
 }
 
+var LOG_MAX_PARTS = 1000; // максимум частей в одном файле журнала (раньше 300)
+
 function saveLog_(p) {
   var code = String(p.code || ''), dev = String(p.dev || '');
   if (!/^[A-Za-z0-9]{6,40}$/.test(code) || !/^[A-Za-z0-9]{6,40}$/.test(dev)) return json_({ok: false, error: 'Некорректный код.'});
@@ -661,13 +663,13 @@ function saveLog_(p) {
     for (var j = 0; j < clean.length; j++) {
       var c = clean[j], old = data.parts[c.k];
       if (old && old.dev !== dev) continue;                                   // чужую запись не трогаем
-      if (!old && Object.keys(data.parts).length >= 300) { skipped++; continue; }
+      if (!old && Object.keys(data.parts).length >= LOG_MAX_PARTS) { skipped++; continue; }
       var rec = {dev: dev, name: name, src: src, ver: ver, box: c.box, t: imp ? at : Date.now(), rows: c.rows};
       if (imp) { rec.imp = true; rec.impBy = impBy; rec.impAt = impAt; }      // своя отправка работника пишет часть без imp — пометка снимается
       data.parts[c.k] = rec;
     }
     f.setContent(JSON.stringify(data));
-    if (skipped > 0) return json_({ok: false, error: 'limit', message: 'Журнал заполнен: максимум 300 частей на файл, ' + skipped + ' не сохранено.'});
+    if (skipped > 0) return json_({ok: false, error: 'limit', message: 'Журнал заполнен: максимум ' + LOG_MAX_PARTS + ' частей на файл, ' + skipped + ' не сохранено.'});
     return json_({ok: true});
   } finally {
     lock.releaseLock();
