@@ -549,6 +549,11 @@ private fun InventoryEditor(job: InvJob, receiver: String, onClose: () -> Unit) 
                                 ctx.startActivity(Intent.createChooser(i, "Отправить текстом"))
                             }
                         ) { Text("Текстом") }
+                        OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                            sendDlg = false
+                            val err = InvLog.shareFile(ctx, job, receiver, InvLog.APP_CODE, job.address.ifBlank { "Inventur" })
+                            if (err != null) Toast.makeText(ctx, "Не удалось создать файл: $err", Toast.LENGTH_LONG).show()
+                        }) { Text("Файлом (для записи администратором)") }
                         TextButton(modifier = Modifier.fillMaxWidth(), onClick = { sendDlg = false }) { Text("Отмена") }
                     }
                 }

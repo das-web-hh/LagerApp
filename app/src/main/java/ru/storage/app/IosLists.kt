@@ -42,6 +42,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -177,6 +178,140 @@ object IosLists {
 
     fun htmlOf(i: Item): String = try { i.file.readText() } catch (e: Exception) { "" }
 
+    // ---------- запись файла в журнал на Диске (только администратор) ----------
+    private val idRe = Regex("^[A-Za-z0-9]{6,40}$")
+
+    /** Что будет записано: готовые запросы action=log (без токена), автор файла, время снимка и итоги для окна подтверждения. */
+    class ImpPlan(
+        val bodies: List<JSONObject>, val user: String, val at: Long, val code: String, val title: String,
+        val kind: String, val rows: Int, val qty: Double, val parts: Int, val v2: Boolean
+    )
+
+    /** Результат последней записи файла (хранится на телефоне). */
+    class ImpState(val at: Long, val ok: Boolean, val msg: String)
+
+    fun kindName(k: String) = when (k) { "bware" -> "B-Ware"; "expired" -> "Abgelaufene Ware"; else -> "Inventur" }
+
+    /**
+     * Разбор файла для записи в базу. v:2 — берётся готовый "log"; v:1 (нет "log") — части собираются из rows:
+     * k = imp_<хеш имени файла>, t0 = t1 = время файла, box = Inventur. Для кода APPINV строки делятся по дням (код APPINV+yyyyMMdd, Берлин).
+     * Не в главном потоке. Бросает IllegalStateException с понятной причиной.
+     */
+    fun planOf(name: String, text: String, modified: Long): ImpPlan {
+        val o = meta(text) ?: throw IllegalStateException("в файле нет данных списка (блок lagerp)")
+        val at = o.optLong("at").takeIf { it > 0L } ?: modified
+        val user = o.optString("user")
+        val title = o.optString("title").ifBlank { name.substringBeforeLast('.') }
+        val kind = o.optString("kind")
+        val lg = o.optJSONObject("log")
+        val base: JSONObject
+        if (lg != null) {
+            base = JSONObject(lg.toString())
+        } else {
+            val src = o.optJSONArray("rows")
+            val rows = JSONArray()
+            if (src != null) for (i in 0 until src.length()) {
+                val r = src.optJSONObject(i) ?: continue
+                val q = r.optDouble("q", 0.0)
+                if (q <= 0.0 || r.optString("n").isBlank()) continue
+                rows.put(
+                    JSONObject().put("n", r.optString("n").trim().take(200)).put("a", r.optString("a")).put("b", r.optString("b"))
+                        .put("e", r.optString("e")).put("q", q).put("t0", at).put("t1", at).put("ad", 0L).put("x", 0)
+                )
+            }
+            if (rows.length() == 0) throw IllegalStateException("в файле нет строк")
+            val dev = o.optString("dev").takeIf { idRe.matches(it) } ?: BatchShare.sha(BatchShare.normName(user.ifBlank { name })).take(32)
+            base = JSONObject().put("action", "log").put("code", o.optString("code")).put("dev", dev).put("name", user.take(40))
+                .put("src", "h").put("ver", "")
+                .put("parts", JSONArray().put(JSONObject().put("k", "imp_" + BatchShare.sha(name).take(16)).put("box", "Inventur").put("rows", rows)))
+        }
+        val code = base.optString("code")
+        if (!idRe.matches(code)) throw IllegalStateException("в файле нет кода партии")
+        if (!idRe.matches(base.optString("dev"))) throw IllegalStateException("в файле нет кода устройства")
+        val parts = base.optJSONArray("parts") ?: throw IllegalStateException("в файле нет частей журнала")
+        val bodies = ArrayList<JSONObject>()
+        if (code.startsWith(InvLog.APP_CODE)) {
+            // инвентаризация в приложении: файл дня = день первого ввода строки (как в InvLog)
+            val byDay = LinkedHashMap<String, JSONArray>()
+            for (pi in 0 until parts.length()) {
+                val p = parts.optJSONObject(pi) ?: continue
+                val rs = p.optJSONArray("rows") ?: continue
+                val perDay = LinkedHashMap<String, JSONArray>()
+                for (ri in 0 until rs.length()) {
+                    val r = rs.optJSONObject(ri) ?: continue
+                    val t0 = r.optLong("t0").takeIf { it > 0L } ?: r.optLong("ad").takeIf { it > 0L } ?: at
+                    perDay.getOrPut(InvLog.dayOf(t0)) { JSONArray() }.put(r)
+                }
+                for ((d, arr) in perDay) byDay.getOrPut(d) { JSONArray() }.put(JSONObject().put("k", p.optString("k")).put("box", p.optString("box")).put("rows", arr))
+            }
+            for ((d, ps) in byDay) bodies.add(JSONObject(base.toString()).put("code", InvLog.APP_CODE + d).put("parts", ps))
+        } else bodies.add(base)
+        var rowsN = 0
+        var qty = 0.0
+        var partsN = 0
+        for (b in bodies) {
+            val ps = b.optJSONArray("parts") ?: continue
+            partsN += ps.length()
+            for (i in 0 until ps.length()) {
+                val rs = ps.optJSONObject(i)?.optJSONArray("rows") ?: continue
+                rowsN += rs.length()
+                for (j in 0 until rs.length()) qty += rs.optJSONObject(j)?.optDouble("q", 0.0) ?: 0.0
+            }
+        }
+        if (rowsN == 0) throw IllegalStateException("в файле нет строк")
+        return ImpPlan(bodies, user.ifBlank { base.optString("name") }, at, code, title, kind, rowsN, qty, partsN, lg != null)
+    }
+
+    private fun impPrefs(ctx: Context) = ctx.applicationContext.getSharedPreferences("ioslists_imp", Context.MODE_PRIVATE)
+
+    /** Записывался ли файл в базу с этого телефона (по имени файла); null — нет. */
+    fun impState(ctx: Context, name: String): ImpState? {
+        val s = impPrefs(ctx).getString("f_$name", null) ?: return null
+        return try { val o = JSONObject(s); ImpState(o.optLong("at"), o.optBoolean("ok"), o.optString("msg")) } catch (e: Exception) { null }
+    }
+
+    private fun impErr(r: JSONObject): String = when (r.optString("error")) {
+        "blocked" -> if (r.optString("state") == "del") "администратор удалил партию или доступ" else "партия или работник остановлены"
+        "limit", "stale", "foreign" -> r.optString("message").ifBlank { r.optString("error") }
+        else -> r.optString("error").ifBlank { "ошибка Диска" }
+    }
+
+    private fun impNetErr(e: Exception): String =
+        if (e is java.io.IOException) "нет сети или сервер недоступен (${e.message ?: e.javaClass.simpleName})" else (e.message ?: e.javaClass.simpleName)
+
+    /**
+     * Запись в журнал на Диске от имени работника (action=log, токен администратора, imp=1). Ничего не глотает:
+     * итог (в том числе ошибка) возвращается и запоминается. Файл не удаляется. Повторная запись заменяет ту же часть.
+     */
+    suspend fun doImport(ctx: Context, name: String, plan: ImpPlan): ImpState {
+        val app = ctx.applicationContext
+        val now = System.currentTimeMillis()
+        var written = 0
+        var err = ""
+        if (!DriveCfg.ready(app)) err = "Google Диск не настроен"
+        else for (b in plan.bodies) {
+            var n = 0
+            val ps = b.optJSONArray("parts")
+            if (ps != null) for (i in 0 until ps.length()) n += ps.optJSONObject(i)?.optJSONArray("rows")?.length() ?: 0
+            try {
+                b.put("token", DriveCfg.token(app)).put("imp", 1).put("impBy", Session.displayName).put("impAt", now).put("at", plan.at)
+                val r = withContext(Dispatchers.IO) { DriveApi.batchLog(app, b) }
+                if (r.optBoolean("ok")) written += n else { err = impErr(r); break }
+            } catch (e: Exception) {
+                err = impNetErr(e)
+                break
+            }
+        }
+        val msg = when {
+            err.isEmpty() -> "Записано в базу: $written строк"
+            written > 0 -> "Записано частично: $written из ${plan.rows} строк. Не записано: $err"
+            else -> "Не записано: $err"
+        }
+        val st = ImpState(now, err.isEmpty(), msg)
+        try { impPrefs(app).edit().putString("f_$name", JSONObject().put("at", now).put("ok", st.ok).put("msg", msg).toString()).apply() } catch (e: Exception) { }
+        return st
+    }
+
     // ---------- уведомление о новом файле ----------
     private const val JOB_ID = 7311
     private const val CH = "ioslists"
@@ -297,6 +432,7 @@ class IosListsJob : JobService() {
 
 private fun iosTime(t: Long) = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY).apply { timeZone = TimeZone.getTimeZone("Europe/Berlin") }.format(Date(t))
 private fun iosQty(d: Double) = if (d % 1.0 == 0.0) d.toLong().toString() else d.toString()
+private fun iosShort(t: Long) = SimpleDateFormat("dd.MM HH:mm", Locale.GERMANY).apply { timeZone = TimeZone.getTimeZone("Europe/Berlin") }.format(Date(t))
 private fun iosKind(k: String) = when (k) { "bware" -> "B-Ware · "; "expired" -> "Abgelaufene Ware · "; else -> "" }
 
 /** «Прочее → Списки с iPhone»: найденные файлы. Только просмотр, печать и удаление — менять нельзя. */
@@ -310,7 +446,24 @@ fun IosListsScreen(onBack: () -> Unit) {
     var msg by remember { mutableStateOf("") }
     var viewing by remember { mutableStateOf<IosLists.Doc?>(null) }
     var delItem by remember { mutableStateOf<IosLists.Item?>(null) }
+    var impAsk by remember { mutableStateOf<Pair<String, IosLists.ImpPlan>?>(null) }
+    var impBusy by remember { mutableStateOf(false) }
+    var impMsg by remember { mutableStateOf("") }
+    var impTick by remember { mutableStateOf(0) }
+    val admin = Session.isAdmin
     BackHandler { if (viewing != null) viewing = null else onBack() }
+
+    /** «Записать в базу»: разбор файла (не в главном потоке) и окно подтверждения; ошибка разбора показывается текстом. */
+    fun askImport(name: String, modified: Long, html: () -> String) {
+        impMsg = ""
+        scope.launch {
+            try {
+                impAsk = name to withContext(Dispatchers.IO) { IosLists.planOf(name, html(), modified) }
+            } catch (e: Exception) {
+                impMsg = "Не записано: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+    }
 
     fun reload() {
         if (busy) return
@@ -364,6 +517,16 @@ fun IosListsScreen(onBack: () -> Unit) {
                 enabled = v.html.isNotBlank(),
                 onClick = { Printer.print(ctx, v.name.substringBeforeLast('.'), v.html, record = false) }
             ) { Text("Печать") }
+            if (admin) {
+                val st = remember(impTick, v.name) { IosLists.impState(ctx, v.name) }
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(), enabled = v.html.isNotBlank() && !impBusy,
+                    onClick = { askImport(v.name, v.sentAt) { v.html } }
+                ) { Text("Записать в базу") }
+                if (st != null && st.ok) Text("Записано " + iosShort(st.at), style = MaterialTheme.typography.bodySmall)
+                if (impMsg.isNotBlank()) Text(impMsg, style = MaterialTheme.typography.bodyMedium)
+            }
             Spacer(Modifier.height(6.dp))
             HtmlPreview(v.html, Modifier.weight(1f).fillMaxWidth())
         }
@@ -385,6 +548,7 @@ fun IosListsScreen(onBack: () -> Unit) {
             } else {
                 Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = { reload() }) { Text(if (busy) "Ищу…" else "Обновить список") }
                 if (msg.isNotBlank()) Text(msg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                if (impMsg.isNotBlank()) Text(impMsg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                 LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
                     items(list, key = { it.file.absolutePath }) { i ->
                         Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -408,12 +572,56 @@ fun IosListsScreen(onBack: () -> Unit) {
                                     }) { Text("Печать") }
                                     TextButton(contentPadding = PaddingValues(horizontal = 10.dp), onClick = { delItem = i }) { Text("Удалить") }
                                 }
+                                if (admin) {
+                                    val st = remember(impTick, i.file.name) { IosLists.impState(ctx, i.file.name) }
+                                    if (st != null) Text(
+                                        if (st.ok) "Записано " + iosShort(st.at) else st.msg,
+                                        style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold
+                                    )
+                                    OutlinedButton(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp), enabled = !impBusy,
+                                        onClick = { askImport(i.file.name, i.sentAt) { IosLists.htmlOf(i) } }
+                                    ) { Text("Записать в базу") }
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    impAsk?.let { (nm, p) ->
+        val prev = IosLists.impState(ctx, nm)
+        AlertDialog(
+            onDismissRequest = { if (!impBusy) impAsk = null },
+            title = { Text("Записать в базу?") },
+            text = {
+                Text(
+                    "Прислал: " + p.user.ifBlank { "—" } + "\nКогда: " + iosTime(p.at) +
+                        "\nПартия: " + p.title + " (" + p.code + ")" + "\nТип: " + IosLists.kindName(p.kind) +
+                        "\nСтрок: " + p.rows + " · Stück: " + iosQty(p.qty) + "\nПаллет/частей: " + p.parts +
+                        (if (prev != null && prev.ok) "\n\nВнимание: уже записано " + iosShort(prev.at) + ". Повторная запись заменит ту же часть, дублей не будет." else "") +
+                        "\n\nДанные попадут в журнал как отправленные самим работником. Когда у него появится интернет, его отправка заменит эту запись."
+                )
+            },
+            confirmButton = {
+                Button(enabled = !impBusy, onClick = {
+                    impBusy = true
+                    scope.launch {
+                        try {
+                            val st = IosLists.doImport(ctx, nm, p)
+                            impMsg = st.msg
+                            impTick++
+                        } finally {
+                            impBusy = false
+                            impAsk = null
+                        }
+                    }
+                }) { Text(if (impBusy) "Пишу…" else "Записать в базу") }
+            },
+            dismissButton = { TextButton(enabled = !impBusy, onClick = { impAsk = null }) { Text("Отмена") } }
+        )
     }
 
     delItem?.let { d ->

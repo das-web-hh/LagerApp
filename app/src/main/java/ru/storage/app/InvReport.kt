@@ -47,7 +47,11 @@ class InvRow(
  */
 object InvReport {
     private fun fmt(t: Long) = if (t > 0L) SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date(t)) else ""
-    private fun srcName(s: String) = if (s == "a") "App" else "Browser (Handy)"
+    /** src: "a" приложение / "h" браузер; суффикс "i" — часть внесена администратором из файла работника (Import). */
+    private fun srcName(s: String): String {
+        val base = if (s.startsWith("a")) "App" else "Browser (Handy)"
+        return if (s.endsWith("i")) "$base (Import)" else base
+    }
     private fun num(d: Double): String = BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
     private fun typName(k: String) = when (k) { "bware" -> "B-Ware"; "expired" -> "Abgelaufene Ware"; else -> "Inventur" }
     private fun key(r: InvRow) = r.barcode.trim().ifBlank { r.article.trim() }.ifBlank { r.name.trim().lowercase() }
@@ -79,7 +83,7 @@ object InvReport {
                     if (day < from || day > to) continue
                     out.add(
                         InvRow(
-                            code, party, p.optString("name").ifBlank { "?" }, p.optString("src"), p.optString("box"),
+                            code, party, p.optString("name").ifBlank { "?" }, p.optString("src") + (if (p.optBoolean("imp")) "i" else ""), p.optString("box"),
                             r.optString("n"), r.optString("a"), r.optString("b"), r.optDouble("q", 0.0),
                             r.optLong("ad"), first, last, r.optInt("x") == 1, r.optString("e").trim(), p.optString("ver"), kind
                         )

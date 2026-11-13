@@ -565,7 +565,8 @@ function saveCounts_(p) {
 }
 
 // ───────── журнал инвентаризации (кто, что, сколько, когда) ─────────
-// Файл INVLOG_<код>.json: parts[<ключ>] = {dev, name, src: 'h' браузер | 'a' приложение, ver, box, t, rows: [{n,a,b,q,t0,t1,ad,x}]}.
+// Файл INVLOG_<код>.json: parts[<ключ>] = {dev, name, src: 'h' браузер | 'a' приложение, ver, box, t, rows: [{n,a,b,q,t0,t1,ad,x}], imp?, impBy?, impAt?}.
+// imp:true — часть внесена администратором из файла работника (LGRP-….html); t у неё = время снимка из файла. Своя отправка работника заменяет такую часть и снимает пометку.
 // Каждое устройство присылает свой личный снимок по каждой своей коробке/паллете (замена). Другим работникам журнал НЕ отдаётся
 // никогда и в счёт/списки партии не попадает — читает его только администратор (action=invlog). Код APPINV — инвентаризация в приложении.
 function invLogFile_(code, create) {
@@ -620,6 +621,18 @@ function saveLog_(p) {
     if (st === 'del') return json_({ok: false, error: 'blocked', state: 'del'});
     if (st === 'stop') return json_({ok: false, error: 'blocked', state: 'stop'});
   }
+  // imp:1 (импорт файла работника) принимается только от администратора; от остальных поле игнорируется — часть пишется как обычно
+  var imp = false, impBy = '', impAt = 0, at = 0;
+  if (p.imp && p.token) {
+    try { checkAdmin_(p.token); imp = true; } catch (errImp) { imp = false; }
+  }
+  if (imp) {
+    impBy = String(p.impBy || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 40);
+    impAt = Number(p.impAt); if (!isFinite(impAt) || impAt <= 0) impAt = Date.now();
+    at = Number(p.at);
+    if (!isFinite(at) || at <= 0) return json_({ok: false, error: 'Нет времени снимка (at) в импортируемых данных.'});
+    if (at > Date.now() + 60000) at = Date.now();
+  }
   var ver = String(p.ver || '').replace(/[^0-9A-Za-z._-]/g, '').slice(0, 20);
   var name = String(p.name || '').slice(0, 40), src = p.src === 'a' ? 'a' : 'h', clean = [], skipped = 0;
   var parts = isArr_(p.parts) ? p.parts : [];
@@ -636,11 +649,22 @@ function saveLog_(p) {
     var f = invLogFile_(code, true);
     var data = JSON.parse(f.getBlob().getDataAsString('UTF-8'));
     data.parts = data.parts || {};
+    if (imp) {
+      // импорт ничего не затирает: сначала проверяем все части, потом пишем (всё или ничего)
+      for (var m = 0; m < clean.length; m++) {
+        var o2 = data.parts[clean[m].k];
+        if (!o2) continue;
+        if (o2.dev !== dev) return json_({ok: false, error: 'foreign', message: 'Эта часть журнала принадлежит другому устройству, импорт не выполнен.'});
+        if (Number(o2.t) > at) return json_({ok: false, error: 'stale', message: 'На сервере уже более свежие данные этого работника'});
+      }
+    }
     for (var j = 0; j < clean.length; j++) {
       var c = clean[j], old = data.parts[c.k];
       if (old && old.dev !== dev) continue;                                   // чужую запись не трогаем
       if (!old && Object.keys(data.parts).length >= 300) { skipped++; continue; }
-      data.parts[c.k] = {dev: dev, name: name, src: src, ver: ver, box: c.box, t: Date.now(), rows: c.rows};
+      var rec = {dev: dev, name: name, src: src, ver: ver, box: c.box, t: imp ? at : Date.now(), rows: c.rows};
+      if (imp) { rec.imp = true; rec.impBy = impBy; rec.impAt = impAt; }      // своя отправка работника пишет часть без imp — пометка снимается
+      data.parts[c.k] = rec;
     }
     f.setContent(JSON.stringify(data));
     if (skipped > 0) return json_({ok: false, error: 'limit', message: 'Журнал заполнен: максимум 300 частей на файл, ' + skipped + ' не сохранено.'});
@@ -664,6 +688,13 @@ function dayList_(from, to) {
   return out;
 }
 
+// Часть журнала для отчёта; imp/impBy/impAt — данные внесены администратором из файла работника
+function logPartOut_(key, day, p) {
+  var o = {key: key, dev: p.dev, name: p.name, src: p.src, ver: p.ver || '', box: p.box, t: p.t, rows: p.rows || [], imp: p.imp === true, impBy: p.impBy || '', impAt: p.impAt || 0};
+  if (day !== null) o.day = day;
+  return o;
+}
+
 // Только администратор (токен входа с ролью admin или общий TOKEN)
 function getInvLog_(params) {
   checkAdmin_(params.token);
@@ -676,19 +707,19 @@ function getInvLog_(params) {
       var df = invLogFile_('APPINV' + days[di], false);
       if (!df) continue;
       var dp = (JSON.parse(df.getBlob().getDataAsString('UTF-8')).parts) || {};
-      for (pk in dp) { seen[pk] = 1; plist.push({key: pk, day: days[di], dev: dp[pk].dev, name: dp[pk].name, src: dp[pk].src, ver: dp[pk].ver || '', box: dp[pk].box, t: dp[pk].t, rows: dp[pk].rows || []}); }
+      for (pk in dp) { seen[pk] = 1; plist.push(logPartOut_(pk, days[di], dp[pk])); }
     }
     var lf = invLogFile_('APPINV', false);
     if (lf) {
       var lp = (JSON.parse(lf.getBlob().getDataAsString('UTF-8')).parts) || {};
-      for (pk in lp) if (!seen[pk]) plist.push({key: pk, day: '', dev: lp[pk].dev, name: lp[pk].name, src: lp[pk].src, ver: lp[pk].ver || '', box: lp[pk].box, t: lp[pk].t, rows: lp[pk].rows || []});
+      for (pk in lp) if (!seen[pk]) plist.push(logPartOut_(pk, '', lp[pk]));
     }
     return json_({ok: true, code: code, title: 'Inventur (App)', empty: false, parts: plist});
   }
   var f = invLogFile_(code, false), list = [];
   if (f) {
     var parts = (JSON.parse(f.getBlob().getDataAsString('UTF-8')).parts) || {};
-    for (var k in parts) list.push({key: k, dev: parts[k].dev, name: parts[k].name, src: parts[k].src, ver: parts[k].ver || '', box: parts[k].box, t: parts[k].t, rows: parts[k].rows || []});
+    for (var k in parts) list.push(logPartOut_(k, null, parts[k]));
   }
   var title = /^APPINV(\d{8})?$/.test(code) ? 'Inventur (App)' + (code.length === 14 ? ' ' + code.substr(12, 2) + '.' + code.substr(10, 2) + '.' + code.substr(6, 4) : '') : '', empty = false, kind = '';
   if (!title) { var r = readBatch_(code); if (r.batch) { title = String(r.batch.title || ''); empty = r.batch.empty === true; kind = /^(bware|expired)$/.test(String(r.batch.kind || '')) ? String(r.batch.kind) : ''; } }

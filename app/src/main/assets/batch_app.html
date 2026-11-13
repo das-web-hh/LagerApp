@@ -236,9 +236,11 @@ function logRows(){pkInit();const T=BT.lg||(BT.lg={}),now=Date.now(),out=[];
    if(m){m.q+=q;m.t0=Math.min(m.t0,z.t0);m.t1=Math.max(m.t1,z.t1)}
    else{const o={n:r.name.trim().slice(0,200),a:String(r.article||art(r)||'').slice(0,40),b:String(r.barcode||'').slice(0,40),e:String(r.expiry||'').trim().slice(0,12),q:q,t0:z.t0,t1:z.t1,ad:r.extra?(r.ts||0):0,x:r.extra?1:0};MJ.set(mk2,o);rows.push(o)}});
   out.push({k:DEV.slice(0,16)+'_'+bid,box:b.name||'',rows})});return out}
-function logPush(now){if(!LOADED||!API||ST||!WHO||!DEV)return;const parts=logRows(),sg=JSON.stringify(parts);if(sg===LGS)return;
+/* Один общий payload журнала: его отправляет logPush и кладёт в файл «Отправить» (shareRep, поле log) — администратор может записать его в базу вместо работника */
+function logBody(){return{action:'log',code:CODE,dev:DEV,name:USER,src:'h',ver:'',parts:logRows()}}
+function logPush(now){if(!LOADED||!API||ST||!WHO||!DEV)return;const lb=logBody(),parts=lb.parts,sg=JSON.stringify(parts);if(sg===LGS)return;
  if(!now&&Date.now()-LGT<20000){clearTimeout(logT);logT=setTimeout(()=>logPush(),LGT+20050-Date.now());return}
- LGT=Date.now();const body=JSON.stringify({action:'log',code:CODE,dev:DEV,name:USER,src:'h',parts});
+ LGT=Date.now();const body=JSON.stringify(lb);
  fetch(API,{method:'POST',redirect:'follow',keepalive:body.length<60000,body}).then(r=>r.json()).then(j=>{if(j&&j.ok)LGS=sg}).catch(()=>{})}
 function boot(){const msg=t=>{$('#app').innerHTML='<p style="margin:40px 16px;text-align:center">'+t+'</p>'};
  if(!CODE||!/^https:\/\/script\.google(usercontent)?\.com\//.test(API))return msg('Ссылка неполная. Откройте её целиком или отсканируйте QR-код ещё раз.');
@@ -599,7 +601,10 @@ function shareRep(rules,out,list){
  let id='';try{id=localStorage.getItem('lgrpid')||'';if(!/^[a-z0-9]{4}$/.test(id)){id=rnd(4);localStorage.setItem('lgrpid',id)}}catch(e){id=''}
  if(!id)id=rnd(4);
  const name='LGRP-'+id+'-'+d.getFullYear()+z(d.getMonth()+1)+z(d.getDate())+'-'+z(d.getHours())+z(d.getMinutes())+z(d.getSeconds())+'-'+rnd(2)+'.html';
- const data={v:1,app:'lager',title:S.name,user:USER||'',dev:DEV||'',code:CODE||'',kind:window.BKIND||'',at:Date.now(),rows:list.map(({r,f})=>({n:r.name.trim(),a:String(art(r)||''),b:String(r.barcode||(byNm(r.name)||{}).barcode||''),q:f,e:String(r.expiry||'').trim()}))};
+ const at=Date.now();let lg=null;
+ if(DEV&&CODE){try{lg=logBody();lg.action='log'}catch(e){lg=null;note('Журнал не добавлен в файл: '+((e&&e.message)||e))}}
+ const data={v:lg?2:1,app:'lager',title:S.name,user:USER||'',dev:DEV||'',code:CODE||'',kind:window.BKIND||'',at:at,rows:list.map(({r,f})=>({n:r.name.trim(),a:String(art(r)||''),b:String(r.barcode||(byNm(r.name)||{}).barcode||''),q:f,e:String(r.expiry||'').trim()}))};
+ if(lg)data.log=lg;
  const css='@page{size:A4;margin:10mm}body{margin:8px;background:#fff;color:#000;font-family:"DejaVu Sans",Verdana,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}@media screen{.pg{margin:0 auto 14px;max-width:190mm;border-bottom:1px dashed #999}}'+rules;
  const html='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+esc(S.name)+'</title><style>'+css+'</style></head><body>'+out.join('')+'<script type="application/json" id="lagerp">'+JSON.stringify(data).replace(/</g,'\\u003c')+'<\/script></body></html>';
  const mk=t=>new File([html],name,{type:t});

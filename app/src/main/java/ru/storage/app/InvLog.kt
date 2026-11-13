@@ -1,6 +1,9 @@
 package ru.storage.app
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.FileProvider
+import java.io.File
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -99,6 +102,82 @@ object InvLog {
             val part = JSONObject().put("k", k).put("box", box).put("rows", rows)
             JSONObject().put("action", "log").put("code", if (daily) code + day else code).put("dev", dev).put("name", receiver.take(40))
                 .put("src", "a").put("ver", versionName(ctx)).put("parts", JSONArray().put(part))
+        }
+    }
+
+    /**
+     * Журнал задания одним объектом для файла LGRP (v:2, поле "log"): ровно то, что ушло бы действием log (без токена).
+     * Несколько дней APPINV сливаются в один объект с кодом APPINV — при записи в базу администратор делит их по дням обратно.
+     * null — нет строк. Главный поток.
+     */
+    fun fileLog(ctx: Context, job: InvJob, receiver: String, code: String): JSONObject? {
+        val ps = bodies(ctx.applicationContext, job, receiver, code).filter { (it.optJSONArray("parts")?.optJSONObject(0)?.optJSONArray("rows")?.length() ?: 0) > 0 }
+        if (ps.isEmpty()) return null
+        if (ps.size == 1) return ps[0]
+        val rows = JSONArray()
+        for (p in ps) {
+            val rs = p.optJSONArray("parts")?.optJSONObject(0)?.optJSONArray("rows") ?: continue
+            for (i in 0 until rs.length()) rows.put(rs.get(i))
+        }
+        val first = ps[0].optJSONArray("parts")!!.getJSONObject(0)
+        return JSONObject(ps[0].toString()).put("code", code)
+            .put("parts", JSONArray().put(JSONObject().put("k", first.optString("k")).put("box", first.optString("box")).put("rows", rows)))
+    }
+
+    private fun he(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    /**
+     * «Отправить файлом»: создаёт LGRP-<устройство>-<дата>-<время>-<2 символа>.html (отчёт + JSON v:2 с готовым журналом) и открывает
+     * системное «Поделиться». Администратор записывает такой файл в базу на экране «Списки с iPhone». Токен в файл не попадает.
+     * Возвращает текст ошибки или null. Главный поток.
+     */
+    fun shareFile(ctx: Context, job: InvJob, receiver: String, code: String, title: String): String? {
+        return try {
+            val app = ctx.applicationContext
+            val log = fileLog(app, job, receiver, code) ?: return "нет посчитанных товаров"
+            val at = System.currentTimeMillis()
+            val rows = JSONArray()
+            val html = StringBuilder()
+            val ttl = title.trim().ifBlank { "Inventur" }
+            html.append("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>").append(he(ttl))
+                .append("</title><style>body{font-family:Verdana,Arial,sans-serif;margin:8px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:3px;font-size:11pt}th{background:#e6e6e6}td.q{text-align:center;font-weight:700}</style></head><body><h1>")
+                .append(he(ttl)).append("</h1><div>").append(he(receiver)).append(" · ").append(
+                    SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).apply { timeZone = TimeZone.getTimeZone("Europe/Berlin") }.format(Date(at))
+                ).append("</div><table><tr><th>Nr.</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Stück</th><th>MHD</th></tr>")
+            var nr = 0
+            val ps = log.optJSONArray("parts")
+            if (ps != null) for (i in 0 until ps.length()) {
+                val rs = ps.optJSONObject(i)?.optJSONArray("rows") ?: continue
+                for (j in 0 until rs.length()) {
+                    val r = rs.optJSONObject(j) ?: continue
+                    val q = r.optDouble("q", 0.0)
+                    nr++
+                    rows.put(JSONObject().put("n", r.optString("n")).put("a", r.optString("a")).put("b", r.optString("b")).put("q", q).put("e", r.optString("e")))
+                    html.append("<tr><td>").append(nr).append("</td><td>").append(he(r.optString("a"))).append("</td><td>").append(he(r.optString("n")))
+                        .append("</td><td>").append(he(r.optString("b"))).append("</td><td class=q>").append(if (q % 1.0 == 0.0) q.toLong().toString() else q.toString())
+                        .append("</td><td>").append(he(r.optString("e"))).append("</td></tr>")
+                }
+            }
+            val meta = JSONObject().put("v", 2).put("app", "lager").put("title", ttl).put("user", receiver).put("dev", log.optString("dev"))
+                .put("code", log.optString("code")).put("kind", "").put("at", at).put("rows", rows).put("log", log)
+            html.append("</table><script type=\"application/json\" id=\"lagerp\">").append(meta.toString().replace("<", "\\u003c")).append("</scr").append("ipt></body></html>")
+            val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date(at))
+            val rnd = "abcdefghjkmnpqrstuvwxyz23456789".let { a -> (1..2).map { a.random() }.joinToString("") }
+            val name = "LGRP-" + log.optString("dev").take(4) + "-" + stamp + "-" + rnd + ".html"
+            val dir = File(app.cacheDir, "export").also { it.mkdirs() }
+            val f = File(dir, name)
+            f.writeText(html.toString(), Charsets.UTF_8)
+            val uri = FileProvider.getUriForFile(app, "${app.packageName}.files", f)
+            val i = Intent(Intent.ACTION_SEND).apply {
+                type = "text/html"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, name)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            ctx.startActivity(Intent.createChooser(i, "Отправить файлом").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            null
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
         }
     }
 
