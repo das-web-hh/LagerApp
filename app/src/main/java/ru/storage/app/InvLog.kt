@@ -132,9 +132,37 @@ object InvLog {
      * Возвращает текст ошибки или null. Главный поток.
      */
     fun shareFile(ctx: Context, job: InvJob, receiver: String, code: String, title: String): String? {
+        val log = try { fileLog(ctx, job, receiver, code) } catch (e: Exception) { return e.message ?: e.javaClass.simpleName }
+            ?: return "нет посчитанных товаров"
+        return exportFile(ctx, listOf(log), receiver, title)
+    }
+
+    /**
+     * «Отправить всё файлом»: журналы ВСЕХ сохранённых на телефоне заданий (инвентаризация и сборка/партии) одним файлом LGRP (v:2, поле "logs").
+     * Администратор записывает такой файл в базу одним нажатием (каждое задание — своим запросом). Возвращает текст ошибки или null. Главный поток.
+     */
+    fun shareAllFile(ctx: Context, receiver: String): String? {
         return try {
             val app = ctx.applicationContext
-            val log = fileLog(app, job, receiver, code) ?: return "нет посчитанных товаров"
+            val pr = prefs(app)
+            InventoryStore.load(app)
+            AsmStore.load(app)
+            val all = InventoryStore.jobs.toList().map { it to APP_CODE } + AsmStore.jobs.toList().map { it to (AsmStore.codeOf(it) ?: APP_CODE) }
+            val logs = ArrayList<JSONObject>()
+            for ((job, code0) in all) {
+                val code = pr.getString("c_" + job.id, null) ?: code0
+                val recv = pr.getString("r_" + job.id, null) ?: receiver
+                fileLog(app, job, recv, code)?.let { logs.add(it) }
+            }
+            if (logs.isEmpty()) "нет посчитанных товаров" else exportFile(app, logs, receiver, "Все задания (" + logs.size + ")")
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
+        }
+    }
+
+    private fun exportFile(ctx: Context, logs: List<JSONObject>, receiver: String, title: String): String? {
+        return try {
+            val app = ctx.applicationContext
             val at = System.currentTimeMillis()
             val rows = JSONArray()
             val html = StringBuilder()
@@ -145,25 +173,30 @@ object InvLog {
                     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).apply { timeZone = TimeZone.getTimeZone("Europe/Berlin") }.format(Date(at))
                 ).append("</div><table><tr><th>Nr.</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Stück</th><th>MHD</th></tr>")
             var nr = 0
-            val ps = log.optJSONArray("parts")
-            if (ps != null) for (i in 0 until ps.length()) {
-                val rs = ps.optJSONObject(i)?.optJSONArray("rows") ?: continue
-                for (j in 0 until rs.length()) {
-                    val r = rs.optJSONObject(j) ?: continue
-                    val q = r.optDouble("q", 0.0)
-                    nr++
-                    rows.put(JSONObject().put("n", r.optString("n")).put("a", r.optString("a")).put("b", r.optString("b")).put("q", q).put("e", r.optString("e")))
-                    html.append("<tr><td>").append(nr).append("</td><td>").append(he(r.optString("a"))).append("</td><td>").append(he(r.optString("n")))
-                        .append("</td><td>").append(he(r.optString("b"))).append("</td><td class=q>").append(if (q % 1.0 == 0.0) q.toLong().toString() else q.toString())
-                        .append("</td><td>").append(he(r.optString("e"))).append("</td></tr>")
+            for (log in logs) {
+                val ps = log.optJSONArray("parts") ?: continue
+                for (i in 0 until ps.length()) {
+                    val pt = ps.optJSONObject(i) ?: continue
+                    val rs = pt.optJSONArray("rows") ?: continue
+                    if (logs.size > 1) html.append("<tr><th colspan=6>").append(he(pt.optString("box"))).append(" · ").append(he(log.optString("code"))).append("</th></tr>")
+                    for (j in 0 until rs.length()) {
+                        val r = rs.optJSONObject(j) ?: continue
+                        val q = r.optDouble("q", 0.0)
+                        nr++
+                        rows.put(JSONObject().put("n", r.optString("n")).put("a", r.optString("a")).put("b", r.optString("b")).put("q", q).put("e", r.optString("e")))
+                        html.append("<tr><td>").append(nr).append("</td><td>").append(he(r.optString("a"))).append("</td><td>").append(he(r.optString("n")))
+                            .append("</td><td>").append(he(r.optString("b"))).append("</td><td class=q>").append(if (q % 1.0 == 0.0) q.toLong().toString() else q.toString())
+                            .append("</td><td>").append(he(r.optString("e"))).append("</td></tr>")
+                    }
                 }
             }
-            val meta = JSONObject().put("v", 2).put("app", "lager").put("title", ttl).put("user", receiver).put("dev", log.optString("dev"))
-                .put("code", log.optString("code")).put("kind", "").put("at", at).put("rows", rows).put("log", log)
+            val meta = JSONObject().put("v", 2).put("app", "lager").put("title", ttl).put("user", receiver).put("dev", logs[0].optString("dev"))
+                .put("code", if (logs.size == 1) logs[0].optString("code") else "").put("kind", "").put("at", at).put("rows", rows)
+            if (logs.size == 1) meta.put("log", logs[0]) else meta.put("logs", JSONArray(logs))
             html.append("</table><script type=\"application/json\" id=\"lagerp\">").append(meta.toString().replace("<", "\\u003c")).append("</scr").append("ipt></body></html>")
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date(at))
             val rnd = "abcdefghjkmnpqrstuvwxyz23456789".let { a -> (1..2).map { a.random() }.joinToString("") }
-            val name = "LGRP-" + log.optString("dev").take(4) + "-" + stamp + "-" + rnd + ".html"
+            val name = "LGRP-" + logs[0].optString("dev").take(4) + "-" + stamp + "-" + rnd + ".html"
             val dir = File(app.cacheDir, "export").also { it.mkdirs() }
             val f = File(dir, name)
             f.writeText(html.toString(), Charsets.UTF_8)

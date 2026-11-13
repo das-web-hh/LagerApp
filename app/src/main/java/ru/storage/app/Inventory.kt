@@ -347,12 +347,12 @@ fun InventoryScreen(receiver: String, onBack: () -> Unit) {
         InventoryEditor(open, receiver) { InventoryStore.openId = null }
     } else {
         BackHandler { onBack() }
-        InventoryHub(onBack)
+        InventoryHub(receiver, onBack)
     }
 }
 
 @Composable
-private fun InventoryHub(onBack: () -> Unit) {
+private fun InventoryHub(receiver: String, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var delJob by remember { mutableStateOf<InvJob?>(null) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -382,6 +382,15 @@ private fun InventoryHub(onBack: () -> Unit) {
                 }
             }
         }
+        OutlinedButton(
+            enabled = InventoryStore.jobs.isNotEmpty(),
+            onClick = {
+                val err = InvLog.shareAllFile(ctx, receiver)
+                if (err != null) Toast.makeText(ctx, "Не удалось создать файл: $err", Toast.LENGTH_LONG).show()
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) { Text("Отправить всё файлом (администратору)") }
+        Spacer(Modifier.height(6.dp))
         Button(
             onClick = {
                 val j = InventoryStore.add(ctx)

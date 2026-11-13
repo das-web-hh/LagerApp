@@ -203,10 +203,14 @@ object IosLists {
         val user = o.optString("user")
         val title = o.optString("title").ifBlank { name.substringBeforeLast('.') }
         val kind = o.optString("kind")
+        // "logs" — файл «Отправить всё» (несколько заданий), "log" — одно задание/партия, иначе файл v:1
+        val bases = ArrayList<JSONObject>()
+        val lgs = o.optJSONArray("logs")
         val lg = o.optJSONObject("log")
-        val base: JSONObject
-        if (lg != null) {
-            base = JSONObject(lg.toString())
+        if (lgs != null && lgs.length() > 0) {
+            for (i in 0 until lgs.length()) lgs.optJSONObject(i)?.let { bases.add(JSONObject(it.toString())) }
+        } else if (lg != null) {
+            bases.add(JSONObject(lg.toString()))
         } else {
             val src = o.optJSONArray("rows")
             val rows = JSONArray()
@@ -221,31 +225,38 @@ object IosLists {
             }
             if (rows.length() == 0) throw IllegalStateException("в файле нет строк")
             val dev = o.optString("dev").takeIf { idRe.matches(it) } ?: BatchShare.sha(BatchShare.normName(user.ifBlank { name })).take(32)
-            base = JSONObject().put("action", "log").put("code", o.optString("code")).put("dev", dev).put("name", user.take(40))
-                .put("src", "h").put("ver", "")
-                .put("parts", JSONArray().put(JSONObject().put("k", "imp_" + BatchShare.sha(name).take(16)).put("box", "Inventur").put("rows", rows)))
+            bases.add(
+                JSONObject().put("action", "log").put("code", o.optString("code")).put("dev", dev).put("name", user.take(40))
+                    .put("src", "h").put("ver", "")
+                    .put("parts", JSONArray().put(JSONObject().put("k", "imp_" + BatchShare.sha(name).take(16)).put("box", "Inventur").put("rows", rows)))
+            )
         }
-        val code = base.optString("code")
-        if (!idRe.matches(code)) throw IllegalStateException("в файле нет кода партии")
-        if (!idRe.matches(base.optString("dev"))) throw IllegalStateException("в файле нет кода устройства")
-        val parts = base.optJSONArray("parts") ?: throw IllegalStateException("в файле нет частей журнала")
+        if (bases.isEmpty()) throw IllegalStateException("в файле нет журнала")
         val bodies = ArrayList<JSONObject>()
-        if (code.startsWith(InvLog.APP_CODE)) {
-            // инвентаризация в приложении: файл дня = день первого ввода строки (как в InvLog)
-            val byDay = LinkedHashMap<String, JSONArray>()
-            for (pi in 0 until parts.length()) {
-                val p = parts.optJSONObject(pi) ?: continue
-                val rs = p.optJSONArray("rows") ?: continue
-                val perDay = LinkedHashMap<String, JSONArray>()
-                for (ri in 0 until rs.length()) {
-                    val r = rs.optJSONObject(ri) ?: continue
-                    val t0 = r.optLong("t0").takeIf { it > 0L } ?: r.optLong("ad").takeIf { it > 0L } ?: at
-                    perDay.getOrPut(InvLog.dayOf(t0)) { JSONArray() }.put(r)
+        val codes = ArrayList<String>()
+        for (base in bases) {
+            val code = base.optString("code")
+            if (!idRe.matches(code)) throw IllegalStateException("в файле нет кода партии")
+            if (!idRe.matches(base.optString("dev"))) throw IllegalStateException("в файле нет кода устройства")
+            val parts = base.optJSONArray("parts") ?: throw IllegalStateException("в файле нет частей журнала")
+            if (code !in codes) codes.add(code)
+            if (code.startsWith(InvLog.APP_CODE)) {
+                // инвентаризация в приложении: файл дня = день первого ввода строки (как в InvLog)
+                val byDay = LinkedHashMap<String, JSONArray>()
+                for (pi in 0 until parts.length()) {
+                    val p = parts.optJSONObject(pi) ?: continue
+                    val rs = p.optJSONArray("rows") ?: continue
+                    val perDay = LinkedHashMap<String, JSONArray>()
+                    for (ri in 0 until rs.length()) {
+                        val r = rs.optJSONObject(ri) ?: continue
+                        val t0 = r.optLong("t0").takeIf { it > 0L } ?: r.optLong("ad").takeIf { it > 0L } ?: at
+                        perDay.getOrPut(InvLog.dayOf(t0)) { JSONArray() }.put(r)
+                    }
+                    for ((d, arr) in perDay) byDay.getOrPut(d) { JSONArray() }.put(JSONObject().put("k", p.optString("k")).put("box", p.optString("box")).put("rows", arr))
                 }
-                for ((d, arr) in perDay) byDay.getOrPut(d) { JSONArray() }.put(JSONObject().put("k", p.optString("k")).put("box", p.optString("box")).put("rows", arr))
-            }
-            for ((d, ps) in byDay) bodies.add(JSONObject(base.toString()).put("code", InvLog.APP_CODE + d).put("parts", ps))
-        } else bodies.add(base)
+                for ((d, ps) in byDay) bodies.add(JSONObject(base.toString()).put("code", InvLog.APP_CODE + d).put("parts", ps))
+            } else bodies.add(base)
+        }
         var rowsN = 0
         var qty = 0.0
         var partsN = 0
@@ -259,7 +270,8 @@ object IosLists {
             }
         }
         if (rowsN == 0) throw IllegalStateException("в файле нет строк")
-        return ImpPlan(bodies, user.ifBlank { base.optString("name") }, at, code, title, kind, rowsN, qty, partsN, lg != null)
+        val who = user.ifBlank { bases[0].optString("name") }
+        return ImpPlan(bodies, who, at, codes.joinToString(", "), title, kind, rowsN, qty, partsN, lg != null || lgs != null)
     }
 
     private fun impPrefs(ctx: Context) = ctx.applicationContext.getSharedPreferences("ioslists_imp", Context.MODE_PRIVATE)

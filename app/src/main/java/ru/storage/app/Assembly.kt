@@ -241,12 +241,12 @@ fun AssemblyScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
     if (open != null) {
         AssemblyEditor(open, receiver) { AsmStore.openId = null }
     } else {
-        AssemblyHub(prefs, onBack)
+        AssemblyHub(prefs, receiver, onBack)
     }
 }
 
 @Composable
-private fun AssemblyHub(prefs: Prefs, onBack: () -> Unit) {
+private fun AssemblyHub(prefs: Prefs, receiver: String, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val clip = LocalClipboardManager.current
     var scanning by remember { mutableStateOf(false) }
@@ -285,6 +285,15 @@ private fun AssemblyHub(prefs: Prefs, onBack: () -> Unit) {
             modifier = Modifier.fillMaxWidth().height(64.dp)
         ) { Text("Добавить", style = MaterialTheme.typography.titleLarge) }
         Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            enabled = AsmStore.jobs.isNotEmpty(),
+            onClick = {
+                val err = InvLog.shareAllFile(ctx, receiver)
+                if (err != null) Toast.makeText(ctx, "Не удалось создать файл: $err", Toast.LENGTH_LONG).show()
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) { Text("Отправить всё файлом (администратору)") }
+        Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(enabled = !busy, modifier = Modifier.weight(1f).height(48.dp), onClick = { scanning = true }) {
                 Text(if (busy) "Загружаю…" else "Получить (QR)")
