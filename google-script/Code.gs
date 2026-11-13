@@ -623,8 +623,10 @@ function saveLog_(p) {
   var ver = String(p.ver || '').replace(/[^0-9A-Za-z._-]/g, '').slice(0, 20);
   var name = String(p.name || '').slice(0, 40), src = p.src === 'a' ? 'a' : 'h', clean = [], skipped = 0;
   var parts = isArr_(p.parts) ? p.parts : [];
+  if (parts.length > 50) return json_({ok: false, error: 'limit', message: 'Слишком много частей в одном запросе (максимум 50).'});
   for (var i = 0; i < parts.length && clean.length < 50; i++) {
     var pt = parts[i], key = String((pt && pt.k) || '');
+    if (pt && isArr_(pt.rows) && pt.rows.length > 3000) return json_({ok: false, error: 'limit', message: 'В части больше 3000 строк (максимум 3000), журнал не сохранён.'});
     if (!/^[A-Za-z0-9_-]{1,60}$/.test(key)) continue;
     clean.push({k: key, box: String(pt.box || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 60), rows: cleanLogRows_(pt.rows)});
   }
@@ -688,9 +690,9 @@ function getInvLog_(params) {
     var parts = (JSON.parse(f.getBlob().getDataAsString('UTF-8')).parts) || {};
     for (var k in parts) list.push({key: k, dev: parts[k].dev, name: parts[k].name, src: parts[k].src, ver: parts[k].ver || '', box: parts[k].box, t: parts[k].t, rows: parts[k].rows || []});
   }
-  var title = /^APPINV(\d{8})?$/.test(code) ? 'Inventur (App)' + (code.length === 14 ? ' ' + code.substr(12, 2) + '.' + code.substr(10, 2) + '.' + code.substr(6, 4) : '') : '', empty = false;
-  if (!title) { var r = readBatch_(code); if (r.batch) { title = String(r.batch.title || ''); empty = r.batch.empty === true; } }
-  return json_({ok: true, code: code, title: title, empty: empty, parts: list});
+  var title = /^APPINV(\d{8})?$/.test(code) ? 'Inventur (App)' + (code.length === 14 ? ' ' + code.substr(12, 2) + '.' + code.substr(10, 2) + '.' + code.substr(6, 4) : '') : '', empty = false, kind = '';
+  if (!title) { var r = readBatch_(code); if (r.batch) { title = String(r.batch.title || ''); empty = r.batch.empty === true; kind = /^(bware|expired)$/.test(String(r.batch.kind || '')) ? String(r.batch.kind) : ''; } }
+  return json_({ok: true, code: code, title: title, empty: empty, kind: kind, parts: list});
 }
 
 function clearInvLog_(p) {

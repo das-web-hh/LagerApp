@@ -14,6 +14,7 @@ class LagerApp : Application() {
         BWareDraft.app = this
         ArticleLookup.app = this
         watchNetwork()
+        IosLists.schedule(this)
     }
 
     /** Как только появляется интернет — файлы из очереди (сканы накладных, фото) уходят на Google Диск. */

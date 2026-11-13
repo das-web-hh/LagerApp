@@ -66,6 +66,7 @@ class MainActivity : FragmentActivity() {
         try { Incoming.restoreOpen(applicationContext) } catch (e: Exception) { }
         if (savedInstanceState == null) Incoming.handleIntent(this, intent)
         Nav.target = intent?.getStringExtra("open")
+        if (savedInstanceState == null) IosLists.handleIntent(intent)
         Journal.init(applicationContext)
         Ui.load(applicationContext)
         PrintCfg.load(applicationContext)
@@ -103,6 +104,7 @@ class MainActivity : FragmentActivity() {
         setIntent(intent)
         Incoming.handleIntent(this, intent)
         intent.getStringExtra("open")?.let { Nav.target = it }
+        IosLists.handleIntent(intent)
     }
 }
 
@@ -247,6 +249,15 @@ fun AppRoot() {
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+    // доступ к памяти для «Списки с iPhone»: один раз после установки и после каждого обновления (если ещё не выдан)
+    val storageSettings = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { IosLists.schedule(context) }
+    val storagePerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { IosLists.schedule(context) }
+    LaunchedEffect(loggedIn) {
+        if (loggedIn) {
+            kotlinx.coroutines.delay(2500)
+            if (!IosLists.hasAccess(context) && IosLists.markAsked(context)) IosLists.request(context, storageSettings, storagePerm)
+        }
+    }
 
     // после верного пароля: сначала анимация закрывает экран входа, и только потом открывается главный экран
     var splash by remember { mutableStateOf(false) }
@@ -350,6 +361,14 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     val swipePx = with(LocalDensity.current) { 90.dp.toPx() }
     LaunchedEffect(Nav.target) { if (Nav.target != null) selected = 0 }
     // пришла партия по ссылке (WhatsApp, QR): открываем «Прочее → Сборка»
+    // нажатие на уведомление «Новый список с iPhone» или открытие файла LGRP-… из файлового менеджера
+    LaunchedEffect(IosLists.wantOpen) {
+        if (IosLists.wantOpen) {
+            go(2)
+            TabNav.other = "Списки с iPhone"
+            IosLists.wantOpen = false
+        }
+    }
     LaunchedEffect(AsmStore.pendingOpen) {
         if (AsmStore.pendingOpen) {
             go(2)

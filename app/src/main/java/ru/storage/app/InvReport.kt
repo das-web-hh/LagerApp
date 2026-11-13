@@ -36,7 +36,9 @@ class InvRow(
     /** срок годности (MHD) строки; одинаковый товар с разными сроками — разные строки */
     val expiry: String = "",
     /** версия приложения, с которой отправлена запись (пусто — браузер или старая версия) */
-    val ver: String = ""
+    val ver: String = "",
+    /** тип партии: "" — инвентаризация, "bware" — испорченный товар, "expired" — просроченный */
+    val kind: String = ""
 )
 
 /**
@@ -47,6 +49,7 @@ object InvReport {
     private fun fmt(t: Long) = if (t > 0L) SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date(t)) else ""
     private fun srcName(s: String) = if (s == "a") "App" else "Browser (Handy)"
     private fun num(d: Double): String = BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+    private fun typName(k: String) = when (k) { "bware" -> "B-Ware"; "expired" -> "Abgelaufene Ware"; else -> "Inventur" }
     private fun key(r: InvRow) = r.barcode.trim().ifBlank { r.article.trim() }.ifBlank { r.name.trim().lowercase() }
 
     /** День yyyyMMdd (Берлин) → «dd.MM.yyyy» для подписей. */
@@ -62,6 +65,7 @@ object InvReport {
             val j = if (code == InvLog.APP_CODE) DriveApi.invLog(ctx, code, from, to) else DriveApi.invLog(ctx, code)
             if (!j.optBoolean("ok")) throw RuntimeException(j.optString("error", "ошибка Диска"))
             val party = j.optString("title").ifBlank { code }
+            val kind = j.optString("kind")
             val parts = j.optJSONArray("parts") ?: continue
             for (i in 0 until parts.length()) {
                 val p = parts.optJSONObject(i) ?: continue
@@ -77,7 +81,7 @@ object InvReport {
                         InvRow(
                             code, party, p.optString("name").ifBlank { "?" }, p.optString("src"), p.optString("box"),
                             r.optString("n"), r.optString("a"), r.optString("b"), r.optDouble("q", 0.0),
-                            r.optLong("ad"), first, last, r.optInt("x") == 1, r.optString("e").trim(), p.optString("ver")
+                            r.optLong("ad"), first, last, r.optInt("x") == 1, r.optString("e").trim(), p.optString("ver"), kind
                         )
                     )
                 }
@@ -98,7 +102,7 @@ object InvReport {
             m[k] = if (o == null) r else InvRow(
                 o.code, o.party, o.worker, o.src, o.box, o.name, o.article.ifBlank { r.article }, o.barcode.ifBlank { r.barcode }, o.qty + r.qty,
                 listOf(o.tAdd, r.tAdd).filter { it > 0L }.minOrNull() ?: 0L, listOf(o.tFirst, r.tFirst).filter { it > 0L }.minOrNull() ?: 0L,
-                maxOf(o.tLast, r.tLast), o.extra || r.extra, o.expiry, o.ver.ifBlank { r.ver }
+                maxOf(o.tLast, r.tLast), o.extra || r.extra, o.expiry, o.ver.ifBlank { r.ver }, o.kind
             )
         }
         return m.values.toList()
@@ -119,7 +123,8 @@ object InvReport {
     class H(val v: Any?)           // ячейка заголовка таблицы (жирная, серая)
     class Sheet(val name: String, val rows: List<List<Any?>>, val widths: List<Int>, val freeze: Boolean)
 
-    fun sheets(rows: List<InvRow>): List<Sheet> {
+    fun sheets(all: List<InvRow>): List<Sheet> {
+        val rows = all.filter { it.kind.isBlank() }
         val now = System.currentTimeMillis()
         val wk = workers(rows)
         val parties = rows.map { it.party }.distinct().joinToString(", ")
@@ -135,7 +140,7 @@ object InvReport {
             listOf(B("Erste Erfassung"), fmt(rows.map { it.tFirst }.filter { it > 0L }.minOrNull() ?: 0L)),
             listOf(B("Letzte Erfassung"), fmt(rows.maxOfOrNull { it.tLast } ?: 0L)),
             listOf(),
-            listOf("Quelle: Browser (Handy) = Seite der Partie, App = Fenster Inventur / Sammlung. Details siehe Blätter Mitarbeiter, Artikel, Protokoll.")
+            listOf("Quelle: Browser (Handy) = Seite der Partie, App = Fenster Inventur / Sammlung. Details siehe Blätter Mitarbeiter, Artikel, Protokoll sowie je ein Blatt pro Mitarbeiter.")
         )
         val mit = listOf<List<Any?>>(
             listOf(H("Mitarbeiter"), H("Positionen"), H("Erfassungszeilen"), H("Stück gesamt"), H("Erste Erfassung"), H("Letzte Erfassung"), H("Paletten / Listen"), H("Quelle"))
@@ -160,12 +165,75 @@ object InvReport {
                 srcName(it.src), if (it.extra) "Ja" else "Nein", it.ver
             )
         }
-        return listOf(
+        val base = listOf(
             Sheet("Zusammenfassung", sum, listOf(26, 60), false),
             Sheet("Mitarbeiter", mit, listOf(24, 12, 16, 14, 18, 18, 16, 20), true),
             Sheet("Artikel", art, listOf(16, 52, 18, 12, 14, 12, 12), true),
             Sheet("Protokoll", prot, listOf(18, 18, 18, 22, 24, 20, 14, 52, 18, 10, 12, 16, 13, 10), true)
         )
+        val kindSheets = listOf("expired", "bware").mapNotNull { k -> all.filter { it.kind == k }.takeIf { it.isNotEmpty() }?.let { kindSheet(typName(k), it) } }
+        return base + kindSheets + workerSheets(rows, (base + kindSheets).map { it.name } + listOf("Abgelaufene Ware", "B-Ware"))
+    }
+
+    /** Лист «Abgelaufene Ware» / «B-Ware»: все записи с полной информацией, по времени, итоги по дням и общий итог. */
+    private fun kindSheet(name: String, l: List<InvRow>): Sheet {
+        fun tOf(r: InvRow) = if (r.tFirst > 0L) r.tFirst else r.tLast
+        val sorted = l.sortedBy { tOf(it) }
+        val out = ArrayList<List<Any?>>()
+        out.add(listOf(H("Datum"), H("Uhrzeit"), H("Mitarbeiter"), H("Partie"), H("Palette/Liste"), H("Artikel-Nr."), H("Artikelbezeichnung"), H("EAN"), H("Menge"), H("MHD"), H("Quelle"), H("Version"), H("Hinzugefügt")))
+        sorted.forEach {
+            val t = tOf(it)
+            out.add(listOf(dateB(t), timeB(t), it.worker, it.party, it.box, it.article, it.name, it.barcode, it.qty, it.expiry, srcName(it.src), it.ver, if (it.tAdd > 0L) dateB(it.tAdd) + " " + timeB(it.tAdd) else ""))
+        }
+        out.add(listOf())
+        val byDay = sorted.groupBy { InvLog.dayOf(tOf(it)) }.toSortedMap()
+        if (byDay.size > 1) byDay.forEach { (d, dl) -> out.add(listOf(B("Stück " + dayLabel(d)), null, null, null, null, null, null, null, B(dl.sumOf { it.qty }))) }
+        out.add(listOf(B("Stück gesamt"), null, null, null, null, null, null, null, B(sorted.sumOf { it.qty })))
+        return Sheet(name, out, listOf(12, 10, 22, 24, 20, 14, 52, 18, 10, 12, 16, 10, 18), true)
+    }
+
+    private val berlinTz: TimeZone = TimeZone.getTimeZone("Europe/Berlin")
+    private fun dateB(t: Long) = SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).apply { timeZone = berlinTz }.format(Date(t))
+    private fun timeB(t: Long) = SimpleDateFormat("HH:mm:ss", Locale.GERMANY).apply { timeZone = berlinTz }.format(Date(t))
+
+    /** Имя листа Excel: до 31 символа, без : \ / ? * [ ], не пустое, не начинается/не кончается апострофом, без повторов (регистр не важен). */
+    private fun sheetName(raw: String, taken: MutableSet<String>): String {
+        var n = raw.replace(Regex("[:\\/?*\\[\\]]"), " ").replace(Regex("\\s+"), " ").trim().trim('\'').trim()
+        if (n.isEmpty()) n = "Mitarbeiter ?"
+        if (n.length > 31) n = n.substring(0, 31).trim().trim('\'').trim()
+        var cand = n
+        var i = 2
+        while (!taken.add(cand.lowercase())) {
+            val suf = " ($i)"
+            cand = n.take(31 - suf.length).trim() + suf
+            i++
+        }
+        return cand
+    }
+
+    /** По одному листу на каждого работника: все его записи по времени, итоги по дням и общий итог Stück gesamt. */
+    private fun workerSheets(rows: List<InvRow>, reserved: List<String>): List<Sheet> {
+        val taken = reserved.map { it.lowercase() }.toMutableSet()
+        val head = listOf<Any?>(
+            H("Datum"), H("Uhrzeit"), H("Partie"), H("Palette/Liste"), H("Artikel-Nr."), H("Artikelbezeichnung"),
+            H("EAN"), H("Menge"), H("MHD"), H("Quelle"), H("Version")
+        )
+        val widths = listOf(12, 10, 24, 20, 14, 52, 18, 10, 12, 16, 10)
+        return rows.groupBy { it.worker }.toSortedMap(compareBy<String> { it.lowercase() }).map { (w, l) ->
+            fun tOf(r: InvRow) = if (r.tFirst > 0L) r.tFirst else r.tLast
+            val sorted = l.sortedBy { tOf(it) }
+            val out = ArrayList<List<Any?>>()
+            out.add(head)
+            sorted.forEach {
+                val t = tOf(it)
+                out.add(listOf(dateB(t), timeB(t), it.party, it.box, it.article, it.name, it.barcode, it.qty, it.expiry, srcName(it.src), it.ver))
+            }
+            out.add(listOf())
+            val byDay = sorted.groupBy { InvLog.dayOf(tOf(it)) }.toSortedMap()
+            if (byDay.size > 1) byDay.forEach { (d, dl) -> out.add(listOf(B("Stück " + dayLabel(d)), null, null, null, null, null, null, B(dl.sumOf { it.qty }))) }
+            out.add(listOf(B("Stück gesamt"), null, null, null, null, null, null, B(sorted.sumOf { it.qty })))
+            Sheet(sheetName(w, taken), out, widths, true)
+        }
     }
 
     private fun xml(s: String): String {
@@ -276,13 +344,15 @@ object InvReport {
         sb.append("<html><head><meta charset=\"utf-8\"><style>@page{size:A4 landscape;margin:10mm}body{font:11px/1.3 Arial,sans-serif;color:#000}h1{font-size:18px;margin:0 0 6px}h2{font-size:14px;margin:14px 0 4px}")
         sb.append("table{border-collapse:collapse;width:100%}th,td{border:1px solid #444;padding:2px 4px;text-align:left;vertical-align:top}th{background:#e6e6e6}td.n{text-align:right}tr{page-break-inside:avoid}</style></head><body>")
         sb.append("<h1>Inventurbericht – Alfaplan</h1><div>Erstellt am ${fmt(System.currentTimeMillis())} · Partie / Liste: ${he(rows.map { it.party }.distinct().joinToString(", "))}</div>")
-        val wk = workers(rows)
-        sb.append("<div>Mitarbeiter: ${wk.size} · Artikel: ${rows.map { key(it) }.distinct().size} · Erfassungszeilen: ${rows.size} · <b>Stück gesamt: ${num(rows.sumOf { it.qty })}</b></div>")
+        val inv = rows.filter { it.kind.isBlank() }
+        val wk = workers(inv)
+        sb.append("<div>Mitarbeiter: ${wk.size} · Artikel: ${inv.map { key(it) }.distinct().size} · Erfassungszeilen: ${inv.size} · <b>Stück gesamt: ${num(inv.sumOf { it.qty })}</b></div>")
+        listOf("expired", "bware").forEach { k -> rows.filter { it.kind == k }.takeIf { it.isNotEmpty() }?.let { sb.append("<div>${typName(k)}: Erfassungszeilen ${it.size} · <b>Stück gesamt: ${num(it.sumOf { x -> x.qty })}</b></div>") } }
         sb.append("<h2>Mitarbeiter</h2><table><tr><th>Mitarbeiter</th><th>Positionen</th><th>Stück gesamt</th><th>Erste Erfassung</th><th>Letzte Erfassung</th><th>Quelle</th></tr>")
         wk.forEach { sb.append("<tr><td>${he(it.name)}</td><td class=n>${it.items}</td><td class=n>${num(it.pcs)}</td><td>${fmt(it.first)}</td><td>${fmt(it.last)}</td><td>${he(it.src)}</td></tr>") }
-        sb.append("</table><h2>Protokoll</h2><table><tr><th>Zeit</th><th>Mitarbeiter</th><th>Palette / Liste</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Menge</th><th>MHD</th><th>Hinzugefügt</th><th>Quelle</th><th>Version</th></tr>")
+        sb.append("</table><h2>Protokoll</h2><table><tr><th>Zeit</th><th>Typ</th><th>Mitarbeiter</th><th>Palette / Liste</th><th>Artikel-Nr.</th><th>Artikelbezeichnung</th><th>EAN</th><th>Menge</th><th>MHD</th><th>Hinzugefügt</th><th>Quelle</th><th>Version</th></tr>")
         rows.forEach {
-            sb.append("<tr><td>${fmt(it.tLast)}</td><td>${he(it.worker)}</td><td>${he(it.box)}</td><td>${he(it.article)}</td><td>${he(it.name)}</td><td>${he(it.barcode)}</td><td class=n>${num(it.qty)}</td><td>${he(it.expiry)}</td><td>${fmt(it.tAdd)}</td><td>${he(srcName(it.src))}</td><td>${he(it.ver)}</td></tr>")
+            sb.append("<tr><td>${fmt(it.tLast)}</td><td>${typName(it.kind)}</td><td>${he(it.worker)}</td><td>${he(it.box)}</td><td>${he(it.article)}</td><td>${he(it.name)}</td><td>${he(it.barcode)}</td><td class=n>${num(it.qty)}</td><td>${he(it.expiry)}</td><td>${fmt(it.tAdd)}</td><td>${he(srcName(it.src))}</td><td>${he(it.ver)}</td></tr>")
         }
         sb.append("</table></body></html>")
         return sb.toString()
@@ -331,6 +401,7 @@ fun InvReportScreen(onBack: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf("") }
     var clearDlg by remember { mutableStateOf(false) }
+    val wsel = remember { mutableStateMapOf<String, Boolean>() }
     // период отчёта: по умолчанию сегодня (Berlin)
     var fromTxt by remember { mutableStateOf(dayText(0)) }
     var toTxt by remember { mutableStateOf(dayText(0)) }
@@ -339,7 +410,7 @@ fun InvReportScreen(onBack: () -> Unit) {
     val rangeOk = fromKey != null && toKey != null && fromKey <= toKey
     fun setRange(a: String, b: String) { fromTxt = a; toTxt = b; rows = null; msg = "" }
     val list = listOf(InvLog.APP_CODE to "Инвентаризация в приложении") +
-        BatchStore.batches.toList().filter { it.link.isNotBlank() }.map { it.code to (it.title + if (it.empty) " (пустая)" else "") }
+        BatchStore.batches.toList().filter { it.link.isNotBlank() }.map { it.code to (it.title + (if (it.kind == "bware") " · B-Ware" else if (it.kind == "expired") " · просрочка" else if (it.empty) " (пустая)" else "")) }
     fun chosen() = list.map { it.first }.filter { sel[it] != false }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -395,6 +466,7 @@ fun InvReportScreen(onBack: () -> Unit) {
                         try {
                             val r = KeepAlive.run(app, "Отчёт инвентаризации") { withContext(Dispatchers.IO) { InvReport.fetch(app, codes, dFrom, dTo) } }
                             rows = r
+                            wsel.clear()
                             val per = if (dFrom == dTo) InvReport.dayLabel(dFrom) else InvReport.dayLabel(dFrom) + " – " + InvReport.dayLabel(dTo)
                             msg = if (r.isEmpty()) "За $per записей нет." else "$per: записей ${r.size}, работников ${r.map { it.worker }.distinct().size}"
                         } catch (e: Exception) {
@@ -409,16 +481,26 @@ fun InvReportScreen(onBack: () -> Unit) {
         if (msg.isNotBlank()) Text(msg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
         val r = rows
         if (r != null && r.isNotEmpty()) {
+            val shown = remember(r, wsel.toMap()) { r.filter { wsel[it.worker] != false } }
+            Text("Работники (отметьте нужных):", style = MaterialTheme.typography.labelMedium)
+            Column(Modifier.heightIn(max = 120.dp).verticalScroll(rememberScrollState())) {
+                r.map { it.worker }.distinct().sortedBy { it.lowercase() }.forEach { w ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = wsel[w] != false, onCheckedChange = { wsel[w] = it })
+                        Text(w, maxLines = 1)
+                    }
+                }
+            }
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(
-                    enabled = !busy, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp),
+                    enabled = !busy && shown.isNotEmpty(), modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp),
                     onClick = {
                         busy = true
                         val app = ctx.applicationContext
                         scope.launch {
                             try {
-                                val f = withContext(Dispatchers.IO) { InvReport.writeXlsx(app, r) }
+                                val f = withContext(Dispatchers.IO) { InvReport.writeXlsx(app, shown) }
                                 InvReport.share(ctx, f)
                             } catch (e: Exception) {
                                 Toast.makeText(app, "Не удалось создать Excel: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
@@ -430,7 +512,7 @@ fun InvReportScreen(onBack: () -> Unit) {
                 ) { Text("Excel · отправить") }
                 OutlinedButton(
                     modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp),
-                    onClick = { Printer.print(ctx, "Inventurbericht", InvReport.html(r)) }
+                    enabled = shown.isNotEmpty(), onClick = { Printer.print(ctx, "Inventurbericht", InvReport.html(shown)) }
                 ) { Text("Печать") }
                 OutlinedButton(
                     modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp),
@@ -438,7 +520,7 @@ fun InvReportScreen(onBack: () -> Unit) {
                 ) { Text("Очистить") }
             }
             Spacer(Modifier.height(6.dp))
-            val html = remember(r) { InvReport.html(r) }
+            val html = remember(shown) { InvReport.html(shown) }
             HtmlPreview(html, Modifier.weight(1f).fillMaxWidth())
         }
     }

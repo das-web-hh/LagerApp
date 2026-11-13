@@ -467,6 +467,7 @@ class WorkService : Service() {
 class WorkBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         WorkTracker.ensureService(context)
+        IosLists.schedule(context)
     }
 }
 

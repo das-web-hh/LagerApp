@@ -61,6 +61,8 @@ class Batch(val id: String, title: String, val created: Long) {
     var names by mutableStateOf("")
     /** пустая партия: список изначально пуст, получатель сам добавляет и печатает товары, каждая его партия тоже пустая */
     var empty = false
+    /** тип пустой партии: "" — обычная, "bware" — испорченный товар (B-Ware), "expired" — просроченный товар */
+    var kind = ""
     val rows = mutableStateListOf<BatchRow>()
     /** ссылка последней отправки ("" — ещё не отправлялась) */
     var link by mutableStateOf("")
@@ -92,6 +94,7 @@ object BatchStore {
                 b.pubHash = o.optString("ph")
                 b.names = o.optString("nm")
                 b.empty = o.optBoolean("em", false)
+                b.kind = o.optString("kd")
                 val rs = o.optJSONArray("rows")
                 if (rs != null) for (k in 0 until rs.length()) {
                     val r = rs.optJSONObject(k) ?: continue
@@ -112,17 +115,18 @@ object BatchStore {
                 b.rows.toList().forEach { r ->
                     rs.put(JSONObject().put("n", r.name).put("q", r.qty).put("b", r.barcode).put("a", r.article).put("d", r.done))
                 }
-                a.put(JSONObject().put("id", b.id).put("t", b.title).put("at", b.created).put("l", b.link).put("ph", b.pubHash).put("nm", b.names).put("em", b.empty).put("rows", rs))
+                a.put(JSONObject().put("id", b.id).put("t", b.title).put("at", b.created).put("l", b.link).put("ph", b.pubHash).put("nm", b.names).put("em", b.empty).put("kd", b.kind).put("rows", rs))
             }
             file(ctx).writeText(a.toString())
         } catch (e: Exception) {
         }
     }
 
-    fun create(ctx: Context, title: String, rows: List<BatchRow>, empty: Boolean = false): Batch {
+    fun create(ctx: Context, title: String, rows: List<BatchRow>, empty: Boolean = false, kind: String = ""): Batch {
         val now = System.currentTimeMillis()
         val b = Batch(UUID.randomUUID().toString(), title.ifBlank { (if (empty) "Пустая партия " else "Партия ") + fmtTime(now) }, now)
         b.empty = empty
+        b.kind = kind
         b.rows.addAll(rows)
         batches.add(0, b)
         save(ctx)
@@ -185,6 +189,7 @@ object BatchShare {
         }
         val o = JSONObject().put("v", 1).put("code", b.code).put("title", b.title).put("at", b.created).put("rows", rs)
         if (b.empty) o.put("empty", true)
+        if (b.kind.isNotBlank()) o.put("kind", b.kind)
         if (withAuth) o.put("auth", auth(b, cfg))
         return o.toString()
     }
@@ -434,6 +439,7 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
     var delBatch by remember { mutableStateOf<Batch?>(null) }
     /** окно названия для пустой партии (null — закрыто) */
     var emptyName by remember { mutableStateOf<String?>(null) }
+    var emptyKind by remember { mutableStateOf("") }
     /** партия, в которую докидываем товары; null — создаём новую */
     var target by remember { mutableStateOf<Batch?>(null) }
 
@@ -584,7 +590,7 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
                             Column(Modifier.weight(1f)) {
                                 Text(b.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    fmtTime(b.created) + (if (b.empty) " · пустая" else " · позиций: ${b.rows.size}") + if (b.link.isNotBlank()) " · отправлена" else "",
+                                    fmtTime(b.created) + (if (b.kind == "bware") " · B-Ware" else if (b.kind == "expired") " · просрочка" else if (b.empty) " · пустая" else " · позиций: ${b.rows.size}") + if (b.link.isNotBlank()) " · отправлена" else "",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -609,8 +615,19 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { addDlg = false; picker.launch(arrayOf("*/*")) }) { Text("Из файла (Excel)") }
                     if (target == null) OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                         addDlg = false
+                        emptyKind = ""
                         emptyName = "Пустая партия " + fmtTime(System.currentTimeMillis())
                     }) { Text("Пустая партия") }
+                    if (target == null) OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                        addDlg = false
+                        emptyKind = "bware"
+                        emptyName = "B-Ware " + fmtTime(System.currentTimeMillis())
+                    }) { Text("Испорченные товары (B-Ware)") }
+                    if (target == null) OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                        addDlg = false
+                        emptyKind = "expired"
+                        emptyName = "Abgelaufene Ware " + fmtTime(System.currentTimeMillis())
+                    }) { Text("Просроченные товары") }
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                         addDlg = false
                         if (!AiCfg.ready(ctx)) {
@@ -626,7 +643,7 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
     emptyName?.let { nm ->
         AlertDialog(
             onDismissRequest = { emptyName = null },
-            title = { Text("Пустая партия") },
+            title = { Text(if (emptyKind == "bware") "B-Ware (испорченные)" else if (emptyKind == "expired") "Просроченные товары" else "Пустая партия") },
             text = {
                 Column {
                     Text("Список пуст: получатель сам добавляет товары (поиск, сканер, «＋») и печатает. Переключатель партий в HTML тоже создаёт пустые партии.", style = MaterialTheme.typography.bodySmall)
@@ -636,7 +653,7 @@ private fun BatchesScreenImpl(prefs: Prefs, onBack: () -> Unit) {
             },
             confirmButton = {
                 Button(onClick = {
-                    BatchStore.openId = BatchStore.create(ctx, nm.trim(), emptyList(), empty = true).id
+                    BatchStore.openId = BatchStore.create(ctx, nm.trim(), emptyList(), empty = true, kind = emptyKind).id
                     emptyName = null
                 }) { Text("Создать") }
             },

@@ -139,7 +139,7 @@ object Incoming {
             }
             return
         }
-        if (uris.isNotEmpty()) thread { uris.forEach { if (!batchFromHtml(ctx, it)) accept(ctx, it) } }
+        if (uris.isNotEmpty()) thread { uris.forEach { if (!IosLists.takeUri(ctx, it) && !batchFromHtml(ctx, it)) accept(ctx, it) } }
     }
 }
 

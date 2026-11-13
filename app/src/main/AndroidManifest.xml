@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
@@ -37,6 +40,7 @@
     <application
         android:name=".LagerApp"
         android:allowBackup="false"
+        android:requestLegacyExternalStorage="true"
         android:largeHeap="true"
         android:usesCleartextTraffic="false"
         android:label="Warehouse"
@@ -83,6 +87,17 @@
                 <data android:scheme="file" />
                 <data android:mimeType="text/html" />
             </intent-filter>
+            <!-- присланный список с iPhone (LGRP-….html) открывается через Warehouse, даже если файловый менеджер не указал тип -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*LGRP-.*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*LGRP-.*" />
+            </intent-filter>
             <!-- «Открыть через…» PDF -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -117,6 +132,10 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/scan_widget_info" />
         </receiver>
+        <service
+            android:name=".IosListsJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <receiver
             android:name=".WorkBootReceiver"
             android:exported="false">
