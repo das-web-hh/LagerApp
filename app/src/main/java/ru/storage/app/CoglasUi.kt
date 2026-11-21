@@ -299,7 +299,7 @@ private fun CgTopBar(tab: Int, onBack: () -> Unit, onRefresh: () -> Unit, onHome
                 val sub = when (tab) {
                     0 -> "Заказы на приход"
                     1 -> "Infoscan: штрихкод или номер LE"
-                    2 -> if (CoglasWeb.trOn) "Сайт · перевод на русский" else "Сайт · оригинал (немецкий)"
+                    2 -> if (CoglasWeb.trOn && !CoglasWeb.trSafe) "Сайт · перевод на русский" else if (CoglasWeb.trOn) "Сайт · без перевода (авария)" else "Сайт · оригинал (немецкий)"
                     else -> "Инструменты и перевод"
                 }
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

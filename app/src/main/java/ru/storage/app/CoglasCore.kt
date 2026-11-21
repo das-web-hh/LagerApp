@@ -104,6 +104,9 @@ object CoglasWeb {
     var trNote by mutableStateOf("")
     /** Сколько пакетов текста сейчас переводится (для индикатора на экране). */
     var trBusy by mutableIntStateOf(0)
+    /** Перевод временно отключён сторожем: страница с ним не отрисовалась. */
+    var trSafe by mutableStateOf(false)
+    private var watchToken = 0
     /** Меняется, когда WebView пришлось создать заново (система убила его процесс). */
     var viewKey by mutableIntStateOf(0)
     var lastRaw = ""
@@ -200,7 +203,7 @@ object CoglasWeb {
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
-                if (hostOk(url)) view.evaluateJavascript(script, null)
+                if (hostOk(url)) { view.evaluateJavascript(script, null); watch(view) }
                 canGoBack = view.canGoBack()
             }
 
@@ -259,6 +262,33 @@ object CoglasWeb {
         CookieManager.getInstance().flush()
     }
 
+    /**
+     * Сторож: через 25 с после загрузки смотрим, что на странице. Если перевод уже запущен, а страница пустая —
+     * перезагружаем сайт без перевода (сайт важнее перевода). Если перевод даже не стартовал — виноват не он.
+     */
+    private fun watch(view: WebView) {
+        val token = ++watchToken
+        main.postDelayed({
+            if (token != watchToken || web !== view || !trOn) return@postDelayed
+            if (bridge.translateOn.not()) return@postDelayed
+            view.evaluateJavascript("(document.body?document.body.innerText.trim().length:0)+'|'+(window.__cgStat||'')") { raw ->
+                val v = (raw ?: "").trim('"')
+                val len = v.substringBefore('|').toIntOrNull() ?: return@evaluateJavascript
+                val stat = v.substringAfter('|', "")
+                if (len >= 40) return@evaluateJavascript
+                when (stat) {
+                    "on", "off:loop" -> {
+                        trSafe = true
+                        bridge.translateOn = false
+                        trNote = "Сайт не отрисовался с переводом — открыт без перевода."
+                        view.reload()
+                    }
+                    else -> trNote = "Сайт не вышел с экрана загрузки (перевод ещё не запускался). Проверьте интернет и вход."
+                }
+            }
+        }, 25000L)
+    }
+
     private fun recreateView() {
         val old = web ?: return
         (old.parent as? ViewGroup)?.removeView(old)
@@ -288,6 +318,7 @@ object CoglasWeb {
     fun setTranslate(ctx: Context, on: Boolean) {
         CoglasTr.setEnabled(ctx, on)
         trOn = on
+        trSafe = false
         bridge.translateOn = on
         // выключили — страница перезагружается и снова показывается по-немецки; включили — переводится
         web?.reload()

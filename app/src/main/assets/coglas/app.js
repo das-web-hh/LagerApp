@@ -9,13 +9,10 @@
 
   // ---------- вид приложения, а не сайта ----------
   var CSS = [
-    'html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overscroll-behavior:none;}',
+    'html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;}',
     '*{-webkit-tap-highlight-color:transparent;}',
-    'body{-webkit-font-smoothing:antialiased;-webkit-touch-callout:none;overscroll-behavior:none;}',
     '::-webkit-scrollbar{display:none;width:0;height:0;}',
-    'a,button,[role=button],[role=tab],[role=menuitem],[role=option],input[type=button],input[type=submit],select,label{touch-action:manipulation;}',
-    'button,input[type=button],input[type=submit],[role=button]{min-height:40px;}',
-    'input:not([type=checkbox]):not([type=radio]),select,textarea{min-height:40px;font-size:16px !important;}'
+    'a,button,[role=button],[role=tab],[role=menuitem],[role=option],input[type=button],input[type=submit],select,label{touch-action:manipulation;}'
   ].join('\n');
 
   function addStyle(){
@@ -38,7 +35,25 @@
   // словарь (немецкий -> русский) подставляет приложение; остальное переводит ИИ и запоминает
   var MAP = window.__cgMap = (function(){ try { return JSON.parse('__DICT__'); } catch (e) { return {}; } })();
  
+  function log(s){ try { window.WmsBridge.log('CG ' + s); } catch (e) {} }
+  window.__cgStat = 'wait';
+
   var orig = new WeakMap();
+  var cnt = new WeakMap();
+  var ops = 0, opsT = Date.now();
+  function guard(){
+    // защита от «пинг-понга» с сайтом: если правок слишком много в секунду — перевод отключается
+    var now = Date.now();
+    if (now - opsT > 1000) { ops = 0; opsT = now; }
+    if (++ops > 600) {
+      window.__cgTr = false;
+      window.__cgStat = 'off:loop';
+      try { mo.disconnect(); } catch (e) {}
+      log('loop guard: translation stopped');
+      return false;
+    }
+    return true;
+  }
   var pending = {};
   var asked = {};
   var timer = null;
@@ -94,8 +109,12 @@
     if (!cur) return;
     var o = orig.get(n);
     if (o && o === cur) return;
+    var c = cnt.get(n) || 0;
+    if (c > 6) return;
     var out = convert(cur);
     if (out !== null && out !== cur) {
+      if (!guard()) return;
+      cnt.set(n, c + 1);
       orig.set(n, out);
       n.nodeValue = out;
     }
@@ -167,7 +186,6 @@
 
   function start(){
     addStyle();
-    fixViewport();
     try {
       mo.observe(document.documentElement, {
         childList: true, subtree: true, characterData: true,
@@ -177,9 +195,34 @@
     walk(document.body || document.documentElement);
   }
 
-  // сайту даём полностью загрузиться и построить страницу, и только потом вмешиваемся
+  // Сайту не мешаем, пока он грузится: ждём, когда заставка «loading» исчезнет и страница затихнет
   function boot(){
-    setTimeout(function(){ try { start(); } catch (e) {} }, 500);
+    var t0 = Date.now(), last = Date.now(), idle = null;
+    try {
+      idle = new MutationObserver(function(){ last = Date.now(); });
+      idle.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
+    (function wait(){
+      var txt = '';
+      try { txt = document.body ? (document.body.innerText || '').trim() : ''; } catch (e) {}
+      var splash = txt.length < 40 || (/loading/i.test(txt) && txt.length < 80);
+      var quiet = Date.now() - last > 800;
+      var waited = Date.now() - t0;
+      if (!splash && quiet) {
+        try { if (idle) idle.disconnect(); } catch (e) {}
+        window.__cgStat = 'on';
+        log('translation started after ' + waited + ' ms');
+        try { start(); } catch (e) { log('start error ' + e); }
+        return;
+      }
+      if (waited > 40000) {
+        try { if (idle) idle.disconnect(); } catch (e) {}
+        window.__cgStat = 'nostart';
+        log('site stayed on loading screen; translation never started');
+        return;
+      }
+      setTimeout(wait, 300);
+    })();
   }
   if (document.readyState === 'complete') boot();
   else window.addEventListener('load', boot);
