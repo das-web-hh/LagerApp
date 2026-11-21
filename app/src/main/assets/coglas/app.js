@@ -1,6 +1,11 @@
 (function(){
   if (window.__cgApp) return;
   window.__cgApp = true;
+  var TR = true;
+  try { TR = window.WmsBridge ? !!window.WmsBridge.trOn() : true; } catch (e) { TR = true; }
+  window.__cgTr = TR;
+  // перевод выключен: страница не меняется вообще (ни стиль, ни перевод)
+  if (!TR) return;
 
   // ---------- вид приложения, а не сайта ----------
   var CSS = [
@@ -32,8 +37,7 @@
   // ---------- перевод на русский ----------
   // словарь (немецкий -> русский) подставляет приложение; остальное переводит ИИ и запоминает
   var MAP = window.__cgMap = (function(){ try { return JSON.parse('__DICT__'); } catch (e) { return {}; } })();
-  try { window.__cgTr = window.WmsBridge ? !!window.WmsBridge.trOn() : true; } catch (e) { window.__cgTr = true; }
-
+ 
   var orig = new WeakMap();
   var pending = {};
   var asked = {};
@@ -173,8 +177,10 @@
     walk(document.body || document.documentElement);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-  else start();
-  // стиль нужен сразу, не дожидаясь конца загрузки
-  addStyle();
+  // сайту даём полностью загрузиться и построить страницу, и только потом вмешиваемся
+  function boot(){
+    setTimeout(function(){ try { start(); } catch (e) {} }, 1500);
+  }
+  if (document.readyState === 'complete') boot();
+  else window.addEventListener('load', boot);
 })();
