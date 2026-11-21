@@ -54,6 +54,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -206,6 +207,18 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     }
 
     val tab = st.tab
+    // экран не гаснет, пока сайт грузится и переводится (иначе при переводе телефон «засыпает»)
+    KeepScreenOn(resetKey = CoglasWeb.progress / 20 + CoglasWeb.trBusy)
+    // после возврата в приложение будим WebView, чтобы сайт не оставался пустым
+    val lifecycleOwner = LocalContext.current.findFragmentActivity()
+    DisposableEffect(lifecycleOwner) {
+        if (lifecycleOwner == null) return@DisposableEffect onDispose { }
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) CoglasWeb.wake()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CgTopBar(
             tab = tab,
@@ -221,11 +234,16 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         )
         if (tab == 2 && CoglasWeb.progress in 1..99) {
             LinearProgressIndicator(progress = { CoglasWeb.progress / 100f }, modifier = Modifier.fillMaxWidth())
+        } else if (tab == 2 && CoglasWeb.trOn && CoglasWeb.trBusy > 0) {
+            // страница уже загружена, идёт перевод — показываем это, а не «зависший» сайт
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // сайт всегда живёт под родными окнами: у него общая сессия входа, через неё идут запросы заказов
-            AndroidView(modifier = Modifier.fillMaxSize(), factory = { c -> CoglasWeb.view(c) })
+            key(CoglasWeb.viewKey) {
+                AndroidView(modifier = Modifier.fillMaxSize(), factory = { c -> CoglasWeb.view(c) })
+            }
 
             if (tab == 2 && CoglasWeb.loadError.isNotEmpty()) {
                 Column(

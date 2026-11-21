@@ -58,7 +58,7 @@
 
   function schedule(){
     if (timer) return;
-    timer = setTimeout(flush, 700);
+    timer = setTimeout(flush, 300);
   }
   function flush(){
     timer = null;
@@ -179,7 +179,7 @@
 
   // сайту даём полностью загрузиться и построить страницу, и только потом вмешиваемся
   function boot(){
-    setTimeout(function(){ try { start(); } catch (e) {} }, 1500);
+    setTimeout(function(){ try { start(); } catch (e) {} }, 500);
   }
   if (document.readyState === 'complete') boot();
   else window.addEventListener('load', boot);

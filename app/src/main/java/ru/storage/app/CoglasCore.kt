@@ -102,6 +102,10 @@ object CoglasWeb {
     var loadError by mutableStateOf("")
     var trOn by mutableStateOf(true)
     var trNote by mutableStateOf("")
+    /** Сколько пакетов текста сейчас переводится (для индикатора на экране). */
+    var trBusy by mutableIntStateOf(0)
+    /** Меняется, когда WebView пришлось создать заново (система убила его процесс). */
+    var viewKey by mutableIntStateOf(0)
     var lastRaw = ""
 
     // камера для сканера на сайте: сначала разрешение Android, потом разрешение странице
@@ -128,6 +132,8 @@ object CoglasWeb {
         web?.let { w ->
             (w.context as? MutableContextWrapper)?.baseContext = ctx
             (w.parent as? ViewGroup)?.removeView(w)
+            w.onResume()
+            w.resumeTimers()
             return w
         }
         val app = ctx.applicationContext
@@ -202,6 +208,12 @@ object CoglasWeb {
                 canGoBack = view.canGoBack()
             }
 
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                // система убила процесс WebView (нехватка памяти / сон): страница стала бы пустой — создаём заново
+                main.post { recreateView() }
+                return true
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame) loadError = "Нет соединения с сайтом Coglas. Проверьте интернет."
             }
@@ -245,6 +257,24 @@ object CoglasWeb {
         (w.parent as? ViewGroup)?.removeView(w)
         appCtx?.let { (w.context as? MutableContextWrapper)?.baseContext = it }
         CookieManager.getInstance().flush()
+    }
+
+    private fun recreateView() {
+        val old = web ?: return
+        (old.parent as? ViewGroup)?.removeView(old)
+        try { old.destroy() } catch (e: Exception) { }
+        web = null
+        pending.clear()
+        trBusy = 0
+        viewKey++
+    }
+
+    /** Экран снова виден: будим WebView (после сна/фона он мог остановить таймеры и отрисовку). */
+    fun wake() {
+        val w = web ?: return
+        w.onResume()
+        w.resumeTimers()
+        w.postInvalidate()
     }
 
     fun goBack(): Boolean {
@@ -314,21 +344,27 @@ object CoglasWeb {
 
     // ---------------- перевод ----------------
 
+    private val trLock = Any()
+
     private fun translate(json: String) {
         val app = appCtx ?: return
+        main.post { trBusy++ }
         thread {
             try {
                 val arr = JSONArray(json)
                 val lines = (0 until arr.length()).map { arr.getString(it) }
-                val res = CoglasTr.translate(app, lines)
+                // пакеты переводятся строго по очереди: общая память переводов не портится
+                val res = synchronized(trLock) { CoglasTr.translate(app, lines) }
                 main.post { trNote = "" }
                 if (res.isNotEmpty()) {
                     val js = "window.__cgApply && window.__cgApply(" + JSONObject.quote(JSONObject(res).toString()) + ")"
                     main.post { web?.evaluateJavascript(js, null) }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 val m = e.message ?: "Ошибка перевода"
                 main.post { trNote = m }
+            } finally {
+                main.post { if (trBusy > 0) trBusy-- }
             }
         }
     }
