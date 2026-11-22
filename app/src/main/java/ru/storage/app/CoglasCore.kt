@@ -905,7 +905,7 @@ object CoglasData {
         else -> CgError("Ошибка $status: " + text.take(300))
     }
 
-    private suspend fun call(path: String, body: String): String {
+    suspend fun call(path: String, body: String): String {
         val (st, txt) = CoglasWeb.api(
             "PUT", "/server/api/Process/executeAction?actionKey=$path", body
         )

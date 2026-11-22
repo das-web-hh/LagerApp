@@ -257,7 +257,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                     0 -> when (st.appPage) {
                         "orders" -> if (st.openOrder != null) st.open(st.openOrder!!) else st.loadOrders()
                         "info" -> if (st.scanned.isNotEmpty()) st.search(st.scanned)
-                        else -> { if (st.appPage.startsWith("menu:") && isAdmin) CoglasScan.start(ctx, st.appPage.removePrefix("menu:")) }
+                        else -> { if (st.appPage.startsWith("menu:")) CgList.load(st.appPage.removePrefix("menu:")) }
                     }
                     else -> CoglasWeb.reload()
                 }
@@ -595,7 +595,7 @@ private fun AppTab(onCamera: () -> Unit, goSite: () -> Unit) {
     when (st.appPage) {
         "orders" -> OrdersTab(goSite)
         "info" -> InfoscanTab(onCamera, goSite)
-        else -> if (st.appPage.startsWith("menu:")) MenuPageScreen(st.appPage.removePrefix("menu:")) else AppHome()
+        else -> if (st.appPage.startsWith("menu:")) MenuWorkScreen(st.appPage.removePrefix("menu:")) else AppHome()
     }
 }
 
@@ -656,69 +656,9 @@ internal val SYSTEM_MENU = listOf(
     ))
 )
 
-@Composable
-private fun AppHome() {
-    val st = CoglasState
-    val appCtx = LocalContext.current
-    LaunchedEffect(Unit) { CoglasSchema.init(appCtx) }
-    @Suppress("UNUSED_VARIABLE") val schemaVer = CoglasSchema.version
-    var q by remember { mutableStateOf("") }
-    val needle = q.trim().lowercase()
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text("Родные экраны приложения", style = MaterialTheme.typography.titleSmall)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { st.appPage = "orders" }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Заказы на приход") }
-            Button(onClick = { st.appPage = "info" }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Infoscan") }
-        }
-
-        if (Session.isAdmin) ScanCard()
-
-        Text("Меню системы", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
-        Text(
-            "Пункты открываются внутри приложения. Сайт для этого не нужен: страницы строятся из данных, собранных с сайта.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        OutlinedTextField(
-            value = q, onValueChange = { q = it }, singleLine = true,
-            label = { Text("Поиск по меню") }, modifier = Modifier.fillMaxWidth()
-        )
-        var shown = 0
-        CoglasSchema.groups().forEach { (gTitle, entries) ->
-            val items = entries.filter { needle.isEmpty() || it.ru.lowercase().contains(needle) || it.de.lowercase().contains(needle) }
-            if (items.isEmpty()) return@forEach
-            shown += items.size
-            Text(gTitle, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
-            items.forEach { m ->
-                Card(
-                    onClick = { st.appPage = "menu:" + m.key },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
-                        Text(m.ru, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                        if (!m.de.equals(m.ru, ignoreCase = true)) {
-                            Text(m.de, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
-        }
-        if (shown == 0) Text("Ничего не найдено", style = MaterialTheme.typography.bodyMedium)
-        Text(
-            "Заказы и Infoscan в «Родных экранах» работают через вход на вкладке «Сайт»: войдите один раз, и сессия общая.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}
-
 /** Карточка админа: собрать данные сайта (меню System и его страницы) для построения экранов App. */
 @Composable
-private fun ScanCard() {
+internal fun ScanCard() {
     val ctx = LocalContext.current
     @Suppress("UNUSED_VARIABLE") val ver = CoglasSchema.version
     val all = CoglasSchema.all()
@@ -754,86 +694,6 @@ private fun ScanCard() {
                     "Войдите на вкладке «Сайт» и не закрывайте окно Coglas, пока идёт сбор.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-    }
-}
-
-/** Страница пункта меню внутри App, построенная из собранных данных сайта. Пока без действий: функции добавим позже. */
-@Composable
-private fun MenuPageScreen(key: String) {
-    val ctx = LocalContext.current
-    LaunchedEffect(Unit) { CoglasSchema.init(ctx) }
-    @Suppress("UNUSED_VARIABLE") val ver = CoglasSchema.version
-    val e = CoglasSchema.find(key)
-    if (e == null) {
-        Text("Пункт не найден.", modifier = Modifier.padding(16.dp))
-        return
-    }
-    val soon = { Toast.makeText(ctx, "Эта функция будет добавлена позже", Toast.LENGTH_SHORT).show() }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text(e.ru, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        if (!e.de.equals(e.ru, ignoreCase = true)) {
-            Text(e.de, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (e.scannedAt == 0L) {
-            Text("Данные этой страницы ещё не собраны.", style = MaterialTheme.typography.bodyMedium)
-            if (Session.isAdmin) {
-                Button(onClick = { CoglasScan.start(ctx, e.key) }, enabled = !CoglasScan.running) { Text("Собрать данные этой страницы") }
-            }
-            return@Column
-        }
-        if (e.note.isNotEmpty()) {
-            Text(e.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-        }
-        if (e.tabs.isNotEmpty()) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                e.tabs.forEach { t -> OutlinedButton(onClick = soon) { Text(t) } }
-            }
-        }
-        if (e.fields.isNotEmpty()) {
-            Text("Поля и фильтры", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            e.fields.forEach { f ->
-                OutlinedTextField(value = "", onValueChange = { }, readOnly = true, singleLine = true, label = { Text(f) }, modifier = Modifier.fillMaxWidth())
-            }
-        }
-        if (e.buttons.isNotEmpty()) {
-            Text("Кнопки", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            e.buttons.forEach { b ->
-                Button(onClick = soon, modifier = Modifier.fillMaxWidth()) { Text(b.ifEmpty { "(без названия)" }) }
-            }
-        }
-        if (e.columns.isNotEmpty()) {
-            Text("Таблица", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    e.columns.forEach { c -> Text(c, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium) }
-                }
-            }
-            Text(
-                "Строк на сайте при сборе: ${e.rows}. Список строк подключим следующим шагом.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        if (e.fields.isEmpty() && e.buttons.isEmpty() && e.columns.isEmpty() && e.tabs.isEmpty() && e.note.isEmpty()) {
-            Text("На странице не нашлось кнопок, полей и таблиц.", style = MaterialTheme.typography.bodyMedium)
-        }
-        if (Session.isAdmin) {
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            Text("Для разработки (видит только админ)", style = MaterialTheme.typography.labelLarge)
-            val dev = buildString {
-                if (e.form.isNotEmpty()) append("Форма: ").append(e.form).append("\n")
-                if (e.apis.isNotEmpty()) append("Запросы API:\n").append(e.apis.joinToString("\n") { "  $it" })
-            }
-            if (dev.isNotEmpty()) {
-                SelectionContainer { Text(dev, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { CoglasScan.start(ctx, e.key) }, enabled = !CoglasScan.running) { Text("Пересканировать") }
-                TextButton(onClick = { CoglasState.tab = 1; CoglasWeb.openMenu(e.de, e.ru) }) { Text("Открыть на сайте") }
-            }
         }
     }
 }
