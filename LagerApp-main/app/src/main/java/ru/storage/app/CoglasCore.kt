@@ -772,6 +772,46 @@ object CoglasPages {
             sp()?.edit()?.putString("pages", arr.toString())?.apply()
         } catch (e: Exception) {
         }
+        exportFile()
+    }
+
+    /**
+     * Весь отчёт по страницам сайта сам обновляется одним файлом «Загрузки/coglas_report.txt» на телефоне
+     * (после каждого нового окна/запроса, с паузой ~1,5 с). Его можно прикрепить из памяти телефона.
+     */
+    private fun exportFile() {
+        val c = ctx ?: return
+        if (map.isEmpty()) return
+        val text = report()
+        thread {
+            try {
+                val name = "coglas_report.txt"
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    val cr = c.contentResolver
+                    val rel = android.os.Environment.DIRECTORY_DOWNLOADS + "/"
+                    val coll = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    var uri: android.net.Uri? = null
+                    cr.query(
+                        coll, arrayOf(android.provider.MediaStore.MediaColumns._ID),
+                        android.provider.MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " +
+                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                        arrayOf(name, rel), null
+                    )?.use { if (it.moveToFirst()) uri = android.content.ContentUris.withAppendedId(coll, it.getLong(0)) }
+                    if (uri == null) {
+                        val v = android.content.ContentValues()
+                        v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                        v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, rel)
+                        uri = cr.insert(coll, v)
+                    }
+                    uri?.let { u -> cr.openOutputStream(u, "wt")?.use { o -> o.write(text.toByteArray(Charsets.UTF_8)) } }
+                } else {
+                    val d = c.getExternalFilesDir(null) ?: return@thread
+                    java.io.File(d, name).writeText(text, Charsets.UTF_8)
+                }
+            } catch (e: Exception) {
+            }
+        }
     }
 
     private fun changed() {

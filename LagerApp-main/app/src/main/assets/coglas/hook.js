@@ -1,6 +1,58 @@
 (function(){
   if (window.__wmsHook) return;
   window.__wmsHook = true;
+
+  // Клавиатура только по касанию: сайт не может сам поставить курсор в поле (autofocus, el.focus() без нажатия пользователя).
+  (function(){
+    var last = 0;
+    function mark(){ last = Date.now(); }
+    ['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click', 'keydown'].forEach(function(t){
+      document.addEventListener(t, mark, true);
+    });
+    function isText(e){
+      return !!e && (e.tagName === 'TEXTAREA' || e.isContentEditable ||
+        (e.tagName === 'INPUT' && /^(text|search|number|tel|email|url|password|)$/i.test(e.type || '')));
+    }
+    function userRecent(){ return window.__wmsAllowFocus === true || Date.now() - last < 800; }
+    try {
+      var origFocus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function(){
+        if (isText(this) && !userRecent()) return;
+        return origFocus.apply(this, arguments);
+      };
+    } catch (x) {}
+    document.addEventListener('focusin', function(e){
+      try {
+        var t = e.target;
+        if (!isText(t) || userRecent()) return;
+        if (e.relatedTarget && isText(e.relatedTarget)) return; // переход между полями кнопкой «Далее» на клавиатуре
+        t.blur();
+      } catch (x) {}
+    }, true);
+    function strip(){
+      try {
+        [].forEach.call(document.querySelectorAll('[autofocus]'), function(e){ e.removeAttribute('autofocus'); });
+        var a = document.activeElement;
+        if (isText(a) && !userRecent()) a.blur();
+      } catch (x) {}
+    }
+    try {
+      document.addEventListener('DOMContentLoaded', strip);
+      window.addEventListener('load', function(){ strip(); setTimeout(strip, 500); setTimeout(strip, 1500); });
+      new MutationObserver(function(ms){
+        for (var i = 0; i < ms.length; i++) {
+          var n = ms[i].addedNodes;
+          for (var j = 0; j < n.length; j++) {
+            var el = n[j];
+            if (el && el.nodeType === 1) {
+              if (el.hasAttribute && el.hasAttribute('autofocus')) el.removeAttribute('autofocus');
+              if (el.querySelectorAll) [].forEach.call(el.querySelectorAll('[autofocus]'), function(x){ x.removeAttribute('autofocus'); });
+            }
+          }
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (x) {}
+  })();
   var cap = window.__wmsHdr = {};
   function capture(k, v){ try { if (/^(x-csrf|x-requested-with)/i.test(k)) cap[k] = v; } catch (e) {} }
   function hc(h){
@@ -123,7 +175,8 @@
         el = pri[0] || all[0];
       }
       if (!el) return 'noinput';
-      el.focus();
+      window.__wmsAllowFocus = true;
+      try { el.focus(); } finally { window.__wmsAllowFocus = false; }
       var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
       setter.call(el, String(code));

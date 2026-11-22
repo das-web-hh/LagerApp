@@ -714,6 +714,21 @@ internal fun ScanCard() {
 
 // ---------------------------------------------------------------- настройки (только админ)
 
+/** Отчёт файлом .txt: длинный текст не обрезается, как при копировании в мессенджер. */
+private fun cgShareFile(ctx: Context, text: String) {
+    try {
+        val dir = java.io.File(ctx.cacheDir, "export").also { it.mkdirs() }
+        val f = java.io.File(dir, "coglas_report.txt")
+        f.writeText(text, Charsets.UTF_8)
+        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+        val i = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(Intent.createChooser(i, "Отправить файл").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: Exception) {
+        android.widget.Toast.makeText(ctx, "Не удалось создать файл", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
 private fun cgCopy(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("coglas", text))
@@ -802,6 +817,7 @@ private fun SettingsTab(goSite: () -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { cgCopy(ctx, result) }, modifier = Modifier.weight(1f)) { Text("Копировать") }
                 OutlinedButton(onClick = { cgShare(ctx, result) }, modifier = Modifier.weight(1f)) { Text("Поделиться") }
+                OutlinedButton(onClick = { cgShareFile(ctx, result) }, modifier = Modifier.weight(1f)) { Text("Файлом") }
                 Button(onClick = { st.tool = "" }, modifier = Modifier.weight(1f)) { Text("Закрыть") }
             }
         }
