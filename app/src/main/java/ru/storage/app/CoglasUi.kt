@@ -196,14 +196,17 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     }
 
     // «Назад» на телефоне: сначала шаг внутри Coglas (заказ → список, страница сайта назад), потом выход из окна
-    BackHandler {
+    // тот же шаг назад делает и стрелка в шапке окна
+    val stepBack: () -> Unit = {
         when {
             st.tab == 0 && st.appPage == "orders" && st.openOrder != null -> st.closeOrder()
             st.tab == 0 && st.appPage.isNotEmpty() -> st.appPage = ""
             st.tab == 1 && CoglasWeb.canGoBack -> CoglasWeb.goBack()
+            st.tab == 2 -> st.tab = 0
             else -> onBack()
         }
     }
+    BackHandler(onBack = stepBack)
 
     if (scanFor.isNotEmpty()) {
         val target = scanFor
@@ -251,7 +254,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 CoglasWeb.setDesktop(ctx, on)
                 Toast.makeText(ctx, if (on) "Вид: ПК (как на мониторе). Масштабируйте щипком." else "Вид: мобильный", Toast.LENGTH_SHORT).show()
             },
-            onBack = onBack,
+            onBack = stepBack,
             onRefresh = {
                 when (tab) {
                     0 -> when (st.appPage) {
@@ -316,7 +319,12 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
 
         NavigationBar {
             NavigationBarItem(
-                selected = tab == 0, onClick = { st.tab = 0 },
+                selected = tab == 0,
+                onClick = {
+                    // повторное нажатие на «App» возвращает в главное меню App
+                    if (st.tab == 0) { st.closeOrder(); st.appPage = "" }
+                    st.tab = 0
+                },
                 icon = { Icon(Icons.Default.Menu, contentDescription = "App") }, label = { Text("App") }
             )
             NavigationBarItem(
