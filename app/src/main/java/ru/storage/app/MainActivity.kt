@@ -481,7 +481,9 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
         Box(
             modifier = Modifier.fillMaxSize().padding(padding)
                 // свайп справа налево — следующее окно, слева направо — предыдущее; строки со своим свайпом его не запускают
-                .pointerInput(selected) {
+                .pointerInput(selected, CoglasState.active) {
+                    // в окне Coglas боковой свайп вкладок выключен: он «воровал» жесты у прокрутки сайта
+                    if (CoglasState.active) return@pointerInput
                     var total = 0f
                     detectHorizontalDragGestures(
                         onDragStart = { total = 0f },
