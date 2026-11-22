@@ -75,4 +75,64 @@
     });
     return xs.apply(this, arguments);
   };
+
+  // ---------- сканер: камера сайта заменяется сканером приложения ----------
+  // Сайт просит камеру (getUserMedia) -> открывается сканер приложения (ML Kit + ИИ), а сайту отдаётся «пустой» поток.
+  // Прочитанный код приложение подставляет в поле страницы через __cgScanResult.
+  try {
+    var md = navigator.mediaDevices;
+    if (md && md.getUserMedia && !md.__cgPatched) {
+      md.__cgPatched = true;
+      var ogum = md.getUserMedia.bind(md);
+      var blank = function(){
+        var c = document.createElement('canvas');
+        c.width = 640; c.height = 480;
+        var g = c.getContext('2d');
+        g.fillStyle = '#000'; g.fillRect(0, 0, 640, 480);
+        return c.captureStream ? c.captureStream(1) : null;
+      };
+      md.getUserMedia = function(cons){
+        var useNative = false;
+        try { useNative = !!(cons && cons.video && window.WmsBridge && window.WmsBridge.scanOn()); } catch (e) {}
+        if (!useNative) return ogum(cons);
+        var st = blank();
+        if (!st) return ogum(cons);
+        // открываем сканер только по нажатию человека, а не при фоновой проверке камеры
+        var act = true;
+        try { if (navigator.userActivation) act = navigator.userActivation.isActive; } catch (e) {}
+        if (act) { try { window.WmsBridge.scan(); } catch (e) {} }
+        return Promise.resolve(st);
+      };
+    }
+  } catch (e) {}
+
+  window.__cgScanResult = function(code){
+    try {
+      function okInput(e){
+        if (!e || e.disabled || e.readOnly) return false;
+        if (e.tagName === 'TEXTAREA') return true;
+        return e.tagName === 'INPUT' && /^(text|search|number|tel|)$/i.test(e.type || '');
+      }
+      var el = document.activeElement;
+      if (!okInput(el)) {
+        var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){ return okInput(e) && e.offsetParent !== null; });
+        var pri = all.filter(function(e){
+          var h = (e.name || '') + ' ' + (e.id || '') + ' ' + (e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '');
+          return /barcode|scan|ean|gtin|code|штрих|скан|код|lager|le\b/i.test(h);
+        });
+        el = pri[0] || all[0];
+      }
+      if (!el) return 'noinput';
+      el.focus();
+      var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      setter.call(el, String(code));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      ['keydown', 'keypress', 'keyup'].forEach(function(t){
+        el.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      });
+      return 'ok';
+    } catch (e) { return 'err:' + e; }
+  };
 })();

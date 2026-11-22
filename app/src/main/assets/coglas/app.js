@@ -61,12 +61,19 @@
   function norm(t){ return String(t).replace(/\s+/g, ' ').trim(); }
   function has(k){ return Object.prototype.hasOwnProperty.call(MAP, k); }
 
+  // FULL — «перевести полностью»: в перевод идут и длинные строки, и строки с цифрами, и слова ЗАГЛАВНЫМИ
+  var FULL = false;
   function skip(t){
-    if (t.length < 2 || t.length > 120) return true;
+    if (t.length < 2 || t.length > (FULL ? 400 : 120)) return true;
     if (!/[A-Za-zÄÖÜäöüß]/.test(t)) return true;
-    if (/\d/.test(t)) return true;
     if (/[@\/\\]|https?:/i.test(t)) return true;
     if (/[а-яА-Я]/.test(t)) return true;
+    if (FULL) {
+      if (!/[A-Za-zÄÖÜäöüß]{3,}/.test(t)) return true;
+      if (t.indexOf(' ') < 0 && /\d/.test(t)) return true;
+      return false;
+    }
+    if (/\d/.test(t)) return true;
     if (t.indexOf(' ') < 0 && t === t.toUpperCase() && t.length > 3) return true;
     return false;
   }
@@ -167,8 +174,10 @@
     } catch (e) {}
   };
   // «Перевести заново»: забыть, что уже спрашивали, и пройти страницу ещё раз
-  window.__cgRetry = function(){
+  window.__cgRetry = function(full){
+    FULL = !!full;
     asked = {};
+    cnt = new WeakMap();
     walk(document.body || document.documentElement);
   };
 
