@@ -55,6 +55,33 @@
     out.push('html: max-h=' + hs.maxHeight + ' min-h=' + hs.minHeight + ' contain=' + hs.contain + ' zoom=' + hs.zoom + ' writing=' + hs.writingMode + ' compat=' + document.compatMode);
     out.push('');
   } catch (e) { out.push('css-diag error: ' + e); }
+  try {
+    out.push('Структура страницы (тег#id.класс высота×ширина @верх позиция/display/overflow):');
+    var cnt = 0;
+    var walkTree = function(el, depth){
+      if (cnt >= 70 || depth > 7) return;
+      var kids = [];
+      for (var i = 0; i < el.children.length; i++) {
+        var k = el.children[i], tg = k.tagName;
+        if (tg === 'SCRIPT' || tg === 'STYLE' || tg === 'LINK' || tg === 'META' || tg === 'svg' || tg === 'I' || tg === 'SPAN') continue;
+        kids.push(k);
+      }
+      for (var j = 0; j < kids.length && j < 6; j++) {
+        if (cnt >= 70) return;
+        var k2 = kids[j], cs2 = getComputedStyle(k2), r2 = k2.getBoundingClientRect();
+        var c3 = (typeof k2.className === 'string' && k2.className) ? '.' + k2.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
+        out.push(new Array(depth + 1).join(' ') + k2.tagName.toLowerCase() + (k2.id ? '#' + k2.id : '') + c3 +
+          ' ' + Math.round(r2.height) + 'x' + Math.round(r2.width) + ' @' + Math.round(r2.top) +
+          ' ' + cs2.position + '/' + cs2.display + '/' + cs2.overflowY + (cs2.opacity !== '1' ? ' op=' + cs2.opacity : '') + (cs2.visibility !== 'visible' ? ' vis=' + cs2.visibility : '') +
+          ' H=' + (k2.style.height || cs2.height));
+        cnt++;
+        walkTree(k2, depth + 1);
+      }
+      if (kids.length > 6) { out.push(new Array(depth + 1).join(' ') + '… ещё ' + (kids.length - 6)); }
+    };
+    walkTree(document.getElementById('applicationHost') || document.body, 1);
+    out.push('');
+  } catch (e) { out.push('tree error: ' + e); }
   var els = document.querySelectorAll('a,button,input,select,textarea,[role=button],[onclick],[ng-click]');
   var n = 0;
   for (var i = 0; i < els.length && n < 150; i++) {
