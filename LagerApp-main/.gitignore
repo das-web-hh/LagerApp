@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+*.jks
+*.keystore
+key_base64.txt
+app/lager.jks
