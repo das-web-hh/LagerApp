@@ -242,7 +242,16 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // сайт всегда живёт под родными окнами: у него общая сессия входа, через неё идут запросы заказов
             key(CoglasWeb.viewKey) {
-                AndroidView(modifier = Modifier.fillMaxSize(), factory = { c -> CoglasWeb.view(c) })
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { c -> CoglasWeb.view(c) },
+                    update = { w ->
+                        // WebView обязан быть «видимым» и не на паузе, иначе анимации и скрипты сайта не доходят до конца
+                        w.visibility = android.view.View.VISIBLE
+                        w.onResume()
+                        w.resumeTimers()
+                    }
+                )
             }
 
             if (tab == 2 && CoglasWeb.loadError.isNotEmpty()) {

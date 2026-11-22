@@ -76,3 +76,51 @@
     return xs.apply(this, arguments);
   };
 })();
+
+// Сайт показывает заставку «loading», а форма входа уже есть под ней. Если заставка не исчезла — убираем её.
+(function(){
+  if (window.__cgUnstick) return;
+  window.__cgUnstick = true;
+  function L(s){ try { window.WmsBridge.log('CG ' + s); } catch (e) {} }
+  function big(e){
+    var r = e.getBoundingClientRect();
+    return r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.6;
+  }
+  var n = 0, hidden = 0;
+  function tick(){
+    n++;
+    try {
+      if (document.readyState === 'complete' && document.body && hidden < 3) {
+        var x = window.innerWidth / 2, y = window.innerHeight / 2;
+        var top = document.elementFromPoint(x, y);
+        var pw = document.querySelector('input[type=password]');
+        var covered = false;
+        if (pw) {
+          var r = pw.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.top >= 0 && r.bottom <= window.innerHeight) {
+            var t2 = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            covered = !!t2 && t2 !== pw && !(t2.closest && t2.closest('form'));
+            if (covered) top = t2;
+          }
+        }
+        var txt = top ? (top.innerText || '') : '';
+        var loadingTop = n >= 6 && /loading/i.test(txt) && txt.length < 120;
+        if (top && (covered || loadingTop)) {
+          var cur = top, el = null;
+          while (cur && cur !== document.body && cur !== document.documentElement) {
+            var cs = getComputedStyle(cur);
+            if ((cs.position === 'fixed' || cs.position === 'absolute') && big(cur)) el = cur;
+            cur = cur.parentElement;
+          }
+          if (el) {
+            el.style.setProperty('display', 'none', 'important');
+            hidden++;
+            L('overlay hidden: ' + el.tagName + (el.id ? '#' + el.id : '') + (el.className ? '.' + String(el.className).split(' ').join('.') : ''));
+          }
+        }
+      }
+    } catch (e) {}
+    if (n < 45) setTimeout(tick, 1000);
+  }
+  setTimeout(tick, 2000);
+})();

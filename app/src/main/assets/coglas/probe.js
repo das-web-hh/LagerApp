@@ -1,6 +1,20 @@
 (function(){
   function vis(e){ var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
-  var out = ['URL: ' + location.href, 'TITLE: ' + document.title, ''];
+  function d(e){
+    var cs = getComputedStyle(e), r = e.getBoundingClientRect();
+    return e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\s+/).slice(0, 3).join('.') : '') +
+      ' pos=' + cs.position + ' z=' + cs.zIndex + ' op=' + cs.opacity + ' disp=' + cs.display + ' vis=' + cs.visibility +
+      ' ' + Math.round(r.width) + 'x' + Math.round(r.height) + '@' + Math.round(r.left) + ',' + Math.round(r.top);
+  }
+  var out = ['URL: ' + location.href, 'TITLE: ' + document.title,
+    'state=' + document.readyState + ' visibility=' + document.visibilityState + ' hidden=' + document.hidden +
+    ' win=' + innerWidth + 'x' + innerHeight + ' dpr=' + devicePixelRatio + ' stat=' + (window.__cgStat || '-'), ''];
+  try {
+    out.push('В центре экрана (сверху вниз):');
+    var st = document.elementsFromPoint(innerWidth / 2, innerHeight / 2);
+    for (var k = 0; k < st.length && k < 6; k++) out.push('  ' + d(st[k]));
+    out.push('');
+  } catch (e) {}
   var els = document.querySelectorAll('a,button,input,select,textarea,[role=button],[onclick],[ng-click]');
   var n = 0;
   for (var i = 0; i < els.length && n < 150; i++) {
