@@ -168,12 +168,26 @@
   function fit(){
     try {
       var d = document;
-      put(d.documentElement, 'height', '100%');
-      put(d.body, 'height', '100%');
-      put(d.getElementById('applicationHost'), 'height', '100%');
-      put(d.getElementById('wrapper'), 'height', '100%');
+      // vh не зависит от родителей, поэтому надёжнее процентов
+      var hosts = [d.documentElement, d.body, d.getElementById('applicationHost'), d.getElementById('wrapper')];
+      for (var i = 0; i < hosts.length; i++) {
+        var e = hosts[i];
+        if (!e) continue;
+        put(e, 'height', '100vh');
+        put(e, 'min-height', '100vh');
+        put(e, 'max-height', 'none');
+        put(e, 'contain', 'none');
+      }
+      // форма входа: прикрепляем к экрану, чтобы она не зависела от высоты родителей; длинная форма прокручивается
       var lc = d.querySelector('.login-container');
-      if (lc) put(lc, 'min-height', '100vh');
+      if (lc) {
+        put(lc, 'position', 'fixed');
+        put(lc, 'top', '0'); put(lc, 'left', '0'); put(lc, 'right', '0'); put(lc, 'bottom', '0');
+        put(lc, 'height', 'auto');
+        put(lc, 'overflow-y', 'auto');
+        put(lc, 'align-items', 'flex-start');
+        put(lc, 'z-index', '50');
+      }
       window.__cgFitN++;
     } catch (e) {}
   }

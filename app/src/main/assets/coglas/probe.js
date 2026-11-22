@@ -32,6 +32,29 @@
     }
     out.push('');
   } catch (e) {}
+  try {
+    out.push('CSS-правила про размеры (html, body, #applicationHost, #wrapper, .login-container):');
+    var targets = [document.documentElement, document.body, document.getElementById('applicationHost'), document.getElementById('wrapper'), document.querySelector('.login-container')];
+    var props = /^(height|min-height|max-height|position|display|contain|zoom|transform|writing-mode)$/;
+    var lines = 0;
+    for (var si = 0; si < document.styleSheets.length && lines < 40; si++) {
+      var rules;
+      try { rules = document.styleSheets[si].cssRules; } catch (e) { out.push('  (лист ' + si + ' закрыт)'); continue; }
+      for (var ri = 0; ri < rules.length && lines < 40; ri++) {
+        var r = rules[ri];
+        if (!r.selectorText || !r.style) continue;
+        var hit = false;
+        for (var ti = 0; ti < targets.length; ti++) { try { if (targets[ti] && targets[ti].matches(r.selectorText)) { hit = true; break; } } catch (e) {} }
+        if (!hit) continue;
+        var decl = [];
+        for (var pi = 0; pi < r.style.length; pi++) { var nm = r.style[pi]; if (props.test(nm)) decl.push(nm + ':' + r.style.getPropertyValue(nm) + (r.style.getPropertyPriority(nm) ? '!' : '')); }
+        if (decl.length) { out.push('  ' + r.selectorText.slice(0, 60) + ' { ' + decl.join('; ') + ' }'); lines++; }
+      }
+    }
+    var hs = getComputedStyle(document.documentElement);
+    out.push('html: max-h=' + hs.maxHeight + ' min-h=' + hs.minHeight + ' contain=' + hs.contain + ' zoom=' + hs.zoom + ' writing=' + hs.writingMode + ' compat=' + document.compatMode);
+    out.push('');
+  } catch (e) { out.push('css-diag error: ' + e); }
   var els = document.querySelectorAll('a,button,input,select,textarea,[role=button],[onclick],[ng-click]');
   var n = 0;
   for (var i = 0; i < els.length && n < 150; i++) {
