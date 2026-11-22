@@ -173,6 +173,7 @@ object CoglasState {
 @Composable
 fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     val st = CoglasState
+    val ctx = LocalContext.current
     val isAdmin = Session.isAdmin
     // кто просит сканер: "" никто, "info" — Infoscan в App, "site" — сайт (вместо своей камеры)
     var scanFor by remember { mutableStateOf("") }
@@ -243,6 +244,12 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         CgTopBar(
             tab = tab,
             appPage = st.appPage,
+            desktop = CoglasWeb.desktop,
+            onToggleView = {
+                val on = !CoglasWeb.desktop
+                CoglasWeb.setDesktop(ctx, on)
+                Toast.makeText(ctx, if (on) "Вид: ПК (как на мониторе). Масштабируйте щипком." else "Вид: мобильный", Toast.LENGTH_SHORT).show()
+            },
             onBack = onBack,
             onRefresh = {
                 when (tab) {
@@ -326,7 +333,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
 }
 
 @Composable
-private fun CgTopBar(tab: Int, appPage: String, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit) {
+private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад") }
@@ -338,10 +345,14 @@ private fun CgTopBar(tab: Int, appPage: String, onBack: () -> Unit, onRefresh: (
                         "info" -> "App · Infoscan: штрихкод или номер LE"
                         else -> "App"
                     }
-                    1 -> if (CoglasWeb.trOn && !CoglasWeb.trSafe) "Сайт · перевод на русский" else if (CoglasWeb.trOn) "Сайт · без перевода (авария)" else "Сайт · оригинал (немецкий)"
+                    1 -> (if (CoglasWeb.trOn && !CoglasWeb.trSafe) "Сайт · перевод на русский" else if (CoglasWeb.trOn) "Сайт · без перевода (авария)" else "Сайт · оригинал (немецкий)") +
+                        (if (CoglasWeb.desktop) " · ПК" else "")
                     else -> "Настройки (админ)"
                 }
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (tab == 1) {
+                TextButton(onClick = onToggleView) { Text(if (desktop) "ПК" else "Моб.") }
             }
             if (tab == 1 || (tab == 0 && appPage.isNotEmpty())) {
                 IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Обновить") }
@@ -587,37 +598,114 @@ private fun AppTab(onCamera: () -> Unit, goSite: () -> Unit) {
     }
 }
 
+/** Пункт меню System сайта: de — немецкое название на сайте, ru — название в App. */
+private data class MenuItem(val de: String, val ru: String)
+private data class MenuGroup(val title: String, val items: List<MenuItem>)
+
+/** Меню System сайта Coglas (снято с окна System). Группы названы по смыслу и порядку пунктов. */
+private val SYSTEM_MENU = listOf(
+    MenuGroup("Справочники", listOf(
+        MenuItem("Anhänge", "Вложения"),
+        MenuItem("Artikel", "Артикулы"),
+        MenuItem("Checklistenvorlagen", "Шаблоны чек-листов"),
+        MenuItem("Geschäftspartner", "Партнёры"),
+        MenuItem("Ladehilfsmitteltypen", "Типы паллет и тары")
+    )),
+    MenuGroup("Рабочее место", listOf(
+        MenuItem("Aktuelle Arbeitsstation", "Текущая рабочая станция"),
+        MenuItem("Arbeitsstationen", "Рабочие станции"),
+        MenuItem("Bildschirmskalierung", "Масштаб экрана"),
+        MenuItem("Mein Profil", "Мой профиль")
+    )),
+    MenuGroup("Склад", listOf(
+        MenuItem("Infoscan", "Инфоскан"),
+        MenuItem("Lagerübersicht", "Обзор склада"),
+        MenuItem("Shopfloor", "Shopfloor"),
+        MenuItem("Bestandsbewegungen", "Движение запасов"),
+        MenuItem("Chargenverfolgung", "Отслеживание партий"),
+        MenuItem("Inventuraufträge", "Задания инвентаризации"),
+        MenuItem("Inventurlisten", "Списки инвентаризации"),
+        MenuItem("Inventurzählung", "Подсчёт инвентаризации"),
+        MenuItem("Vorwarnzeit Haltbarkeit", "Предупреждение о сроке годности")
+    )),
+    MenuGroup("Приход", listOf(
+        MenuItem("Bestellungen", "Заказы"),
+        MenuItem("Lieferscheine", "Накладные"),
+        MenuItem("Wareneingänge", "Приходы товара")
+    )),
+    MenuGroup("Комплектация", listOf(
+        MenuItem("Kommissionierleitstand", "Пульт комплектации"),
+        MenuItem("Kommissionierung", "Комплектация")
+    )),
+    MenuGroup("Перемещение и транспорт", listOf(
+        MenuItem("Lagereinheit umlagern", "Переместить складскую единицу"),
+        MenuItem("Transport", "Транспорт"),
+        MenuItem("Transportleitstand", "Пульт транспорта"),
+        MenuItem("Vorholungsbedarfe", "Потребность в подвозе")
+    )),
+    MenuGroup("Отгрузка", listOf(
+        MenuItem("Kundenaufträge", "Заказы клиентов"),
+        MenuItem("Scan, Label & Ship", "Скан, этикетка и отправка"),
+        MenuItem("Verladung", "Погрузка"),
+        MenuItem("Verpackung", "Упаковка"),
+        MenuItem("Warenausgänge", "Отгрузки")
+    )),
+    MenuGroup("Прочее", listOf(
+        MenuItem("About", "О программе")
+    ))
+)
+
 @Composable
 private fun AppHome() {
     val st = CoglasState
-    val ctx = LocalContext.current
+    var q by remember { mutableStateOf("") }
+    val needle = q.trim().lowercase()
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Card(
-            Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Меню системы", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Здесь будет всё меню и все функции сайта (окно System) в виде родного меню приложения.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Button(
-                    onClick = { Toast.makeText(ctx, "Меню системы — в разработке", Toast.LENGTH_SHORT).show() },
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) { Text("Меню системы") }
+        Text("Родные экраны приложения", style = MaterialTheme.typography.titleSmall)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { st.appPage = "orders" }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Заказы на приход") }
+            Button(onClick = { st.appPage = "info" }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Infoscan") }
+        }
+
+        Text("Меню системы", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
+        Text(
+            "Нажмите на пункт: откроется то же окно сайта (вкладка «Сайт»). Для вида как на мониторе нажмите «ПК» вверху вкладки «Сайт».",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = q, onValueChange = { q = it }, singleLine = true,
+            label = { Text("Поиск по меню") }, modifier = Modifier.fillMaxWidth()
+        )
+        var shown = 0
+        SYSTEM_MENU.forEach { g ->
+            val items = g.items.filter { needle.isEmpty() || it.ru.lowercase().contains(needle) || it.de.lowercase().contains(needle) }
+            if (items.isEmpty()) return@forEach
+            shown += items.size
+            Text(g.title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
+            items.forEach { m ->
+                Card(
+                    onClick = { st.tab = 1; CoglasWeb.openMenu(m.de, m.ru) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        Text(m.ru, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        if (!m.de.equals(m.ru, ignoreCase = true)) {
+                            Text(m.de, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
             }
         }
-        Text("Уже работает в приложении", style = MaterialTheme.typography.titleSmall)
-        OutlinedButton(onClick = { st.appPage = "orders" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Заказы на приход") }
-        OutlinedButton(onClick = { st.appPage = "info" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Infoscan") }
+        if (shown == 0) Text("Ничего не найдено", style = MaterialTheme.typography.bodyMedium)
         Text(
-            "Заказы и Infoscan работают через вход на вкладке «Сайт»: войдите один раз, и сессия общая.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            "Заказы и Infoscan в «Родных экранах» работают через вход на вкладке «Сайт»: войдите один раз, и сессия общая.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp)
         )
     }
 }
@@ -759,6 +847,24 @@ private fun SettingsTab(goSite: () -> Unit) {
                     OutlinedButton(onClick = { CoglasWeb.retryTranslate(false); st.tab = 1 }, modifier = Modifier.weight(1f)) { Text("Перевести заново") }
                     OutlinedButton(onClick = { CoglasTr.clearCache(ctx); CoglasWeb.trNote = "Память переводов очищена" }, modifier = Modifier.weight(1f)) { Text("Очистить память") }
                 }
+            }
+        }
+
+        // ---- вид сайта ----
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Вид сайта: ПК", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Сайт рисуется как на большом мониторе (широкая страница), масштаб меняется щипком. Тот же переключатель есть вверху вкладки «Сайт».",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = CoglasWeb.desktop, onCheckedChange = { CoglasWeb.setDesktop(ctx, it); st.tab = 1 })
             }
         }
 

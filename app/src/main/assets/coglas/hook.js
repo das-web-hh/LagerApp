@@ -135,4 +135,82 @@
       return 'ok';
     } catch (e) { return 'err:' + e; }
   };
+
+  // ---------- вид ПК: сайт рисуется как на большом мониторе ----------
+  try {
+    var desk = false;
+    try { desk = !!(window.WmsBridge && window.WmsBridge.desktopOn && window.WmsBridge.desktopOn()); } catch (e) {}
+    if (desk) {
+      var VW = 1024;
+      var setVp = function(){
+        try {
+          var h = document.head || document.documentElement;
+          if (!h) return;
+          var m = document.querySelector('meta[name=viewport]');
+          if (!m) { m = document.createElement('meta'); m.setAttribute('name', 'viewport'); h.appendChild(m); }
+          var c = 'width=' + VW;
+          if (m.getAttribute('content') !== c) m.setAttribute('content', c);
+        } catch (e) {}
+      };
+      setVp();
+      document.addEventListener('DOMContentLoaded', setVp);
+      window.addEventListener('load', setVp);
+      var n = 0, iv = setInterval(function(){ setVp(); if (++n > 12) clearInterval(iv); }, 800);
+    }
+  } catch (e) {}
+
+  // ---------- меню System: открыть нужное окно сайта по названию ----------
+  // de — немецкое название пункта, ru — русское. Сайт мог уже перевести пункт, поэтому ищем по всем вариантам.
+  window.__cgOpenMenu = function(de, ru){
+    var T0 = Date.now(), lastTry = 0, cleared = false;
+    function nm(x){ return String(x || '').replace(/[\u00AD\u200B]/g, '').toLowerCase().replace(/[\s\-,.&]+/g, ''); }
+    var want = {};
+    [de, ru, (window.__cgMap || {})[String(de).toLowerCase()]].forEach(function(x){ if (x) want[nm(x)] = 1; });
+    function links(){ return [].slice.call(document.querySelectorAll('a.dashboard-menu-link')); }
+    function textOf(a){ var t = a.querySelector('.dashboard-menu-title,h5'); return (t || a).textContent; }
+    function onMap(){ return !!document.getElementById('searchDashboard') && links().length >= 20; }
+    function find(){ var l = links(); for (var i = 0; i < l.length; i++) { if (want[nm(textOf(l[i]))]) return l[i]; } return null; }
+    function report(m){ try { window.WmsBridge.menuResult(m); } catch (e) {} }
+    function openSystem(){
+      var c = [].slice.call(document.querySelectorAll('a.profile-link,a.navbar-tab-link,.topbar-menu a,nav a'));
+      for (var i = 0; i < c.length; i++) {
+        var t = nm(c[i].textContent);
+        if (t === 'system' || t === 'система') { c[i].click(); return; }
+      }
+      var dd = document.getElementById('dropdownProfile');
+      if (dd) dd.click();
+    }
+    (function step(){
+      if (Date.now() - T0 > 9000) { report('Не удалось открыть «' + ru + '». Откройте System на сайте вручную.'); return; }
+      if (onMap()) {
+        var a = find();
+        if (a) { a.click(); report('ok'); return; }
+        var f = document.getElementById('searchDashboard');
+        if (f && f.value && !cleared) {
+          cleared = true;
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f, '');
+          f.dispatchEvent(new Event('input', { bubbles: true }));
+          setTimeout(step, 500);
+          return;
+        }
+        report('Пункта «' + ru + '» нет в меню System (нет прав или другое название).');
+        return;
+      }
+      if (Date.now() - lastTry > 1500) { lastTry = Date.now(); openSystem(); }
+      setTimeout(step, 300);
+    })();
+    return 'started';
+  };
+
+  // ---------- смена страницы сайта (адрес не меняется, меняется только заголовок) ----------
+  try {
+    var lastHead = null;
+    setInterval(function(){
+      try {
+        var h = document.querySelector('.page-heading-title,.navbar-mobile-title');
+        var t = h ? (h.textContent || '').trim() : '';
+        if (t !== lastHead) { lastHead = t; window.WmsBridge.pageChanged(t); }
+      } catch (e) {}
+    }, 1200);
+  } catch (e) {}
 })();

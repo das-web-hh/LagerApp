@@ -60,8 +60,11 @@ class CgBridge {
     var onResult: ((Int, Int, String) -> Unit)? = null
     var onTranslate: ((String) -> Unit)? = null
     var onScan: (() -> Unit)? = null
+    var onMenuResult: ((String) -> Unit)? = null
+    var onPageChanged: (() -> Unit)? = null
     @Volatile var translateOn = true
     @Volatile var scanNative = true
+    @Volatile var desktopMode = false
 
     @JavascriptInterface
     fun log(line: String) {
@@ -79,6 +82,22 @@ class CgBridge {
     @JavascriptInterface
     fun scan() {
         main.post { onScan?.invoke() }
+    }
+
+    /** Включён вид «ПК»: страница читает это при загрузке и ставит ширину окна как у монитора. */
+    @JavascriptInterface
+    fun desktopOn(): Boolean = desktopMode
+
+    /** Итог открытия пункта меню System: "ok" или текст ошибки. */
+    @JavascriptInterface
+    fun menuResult(msg: String) {
+        main.post { onMenuResult?.invoke(msg) }
+    }
+
+    /** На сайте сменилась страница (заголовок). */
+    @JavascriptInterface
+    fun pageChanged(title: String) {
+        main.post { onPageChanged?.invoke() }
     }
 
     @JavascriptInterface
@@ -123,6 +142,39 @@ object CoglasWeb {
     /** Меняется, когда WebView пришлось создать заново (система убила его процесс). */
     var viewKey by mutableIntStateOf(0)
     var lastRaw = ""
+
+    /** Вид сайта: true — как на ПК (широкая страница, десктопный User-Agent), false — мобильный. */
+    var desktop by mutableStateOf(false)
+    private var mobileUa = ""
+    private var desktopUa = ""
+
+    private fun applyUa(w: WebView) {
+        w.settings.userAgentString = if (desktop) desktopUa else mobileUa
+    }
+
+    fun setDesktop(ctx: Context, on: Boolean) {
+        CoglasTr.setDesktop(ctx, on)
+        desktop = on
+        bridge.desktopMode = on
+        val w = web ?: return
+        applyUa(w)
+        w.reload()
+    }
+
+    /** Открыть окно сайта из меню System по названию (de — немецкое, ru — русское). */
+    fun openMenu(de: String, ru: String) {
+        main.post {
+            runJs("window.__cgOpenMenu ? window.__cgOpenMenu(" + JSONObject.quote(de) + "," + JSONObject.quote(ru) +
+                ") : 'nohook'") { r ->
+                if (r == "nohook") menuToast("Сайт ещё не загрузился. Подождите и нажмите снова.")
+            }
+        }
+    }
+
+    private fun menuToast(msg: String) {
+        val c = appCtx ?: return
+        android.widget.Toast.makeText(c, msg, android.widget.Toast.LENGTH_LONG).show()
+    }
 
     /** Сканер штрихкодов приложения (с ИИ) вместо камеры сайта. */
     var nativeScan by mutableStateOf(true)
@@ -197,6 +249,8 @@ object CoglasWeb {
         bridge.translateOn = trOn
         nativeScan = CoglasTr.scan(app)
         bridge.scanNative = nativeScan
+        desktop = CoglasTr.desktop(app)
+        bridge.desktopMode = desktop
         CoglasPages.init(app)
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
@@ -217,6 +271,13 @@ object CoglasWeb {
         s.mediaPlaybackRequiresUserGesture = false
         s.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         s.textZoom = 100
+        mobileUa = s.userAgentString
+        // десктопный User-Agent: без "Android", "Mobile" и "wv"
+        desktopUa = mobileUa
+            .replace(Regex("\\(Linux; Android[^)]*\\)"), "(X11; Linux x86_64)")
+            .replace(" Mobile", "")
+            .replace("; wv", "")
+        if (desktop) s.userAgentString = desktopUa
         w.overScrollMode = View.OVER_SCROLL_NEVER
         // Свайп вверх-вниз по сайту: не отдавать жест родителям (боковой свайп вкладок, прокрутки Compose),
         // иначе сайт получает ACTION_CANCEL посреди движения и «залипает».
@@ -239,6 +300,9 @@ object CoglasWeb {
         bridge.onResult = { id, status, body -> pending.remove(id)?.invoke(status, body) }
         bridge.onTranslate = { json -> translate(json) }
         bridge.onScan = { requestScan() }
+        bridge.onMenuResult = { m -> if (m != "ok") menuToast(m) }
+        bridge.onPageChanged = { if (Session.isAdmin) scheduleSnapshot(900L) }
+        CoglasPages.onNewForm = { if (Session.isAdmin) scheduleSnapshot(1800L) }
         w.addJavascriptInterface(bridge, "WmsBridge")
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(w, script, setOf("https://stroeh.coglas.com"))
@@ -278,11 +342,7 @@ object CoglasWeb {
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 canGoBack = view.canGoBack()
-                if (Session.isAdmin && hostOk(url)) {
-                    CoglasPages.visit(url ?: "", view.title ?: "")
-                    val t = ++snapToken
-                    main.postDelayed({ if (t == snapToken && web === view) snapshot() }, 2500L)
-                }
+                if (Session.isAdmin && hostOk(url)) scheduleSnapshot(2500L)
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
@@ -423,6 +483,12 @@ object CoglasWeb {
         web?.evaluateJavascript("window.__cgRetry && window.__cgRetry(" + full + ")", null)
     }
 
+    /** Снять данные страницы через delay мс; частые вызовы склеиваются в один. */
+    fun scheduleSnapshot(delay: Long) {
+        val t = ++snapToken
+        main.postDelayed({ if (t == snapToken && web != null) snapshot() }, delay)
+    }
+
     /** Снять данные текущей страницы сайта (заголовки, кнопки, меню, поля) для списка «что делать в App». */
     fun snapshot(done: (() -> Unit)? = null) {
         val ctx = appCtx ?: return
@@ -510,6 +576,8 @@ object CoglasTr {
 
     fun enabled(ctx: Context): Boolean = sp(ctx).getBoolean("on", true)
     fun setEnabled(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("on", on).apply() }
+    fun desktop(ctx: Context): Boolean = sp(ctx).getBoolean("desktop", false)
+    fun setDesktop(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("desktop", on).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
     fun cacheSize(ctx: Context): Int = cache(ctx).length()
@@ -666,6 +734,7 @@ object CoglasPages {
                     val a = o.optJSONArray(k) ?: return emptyList()
                     return (0 until a.length()).map { a.optString(it) }
                 }
+                if (!o.getString("key").startsWith("form:")) continue // старые записи по адресу (он у сайта один) не нужны
                 val p = CgPage(
                     o.getString("key"), o.optString("title"), o.optString("url"), o.optInt("visits"), o.optLong("last"),
                     strs("headings"), strs("buttons"), strs("menu"), strs("fields"), o.optInt("inputs"), o.optInt("tables"), strs("apis")
@@ -698,42 +767,37 @@ object CoglasPages {
         main.post { version++ }
     }
 
-    /** Ключ страницы: путь + #часть; числа и GUID в адресе заменены на :id, чтобы все заказы считались одной страницей. */
-    fun keyOf(url: String): String {
-        return try {
-            val u = android.net.Uri.parse(url)
-            fun norm(x: String) = x.replace(Regex("/(\\d+|[0-9a-fA-F]{8}-[0-9a-fA-F-]{27})(?=/|$)"), "/:id")
-            val frag = u.fragment?.substringBefore('?')?.let { "#" + norm(it) } ?: ""
-            (norm(u.path ?: "/") + frag).take(160)
-        } catch (e: Exception) {
-            url.take(160)
+    private fun page(key: String): CgPage = synchronized(this) {
+        map.getOrPut(key) {
+            if (map.size >= 150) map.keys.firstOrNull()?.let { map.remove(it) }
+            CgPage(key)
         }
     }
 
-    @Synchronized
-    private fun page(key: String): CgPage = map.getOrPut(key) {
-        if (map.size >= 150) map.keys.firstOrNull()?.let { map.remove(it) }
-        CgPage(key)
+    /** Форма сайта из запроса: formKey=... или начало actionKey до ".LayoutItems". */
+    private fun formOf(line: String): String? {
+        Regex("formKey=([A-Za-z0-9_.]+)").find(line)?.let { return it.groupValues[1] }
+        val a = Regex("actionKey=([A-Za-z0-9_.]+)").find(line)?.groupValues?.get(1) ?: return null
+        val i = a.indexOf(".LayoutItems")
+        return if (i > 0) a.substring(0, i) else null
     }
 
-    @Synchronized
-    fun visit(url: String, title: String) {
-        val key = keyOf(url)
-        val p = page(key)
-        if (current != key) p.visits++
-        current = key
-        p.url = url.take(300)
-        if (title.isNotBlank()) p.title = title.take(80)
-        p.last = System.currentTimeMillis()
-        changed()
-    }
-
+    /** Запросы сайта: адрес в браузере всегда "#", поэтому страницы различаем по форме (formKey) в запросах API. */
     @Synchronized
     fun noteLog(line: String) {
+        if (!Session.isAdmin) return
+        val form = formOf(line)
+        if (form != null && "form:$form" != current) {
+            current = "form:$form"
+            val p = page(current)
+            p.visits++
+            p.last = System.currentTimeMillis()
+            if (p.title.isBlank()) p.title = form.substringAfterLast('.')
+            main.post { onNewForm?.invoke() }
+        }
         val key = current
         if (key.isEmpty()) return
-        val m = Regex("actionKey=([A-Za-z0-9_.]+)").find(line)
-        val api = m?.groupValues?.get(1)
+        val api = Regex("actionKey=([A-Za-z0-9_.]+)").find(line)?.groupValues?.get(1)
             ?: Regex("^\\S+ (?:GET|POST|PUT|DELETE|PATCH) \\d+ (\\S+)").find(line)?.groupValues?.get(1)
                 ?.substringBefore('?')?.takeIf { it.contains("/api/", ignoreCase = true) }
             ?: return
@@ -743,24 +807,27 @@ object CoglasPages {
         changed()
     }
 
-    /** Ответ pageinfo.js: JSON с заголовками, кнопками, меню и полями открытой страницы. */
+    var onNewForm: (() -> Unit)? = null
+
+    /** Ответ pageinfo.js: данные открытой страницы записываются на последнюю открытую форму. */
     @Synchronized
     fun update(json: String) {
         try {
             val o = JSONObject(json)
-            val url = o.optString("url")
-            if (url.isEmpty()) return
-            val p = page(keyOf(url))
+            val key = current
+            if (!key.startsWith("form:")) return
+            val p = page(key)
             fun strs(k: String): List<String> {
                 val a = o.optJSONArray(k) ?: return emptyList()
                 return (0 until a.length()).map { a.optString(it) }
             }
-            p.url = url.take(300)
-            if (o.optString("title").isNotBlank()) p.title = o.optString("title").take(80)
-            p.headings = strs("headings"); p.buttons = strs("buttons"); p.menu = strs("menu"); p.fields = strs("fields")
+            p.url = o.optString("url").take(300)
+            val h = strs("headings")
+            val t = h.firstOrNull() ?: o.optString("title")
+            if (t.isNotBlank()) p.title = t.take(80)
+            p.headings = h; p.buttons = strs("buttons"); p.menu = strs("menu"); p.fields = strs("fields")
             p.inputs = o.optInt("inputs"); p.tables = o.optInt("tables")
             p.last = System.currentTimeMillis()
-            if (p.visits == 0) p.visits = 1
             changed()
         } catch (e: Exception) {
         }
