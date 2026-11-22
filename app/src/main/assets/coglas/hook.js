@@ -336,6 +336,48 @@
     } catch (e) { return 'err:' + e; }
   };
 
+  // ---------- тёмная тема сайта ----------
+  // Вся страница переворачивается по яркости (белое -> тёмное, чёрный текст -> светлый) с сохранением оттенков (hue-rotate 180),
+  // затем сразу же «возвращается» всё, что переворачивать нельзя: картинки, фото, видео, штрихкоды (canvas), фоны-картинки.
+  // Синяя шапка сайта тоже возвращается как была (иначе белые значки в ней стали бы чёрными), а её выпадающие меню остаются тёмными.
+  (function(){
+    var ID = '__cgDarkCss';
+    var F = 'invert(1) hue-rotate(180deg)';
+    var CSS =
+      'html{filter:' + F + ' contrast(.88) brightness(.95)!important;background:#fff!important;color-scheme:light!important;}' +
+      'img,video,canvas,picture,iframe,embed,object,svg image,[style*="background-image"],[style*="url("],.profile-avatar,' +
+      '.dashboard-logo-right-background,.wgt-welcome-img,.file-image img{filter:' + F + '!important;}' +
+      // не переворачиваем дважды: картинка внутри уже возвращённого блока
+      'img img,picture img,[style*="background-image"] img,[style*="url("] img,[style*="background-image"] [style*="background-image"]{filter:none!important;}' +
+      // шапка сайта: как есть; её раскрывающиеся списки — снова тёмные
+      '.topbar nav.navbar,.topbar .navbar{filter:' + F + '!important;}' +
+      '.topbar .profile,.topbar .navbar-tab-unfit-list,.topbar .dropdown-menu{filter:' + F + '!important;}' +
+      '::selection{background:#3b6fd6!important;color:#fff!important;}';
+    function apply(on){
+      try {
+        var old = document.getElementById(ID);
+        if (!on) { if (old) old.remove(); return; }
+        if (old) return;
+        var root = document.head || document.documentElement;
+        if (!root) return;
+        var st = document.createElement('style');
+        st.id = ID;
+        st.textContent = CSS;
+        root.appendChild(st);
+      } catch (e) {}
+    }
+    window.__cgSetDark = function(on){ window.__cgDark = !!on; apply(!!on); };
+    var on = false;
+    try { on = !!(window.WmsBridge && window.WmsBridge.darkOn && window.WmsBridge.darkOn()); } catch (e) {}
+    window.__cgDark = on;
+    apply(on);
+    // сайт может пересобрать <head> — стиль возвращается
+    var keep = function(){ if (window.__cgDark && !document.getElementById(ID)) apply(true); };
+    try { new MutationObserver(keep).observe(document, { childList: true, subtree: true }); } catch (e) {}
+    document.addEventListener('DOMContentLoaded', keep);
+    window.addEventListener('load', keep);
+  })();
+
   // ---------- вид ПК: сайт рисуется как в Chrome «Версия для ПК» ----------
   // Ширина 980 — как у Chrome в режиме «версия для ПК» (она же даёт на сайте тот же вид, что на скриншоте из Chrome).
   // Важно: у сайта своя meta viewport (width=device-width) приходит позже нашей и перебивает её, поэтому

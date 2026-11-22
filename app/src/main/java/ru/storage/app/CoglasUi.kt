@@ -898,6 +898,24 @@ private fun SettingsTab(goSite: () -> Unit) {
             }
         }
 
+        // ---- тёмная тема сайта ----
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Тёмная тема сайта", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Светлые фоны сайта становятся тёмными, чёрный текст — светлым. Картинки, фото и штрихкоды остаются как есть. Применяется сразу.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = CoglasWeb.dark, onCheckedChange = { CoglasWeb.setDark(ctx, it) })
+            }
+        }
+
         // ---- сканер ----
         Card(
             Modifier.fillMaxWidth(),

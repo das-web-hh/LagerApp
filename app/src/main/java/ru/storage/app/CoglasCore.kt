@@ -69,6 +69,7 @@ class CgBridge {
     @Volatile var translateOn = true
     @Volatile var scanNative = true
     @Volatile var desktopMode = false
+    @Volatile var darkMode = false
 
     @JavascriptInterface
     fun log(line: String) {
@@ -91,6 +92,10 @@ class CgBridge {
     /** Включён вид «ПК»: страница читает это при загрузке и ставит ширину окна как у монитора. */
     @JavascriptInterface
     fun desktopOn(): Boolean = desktopMode
+
+    /** Включена тёмная тема сайта: страница читает это при загрузке и сразу красится тёмной. */
+    @JavascriptInterface
+    fun darkOn(): Boolean = darkMode
 
     /** Итог открытия пункта меню System: "ok" или текст ошибки. */
     @JavascriptInterface
@@ -169,6 +174,20 @@ object CoglasWeb {
     var desktop by mutableStateOf(false)
     private var mobileUa = ""
     private var desktopUa = ""
+
+    /** Тёмная тема сайта (переключатель во вкладке «Настройки»). Применяется сразу, без перезагрузки страницы. */
+    var dark by mutableStateOf(false)
+
+    private fun darkBg(on: Boolean): Int = if (on) Color.rgb(14, 14, 14) else Color.WHITE
+
+    fun setDark(ctx: Context, on: Boolean) {
+        CoglasTr.setDark(ctx, on)
+        dark = on
+        bridge.darkMode = on
+        val w = web ?: return
+        w.setBackgroundColor(darkBg(on))
+        w.evaluateJavascript("window.__cgSetDark && window.__cgSetDark(" + on + ")", null)
+    }
 
     // ---- масштаб: на каком масштабе оставили окно, на таком открываются и остальные
     private var zoomSaved = 0f
@@ -322,6 +341,8 @@ object CoglasWeb {
         bridge.scanNative = nativeScan
         desktop = CoglasTr.desktop(app)
         bridge.desktopMode = desktop
+        dark = CoglasTr.dark(app)
+        bridge.darkMode = dark
         CoglasPages.init(app)
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
@@ -363,7 +384,7 @@ object CoglasWeb {
         }
         w.isVerticalScrollBarEnabled = false
         w.isHorizontalScrollBarEnabled = false
-        w.setBackgroundColor(Color.WHITE)
+        w.setBackgroundColor(darkBg(dark))
 
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -676,6 +697,8 @@ object CoglasTr {
     fun setEnabled(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("on", on).apply() }
     fun desktop(ctx: Context): Boolean = sp(ctx).getBoolean("desktop", false)
     fun setDesktop(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("desktop", on).apply() }
+    fun dark(ctx: Context): Boolean = sp(ctx).getBoolean("dark", false)
+    fun setDark(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("dark", on).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
     /** Масштаб сайта, на котором человек оставил окно (отдельно для вида ПК и мобильного). */
