@@ -13,9 +13,10 @@
   var geo = 'scroll=' + Math.round(window.scrollX) + ',' + Math.round(window.scrollY) +
     ' scrollH=' + se.scrollHeight + ' scrollW=' + se.scrollWidth +
     (vv ? ' vv.scale=' + vv.scale + ' vv.off=' + Math.round(vv.offsetLeft) + ',' + Math.round(vv.offsetTop) + ' vv=' + Math.round(vv.width) + 'x' + Math.round(vv.height) : '');
+  var fitInfo = 'fit=' + (window.__cgFitN || 0) + ' html.inline.h=' + document.documentElement.style.height + ' computed=' + getComputedStyle(document.documentElement).height;
   var out = ['URL: ' + location.href, 'TITLE: ' + document.title,
     'state=' + document.readyState + ' visibility=' + document.visibilityState + ' hidden=' + document.hidden +
-    ' win=' + innerWidth + 'x' + innerHeight + ' dpr=' + devicePixelRatio + ' stat=' + (window.__cgStat || '-'), beat, geo, ''];
+    ' win=' + innerWidth + 'x' + innerHeight + ' dpr=' + devicePixelRatio + ' stat=' + (window.__cgStat || '-'), beat, geo, fitInfo, ''];
   try {
     out.push('В центре экрана (сверху вниз):');
     var st = document.elementsFromPoint(innerWidth / 2, innerHeight / 2);

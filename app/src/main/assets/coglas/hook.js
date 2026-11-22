@@ -159,24 +159,27 @@
 
 // ГЛАВНОЕ ИСПРАВЛЕНИЕ: в WebView у html/body/#applicationHost высота получалась 0, и форма входа центрировалась
 // вокруг верхнего края экрана (половина уходила за экран). Задаём цепочке высот полный размер экрана.
+// Делаем это через свойства элементов (CSSOM), а не через <style>: политика безопасности сайта могла блокировать вставку стилей.
 (function(){
   if (window.__cgFit) return;
   window.__cgFit = true;
-  var CSS = 'html,body,#applicationHost{height:100%!important;min-height:100%!important;}' +
-            '#wrapper{height:100%;}' +
-            '.login-container{min-height:100vh;}';
-  function add(){
+  window.__cgFitN = 0;
+  function put(e, p, v){ try { if (e) e.style.setProperty(p, v, 'important'); } catch (x) {} }
+  function fit(){
     try {
-      if (document.getElementById('__cgFit')) return;
-      var s = document.createElement('style');
-      s.id = '__cgFit';
-      s.textContent = CSS;
-      (document.head || document.documentElement).appendChild(s);
+      var d = document;
+      put(d.documentElement, 'height', '100%');
+      put(d.body, 'height', '100%');
+      put(d.getElementById('applicationHost'), 'height', '100%');
+      put(d.getElementById('wrapper'), 'height', '100%');
+      var lc = d.querySelector('.login-container');
+      if (lc) put(lc, 'min-height', '100vh');
+      window.__cgFitN++;
     } catch (e) {}
   }
-  add();
-  document.addEventListener('DOMContentLoaded', add);
-  window.addEventListener('load', add);
-  // если сайт пересоздал head/стили — вернуть нашу вставку
-  setInterval(add, 1500);
+  fit();
+  document.addEventListener('DOMContentLoaded', fit);
+  window.addEventListener('load', fit);
+  var k = 0;
+  var t = setInterval(function(){ fit(); k++; if (k > 120) { clearInterval(t); setInterval(fit, 3000); } }, 500);
 })();
