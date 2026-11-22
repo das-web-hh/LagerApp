@@ -422,10 +422,20 @@ private fun CgListScreen(e: CgMenuEntry) {
     val st = CgList.state(e.key)
     var q by remember(e.key) { mutableStateOf("") }
     var sel by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
+    var rec by remember(e.key) { mutableStateOf<Pair<String, Long>?>(null) }
+    val recCfg = RECORD_CFG[e.form]
     LaunchedEffect(e.key) { if (st.items.isEmpty() && !st.busy) CgList.load(e.key) }
     val needle = q.trim().lowercase()
-    val rows = st.items.map { CgList.flat(it) }
-        .filter { needle.isEmpty() || it.joinToString(" ") { p -> p.second }.lowercase().contains(needle) }
+    val rows = st.items.map { CgList.flat(it) to it.optLong("Id") }
+        .filter { needle.isEmpty() || it.first.joinToString(" ") { p -> p.second }.lowercase().contains(needle) }
+
+    rec?.let { (title, id) ->
+        if (recCfg != null) {
+            RecordView(title, recCfg, id) { rec = null }
+            androidx.activity.compose.BackHandler { rec = null }
+            return
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(
@@ -445,8 +455,12 @@ private fun CgListScreen(e: CgMenuEntry) {
             OutlinedButton(onClick = { CgList.load(e.key) }) { Text("Повторить") }
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-            items(rows) { r ->
-                Column(Modifier.fillMaxWidth().clickable { sel = r }.padding(vertical = 12.dp)) {
+            items(rows) { (r, rid) ->
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clickable { if (recCfg != null && rid > 0L) rec = CgList.titleOf(r) to rid else sel = r }
+                        .padding(vertical = 12.dp)
+                ) {
                     Text(CgList.titleOf(r), fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     val sub = CgList.subOf(r)
                     if (sub.isNotEmpty()) Text(sub, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

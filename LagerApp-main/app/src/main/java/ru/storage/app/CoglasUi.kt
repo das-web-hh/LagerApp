@@ -108,6 +108,10 @@ object CoglasState {
 
     var tool by mutableStateOf("")
 
+    /** Поиск и фильтр по позициям открытого заказа (0 все, 1 не готовы, 2 готовы). */
+    var posQuery by mutableStateOf("")
+    var posFilter by mutableIntStateOf(0)
+
     fun loadOrders() {
         if (ordersBusy) return
         ordersBusy = true
@@ -126,6 +130,7 @@ object CoglasState {
     }
 
     fun open(o: CgOrder) {
+        if (openOrder?.id != o.id) { posQuery = ""; posFilter = 0 }
         openOrder = o
         detail = null
         detailErr = null
@@ -515,6 +520,7 @@ private fun OrderDetailView(goSite: () -> Unit) {
                         }
                     }
                 }
+                item { OrderTools(o, d) }
                 item {
                     Text(
                         "Позиции: ${d.total} · ✓ готово ${d.done} · в работе ${d.proc} · создано ${d.created}" +
@@ -522,7 +528,7 @@ private fun OrderDetailView(goSite: () -> Unit) {
                         style = MaterialTheme.typography.titleSmall
                     )
                 }
-                items(d.positions) { p ->
+                items(visiblePositions(d)) { p ->
                     Card(
                         Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
