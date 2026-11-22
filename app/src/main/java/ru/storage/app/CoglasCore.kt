@@ -315,7 +315,14 @@ object CoglasWeb {
             if (l != null) l(m) else if (m != "ok") menuToast(m)
         }
         bridge.onPageChanged = { if (Session.isAdmin) scheduleSnapshot(900L) }
-        CoglasPages.onNewForm = { if (Session.isAdmin) scheduleSnapshot(1800L) }
+        CoglasPages.onNewForm = {
+            if (Session.isAdmin) {
+                scheduleSnapshot(1800L)
+                // второй снимок позже: первый мог застать ещё старую страницу (заголовок и кнопки соседнего окна)
+                val k = CoglasPages.currentKey()
+                main.postDelayed({ if (web != null && CoglasPages.currentKey() == k) snapshot() }, 4500L)
+            }
+        }
         w.addJavascriptInterface(bridge, "WmsBridge")
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(w, script, setOf("https://stroeh.coglas.com"))
@@ -877,8 +884,12 @@ object CoglasPages {
                 val a = o.optJSONArray(k) ?: return emptyList()
                 return (0 until a.length()).map { a.optString(it) }
             }
-            p.url = o.optString("url").take(300)
             val h = strs("headings")
+            // снимок стартовой страницы («Добро пожаловать») не относится к другим окнам: не затираем ими данные
+            if (h.any { it.startsWith("Добро пожаловать") } && !key.endsWith("Administration.Forms.About")) return
+            // пустой снимок (страница ещё не нарисована) не стирает уже собранные кнопки и поля
+            if (strs("buttons").isEmpty() && strs("fields").isEmpty() && (p.buttons.isNotEmpty() || p.fields.isNotEmpty())) return
+            p.url = o.optString("url").take(300)
             val t = h.firstOrNull() ?: o.optString("title")
             if (t.isNotBlank()) p.title = t.take(80)
             p.headings = h; p.buttons = strs("buttons"); p.menu = strs("menu"); p.fields = strs("fields")
