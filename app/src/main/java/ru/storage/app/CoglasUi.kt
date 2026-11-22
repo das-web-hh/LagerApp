@@ -374,6 +374,8 @@ private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: 
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (tab == 1) {
+                // кнопка сканера наверху: клавиатура её не закрывает; код подставится в поле, которого вы коснулись последним
+                TextButton(onClick = { CoglasWeb.requestScan() }) { Text("Скан") }
                 TextButton(onClick = onToggleView) { Text(if (desktop) "ПК" else "Моб.") }
             }
             if (tab == 1 || (tab == 0 && appPage.isNotEmpty())) {

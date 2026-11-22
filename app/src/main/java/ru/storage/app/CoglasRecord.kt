@@ -139,7 +139,7 @@ fun OrderTools(o: CgOrder, d: CgOrderDetail) {
 
 // ---------------------------------------------------------------- накладная / приход: шапка + позиции
 
-class CgRecordCfg(val read: String, val positions: String)
+class CgRecordCfg(val read: String, val positions: String, val posLabel: String = "Позиции")
 
 /** Для каких списков есть карточка «шапка + позиции» (названия запросов взяты из отчёта по сайту). */
 val RECORD_CFG = mapOf(
@@ -147,13 +147,18 @@ val RECORD_CFG = mapOf(
         "DeliveryNote.Forms.DeliveryNote.LayoutItems.DeliveryNoteDetails.Actions.Read",
         "DeliveryNote.Forms.DeliveryNote.LayoutItems.Positions.Actions.Search"
     ),
+    "BusinessPartner.Forms.BusinessPartnerList" to CgRecordCfg(
+        "BusinessPartner.Forms.BusinessPartner.LayoutItems.BusinessPartnerDetails.Actions.Read",
+        "BusinessPartner.Forms.BusinessPartner.LayoutItems.ShippingTariffList.Actions.Search",
+        "Тарифы доставки"
+    ),
     "GoodsInReceipt.Forms.GoodsInReceiptList" to CgRecordCfg(
         "GoodsInReceipt.Forms.GoodsInReceipt.LayoutItems.GoodsInReceiptDetails.Actions.Read",
         "GoodsInReceipt.Forms.GoodsInReceipt.LayoutItems.Positions.Actions.Search"
     )
 )
 
-class CgRecord(val header: List<Pair<String, String>>, val positions: List<List<Pair<String, String>>>, val total: Int)
+class CgRecord(val header: List<Pair<String, String>>, val positions: List<List<Pair<String, String>>>, val total: Int, val posErr: String = "")
 
 object CgRecordApi {
     suspend fun load(cfg: CgRecordCfg, id: Long): CgRecord {
@@ -163,29 +168,38 @@ object CgRecordApi {
         val rows = ArrayList<List<Pair<String, String>>>()
         var total = 0
         var skip = 0
-        while (skip < 500) {
-            val body = JSONObject()
-                .put(
-                    "SearchRequest", JSONObject()
-                        .put("SortConfigurationKey", JSONObject.NULL)
-                        .put("PropertyFilters", JSONArray())
-                        .put("InvertSorting", false)
-                        .put("CancelSearchRequestIfAbortedByClient", true)
-                        .put("Skip", skip)
-                        .put("Top", 100)
-                )
-                .put("ParentId", id)
-                .toString()
-            val txt = CoglasData.call(cfg.positions, body, retry = true)
-            val pr = JSONObject(txt).optJSONObject("PageResult")
-            val arr = pr?.optJSONArray("Items")
-            total = pr?.optInt("Total") ?: 0
-            val n = arr?.length() ?: 0
-            for (i in 0 until n) arr?.optJSONObject(i)?.let { rows.add(CgList.flat(it)) }
-            skip += n
-            if (n <= 0 || skip >= total) break
+        var posErr = ""
+        try {
+            while (skip < 500) {
+                val body = JSONObject()
+                    .put(
+                        "SearchRequest", JSONObject()
+                            .put("SortConfigurationKey", JSONObject.NULL)
+                            .put("PropertyFilters", JSONArray())
+                            .put("InvertSorting", false)
+                            .put("CancelSearchRequestIfAbortedByClient", true)
+                            .put("Skip", skip)
+                            .put("Top", 100)
+                    )
+                    .put("ParentId", id)
+                    .toString()
+                val txt = CoglasData.call(cfg.positions, body, retry = true)
+                val pr = JSONObject(txt).optJSONObject("PageResult")
+                val arr = pr?.optJSONArray("Items")
+                total = pr?.optInt("Total") ?: 0
+                val n = arr?.length() ?: 0
+                for (i in 0 until n) arr?.optJSONObject(i)?.let { rows.add(CgList.flat(it)) }
+                skip += n
+                if (n <= 0 || skip >= total) break
+            }
+        } catch (e: CgError) {
+            // шапка важнее: если список позиций не открылся, показываем хотя бы шапку
+            if (e.needSite) throw e
+            posErr = e.message ?: "список не загрузился"
+        } catch (e: Exception) {
+            posErr = "список не удалось разобрать"
         }
-        return CgRecord(header, rows, total)
+        return CgRecord(header, rows, total, posErr)
     }
 }
 
@@ -262,7 +276,13 @@ fun RecordView(title: String, cfg: CgRecordCfg, id: Long, onClose: () -> Unit) {
                             shape = MaterialTheme.shapes.large
                         )
                     }
-                    item { Text("Позиции: ${r.total}" + if (rows.size != r.positions.size) " · найдено ${rows.size}" else "", style = MaterialTheme.typography.titleSmall) }
+                    item {
+                        Text(
+                            cfg.posLabel + ": ${r.total}" + (if (rows.size != r.positions.size) " · найдено ${rows.size}" else "") +
+                                (if (r.posErr.isNotEmpty()) "\nНе загрузились: ${r.posErr}" else ""),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                    }
                     items(rows) { p ->
                         Card(
                             Modifier.fillMaxWidth(),
