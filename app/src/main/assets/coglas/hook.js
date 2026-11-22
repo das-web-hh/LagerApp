@@ -1,6 +1,86 @@
 (function(){
   if (window.__wmsHook) return;
   window.__wmsHook = true;
+
+  // Клавиатура только по касанию: сайт не может сам поставить курсор в поле (autofocus, el.focus() без нажатия пользователя).
+  (function(){
+    var last = 0;
+    function mark(){ last = Date.now(); }
+    ['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click', 'keydown'].forEach(function(t){
+      document.addEventListener(t, mark, true);
+    });
+    function isText(e){
+      return !!e && (e.tagName === 'TEXTAREA' || e.isContentEditable ||
+        (e.tagName === 'INPUT' && /^(text|search|number|tel|email|url|password|)$/i.test(e.type || '')));
+    }
+    function userRecent(){ return window.__wmsAllowFocus === true || Date.now() - last < 800; }
+    try {
+      var origFocus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function(){
+        if (isText(this) && !userRecent()) return;
+        return origFocus.apply(this, arguments);
+      };
+    } catch (x) {}
+    document.addEventListener('focusin', function(e){
+      try {
+        var t = e.target;
+        if (!isText(t) || userRecent()) return;
+        if (e.relatedTarget && isText(e.relatedTarget)) return; // переход между полями кнопкой «Далее» на клавиатуре
+        t.blur();
+      } catch (x) {}
+    }, true);
+    // Клавиатура не должна закрывать результаты: пока поле в фокусе, снизу временно добавляется пустое место,
+    // и поле прокручивается к верху видимой области. После выхода из поля всё возвращается как было.
+    var padEl = null;
+    function addPad(){
+      if (padEl && padEl.isConnected) return;
+      padEl = document.createElement('div');
+      padEl.id = '__wmsPad';
+      padEl.style.cssText = 'height:60vh;width:1px;pointer-events:none';
+      (document.body || document.documentElement).appendChild(padEl);
+    }
+    function dropPad(){ if (padEl) { try { padEl.remove(); } catch (x) {} padEl = null; } }
+    document.addEventListener('focusin', function(e){
+      var t = e.target;
+      if (!isText(t) || document.activeElement !== t) return;
+      window.__wmsLast = t;
+      window.__wmsLastAt = Date.now();
+      addPad();
+      setTimeout(function(){
+        try {
+          if (document.activeElement !== t) return;
+          t.style.scrollMarginTop = '80px';
+          t.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        } catch (x) {}
+      }, 350);
+    }, true);
+    document.addEventListener('focusout', function(){
+      setTimeout(function(){ if (!isText(document.activeElement)) dropPad(); }, 400);
+    }, true);
+    function strip(){
+      try {
+        [].forEach.call(document.querySelectorAll('[autofocus]'), function(e){ e.removeAttribute('autofocus'); });
+        var a = document.activeElement;
+        if (isText(a) && !userRecent()) a.blur();
+      } catch (x) {}
+    }
+    try {
+      document.addEventListener('DOMContentLoaded', strip);
+      window.addEventListener('load', function(){ strip(); setTimeout(strip, 500); setTimeout(strip, 1500); });
+      new MutationObserver(function(ms){
+        for (var i = 0; i < ms.length; i++) {
+          var n = ms[i].addedNodes;
+          for (var j = 0; j < n.length; j++) {
+            var el = n[j];
+            if (el && el.nodeType === 1) {
+              if (el.hasAttribute && el.hasAttribute('autofocus')) el.removeAttribute('autofocus');
+              if (el.querySelectorAll) [].forEach.call(el.querySelectorAll('[autofocus]'), function(x){ x.removeAttribute('autofocus'); });
+            }
+          }
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (x) {}
+  })();
   var cap = window.__wmsHdr = {};
   function capture(k, v){ try { if (/^(x-csrf|x-requested-with)/i.test(k)) cap[k] = v; } catch (e) {} }
   function hc(h){
@@ -113,17 +193,28 @@
         if (e.tagName === 'TEXTAREA') return true;
         return e.tagName === 'INPUT' && /^(text|search|number|tel|)$/i.test(e.type || '');
       }
+      function visible(e){ return e && e.isConnected && e.offsetParent !== null; }
+      function labelOf(e){
+        try { var r = e.closest('tr,.row,.form-group,.filter-row') || (e.parentElement && e.parentElement.parentElement); return (r && r.innerText) || ''; } catch (x) { return ''; }
+      }
       var el = document.activeElement;
       if (!okInput(el)) {
-        var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){ return okInput(e) && e.offsetParent !== null; });
+        el = null;
+        var last = window.__wmsLast;
+        // поле, которого человек коснулся последним (до 3 минут назад)
+        if (last && okInput(last) && visible(last) && Date.now() - (window.__wmsLastAt || 0) < 180000) el = last;
+      }
+      if (!el) {
+        var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){ return okInput(e) && visible(e); });
+        // пустое поле фильтра «Артикул / GTIN»
+        var art = all.filter(function(e){ return !e.value && /артикул|gtin|artikel|article/i.test(labelOf(e)); });
         var pri = all.filter(function(e){
           var h = (e.name || '') + ' ' + (e.id || '') + ' ' + (e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '');
           return /barcode|scan|ean|gtin|code|штрих|скан|код|lager|le\b/i.test(h);
         });
-        el = pri[0] || all[0];
+        el = art[0] || pri[0] || all[0];
       }
       if (!el) return 'noinput';
-      el.focus();
       var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
       setter.call(el, String(code));

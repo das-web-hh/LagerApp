@@ -51,6 +51,9 @@ class CgMenuEntry(
 object CoglasSchema {
     private val list = ArrayList<CgMenuEntry>()
     private var file: File? = null
+    /** Папка данных приложения: сюда же пишется офлайн-кэш списков. */
+    var dir: File? = null
+        private set
     /** Меняется при каждом изменении данных: экраны читают его, чтобы перерисоваться. */
     var version by mutableIntStateOf(0)
 
@@ -59,6 +62,7 @@ object CoglasSchema {
     @Synchronized
     fun init(ctx: Context) {
         if (file != null) return
+        dir = ctx.applicationContext.filesDir
         file = File(ctx.applicationContext.filesDir, "coglas_schema.json")
         try {
             val f = file!!

@@ -108,6 +108,10 @@ object CoglasState {
 
     var tool by mutableStateOf("")
 
+    /** Поиск и фильтр по позициям открытого заказа (0 все, 1 не готовы, 2 готовы). */
+    var posQuery by mutableStateOf("")
+    var posFilter by mutableIntStateOf(0)
+
     fun loadOrders() {
         if (ordersBusy) return
         ordersBusy = true
@@ -126,6 +130,7 @@ object CoglasState {
     }
 
     fun open(o: CgOrder) {
+        if (openOrder?.id != o.id) { posQuery = ""; posFilter = 0 }
         openOrder = o
         detail = null
         detailErr = null
@@ -293,6 +298,14 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                         if (w.visibility != android.view.View.VISIBLE) w.visibility = android.view.View.VISIBLE
                     }
                 )
+            }
+
+            if (tab == 1 && CoglasWeb.loadError.isEmpty()) {
+                // сканер приложения: код подставится в поле, которого вы коснулись последним (или в пустое поле «Артикул / GTIN»)
+                androidx.compose.material3.SmallFloatingActionButton(
+                    onClick = { CoglasWeb.requestScan() },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 16.dp)
+                ) { Text("Скан") }
             }
 
             if (tab == 1 && CoglasWeb.loadError.isNotEmpty()) {
@@ -515,6 +528,7 @@ private fun OrderDetailView(goSite: () -> Unit) {
                         }
                     }
                 }
+                item { OrderTools(o, d) }
                 item {
                     Text(
                         "Позиции: ${d.total} · ✓ готово ${d.done} · в работе ${d.proc} · создано ${d.created}" +
@@ -522,7 +536,7 @@ private fun OrderDetailView(goSite: () -> Unit) {
                         style = MaterialTheme.typography.titleSmall
                     )
                 }
-                items(d.positions) { p ->
+                items(visiblePositions(d)) { p ->
                     Card(
                         Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
@@ -708,6 +722,21 @@ internal fun ScanCard() {
 
 // ---------------------------------------------------------------- настройки (только админ)
 
+/** Отчёт файлом .txt: длинный текст не обрезается, как при копировании в мессенджер. */
+private fun cgShareFile(ctx: Context, text: String) {
+    try {
+        val dir = java.io.File(ctx.cacheDir, "export").also { it.mkdirs() }
+        val f = java.io.File(dir, "coglas_report.txt")
+        f.writeText(text, Charsets.UTF_8)
+        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+        val i = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(Intent.createChooser(i, "Отправить файл").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: Exception) {
+        android.widget.Toast.makeText(ctx, "Не удалось создать файл", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
 private fun cgCopy(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("coglas", text))
@@ -796,6 +825,7 @@ private fun SettingsTab(goSite: () -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { cgCopy(ctx, result) }, modifier = Modifier.weight(1f)) { Text("Копировать") }
                 OutlinedButton(onClick = { cgShare(ctx, result) }, modifier = Modifier.weight(1f)) { Text("Поделиться") }
+                OutlinedButton(onClick = { cgShareFile(ctx, result) }, modifier = Modifier.weight(1f)) { Text("Файлом") }
                 Button(onClick = { st.tool = "" }, modifier = Modifier.weight(1f)) { Text("Закрыть") }
             }
         }
@@ -914,6 +944,18 @@ private fun SettingsTab(goSite: () -> Unit) {
                         enabled = pages.isNotEmpty(), modifier = Modifier.weight(1f)
                     ) { Text("Очистить") }
                 }
+                OutlinedButton(
+                    onClick = {
+                        CoglasPages.exportFile { ok ->
+                            Toast.makeText(
+                                ctx,
+                                if (ok) "Сохранено: Загрузки / coglas_report.txt" else "Не удалось сохранить файл",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    },
+                    enabled = pages.isNotEmpty(), modifier = Modifier.fillMaxWidth()
+                ) { Text("Сохранить файл в «Загрузки»") }
                 if (showPages) pages.forEach { PageCard(it) }
             }
         }

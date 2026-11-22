@@ -68,6 +68,39 @@ object CgList {
         var total by mutableIntStateOf(0)
         var busy by mutableStateOf(false)
         var err by mutableStateOf("")
+        /** Не 0: показан сохранённый список от этого времени, потому что сайт сейчас недоступен. */
+        var offlineAt by mutableStateOf(0L)
+    }
+
+    private fun cacheFile(key: String): java.io.File? = CoglasSchema.dir?.let { java.io.File(it, "coglas_cache_$key.json") }
+
+    private fun saveCache(key: String, total: Int, items: List<JSONObject>) {
+        try {
+            val f = cacheFile(key) ?: return
+            val arr = JSONArray()
+            items.forEach { arr.put(it) }
+            f.writeText(JSONObject().put("t", System.currentTimeMillis()).put("total", total).put("items", arr).toString(), Charsets.UTF_8)
+        } catch (x: Exception) {
+        }
+    }
+
+    /** Сохранённый список раздела; true — удалось показать. */
+    private fun loadCache(key: String, st: State): Boolean {
+        try {
+            val f = cacheFile(key) ?: return false
+            if (!f.exists()) return false
+            val o = JSONObject(f.readText(Charsets.UTF_8))
+            val arr = o.optJSONArray("items") ?: return false
+            val got = ArrayList<JSONObject>()
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { got.add(it) }
+            if (got.isEmpty()) return false
+            st.items = got
+            st.total = o.optInt("total", got.size)
+            st.offlineAt = o.optLong("t")
+            return true
+        } catch (x: Exception) {
+            return false
+        }
     }
 
     private val map = HashMap<String, State>()
@@ -99,15 +132,20 @@ object CgList {
                         .put("Skip", skip)
                         .put("Top", 30)
                 ).toString()
-                val txt = CoglasData.call(action, body)
+                val txt = CoglasData.call(action, body, retry = true)
                 val pr = JSONObject(txt).optJSONObject("PageResult")
                 val arr = pr?.optJSONArray("Items")
                 val got = ArrayList<JSONObject>()
                 if (arr != null) for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { got.add(it) }
                 st.total = pr?.optInt("Total") ?: got.size
                 st.items = if (more) st.items + got else got
+                st.offlineAt = 0L
+                if (!more) saveCache(key, st.total, got)
             } catch (x: CgError) {
-                st.err = x.message ?: "Ошибка"
+                // нет сети или вход слетел: показываем сохранённый список, а не пустой экран
+                if (st.items.isNotEmpty() || loadCache(key, st)) st.offlineAt = st.offlineAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+                else st.err = x.message ?: "Ошибка"
+                if (st.offlineAt > 0L) st.err = x.message ?: "Ошибка"
             } catch (x: Exception) {
                 st.err = "Не удалось разобрать ответ сайта"
             } finally {
@@ -364,10 +402,13 @@ fun MenuWorkScreen(key: String) {
         }
         if (action == null) {
             Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    "Этот раздел в разработке.\nЧто на сайте — кнопка «i».", textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Для этого раздела пока нет родного экрана.\nЧто на сайте — кнопка «i». Раздел работает на сайте целиком.",
+                        textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(onClick = { CoglasState.tab = 1; CoglasWeb.openMenu(e.de, e.ru) }) { Text("Открыть раздел") }
+                }
             }
         } else {
             CgListScreen(e)
@@ -381,10 +422,20 @@ private fun CgListScreen(e: CgMenuEntry) {
     val st = CgList.state(e.key)
     var q by remember(e.key) { mutableStateOf("") }
     var sel by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
+    var rec by remember(e.key) { mutableStateOf<Pair<String, Long>?>(null) }
+    val recCfg = RECORD_CFG[e.form]
     LaunchedEffect(e.key) { if (st.items.isEmpty() && !st.busy) CgList.load(e.key) }
     val needle = q.trim().lowercase()
-    val rows = st.items.map { CgList.flat(it) }
-        .filter { needle.isEmpty() || it.joinToString(" ") { p -> p.second }.lowercase().contains(needle) }
+    val rows = st.items.map { CgList.flat(it) to it.optLong("Id") }
+        .filter { needle.isEmpty() || it.first.joinToString(" ") { p -> p.second }.lowercase().contains(needle) }
+
+    rec?.let { (title, id) ->
+        if (recCfg != null) {
+            RecordView(title, recCfg, id) { rec = null }
+            androidx.activity.compose.BackHandler { rec = null }
+            return
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(
@@ -392,13 +443,24 @@ private fun CgListScreen(e: CgMenuEntry) {
             placeholder = { Text("Поиск в загруженных") }, modifier = Modifier.fillMaxWidth(),
             shape = MaterialTheme.shapes.large
         )
-        if (st.err.isNotEmpty()) {
+        if (st.offlineAt > 0L) {
+            val at = SimpleDateFormat("dd.MM HH:mm", Locale.GERMANY).format(java.util.Date(st.offlineAt))
+            Text(
+                "Нет связи с сайтом. Показан сохранённый список от $at.",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)
+            )
+            OutlinedButton(onClick = { CgList.load(e.key) }, enabled = !st.busy) { Text("Обновить") }
+        } else if (st.err.isNotEmpty()) {
             Text(st.err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
             OutlinedButton(onClick = { CgList.load(e.key) }) { Text("Повторить") }
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-            items(rows) { r ->
-                Column(Modifier.fillMaxWidth().clickable { sel = r }.padding(vertical = 12.dp)) {
+            items(rows) { (r, rid) ->
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clickable { if (recCfg != null && rid > 0L) rec = CgList.titleOf(r) to rid else sel = r }
+                        .padding(vertical = 12.dp)
+                ) {
                     Text(CgList.titleOf(r), fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     val sub = CgList.subOf(r)
                     if (sub.isNotEmpty()) Text(sub, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

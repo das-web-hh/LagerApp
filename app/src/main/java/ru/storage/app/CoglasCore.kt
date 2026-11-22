@@ -756,6 +756,7 @@ object CoglasPages {
             }
         } catch (e: Exception) {
         }
+        main.postDelayed({ exportFile() }, 3000L)
     }
 
     @Synchronized
@@ -771,6 +772,48 @@ object CoglasPages {
             }
             sp()?.edit()?.putString("pages", arr.toString())?.apply()
         } catch (e: Exception) {
+        }
+        exportFile()
+    }
+
+    /**
+     * Весь отчёт по страницам сайта сам обновляется одним файлом «Загрузки/coglas_report.txt» на телефоне
+     * (после каждого нового окна/запроса, с паузой ~1,5 с). Его можно прикрепить из памяти телефона.
+     */
+    fun exportFile(done: ((Boolean) -> Unit)? = null) {
+        val c = ctx ?: run { done?.invoke(false); return }
+        if (map.isEmpty()) { done?.invoke(false); return }
+        val text = report()
+        thread {
+            var ok = false
+            try {
+                val name = "coglas_report.txt"
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    val cr = c.contentResolver
+                    val rel = android.os.Environment.DIRECTORY_DOWNLOADS + "/"
+                    val coll = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    var uri: android.net.Uri? = null
+                    cr.query(
+                        coll, arrayOf(android.provider.MediaStore.MediaColumns._ID),
+                        android.provider.MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " +
+                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                        arrayOf(name, rel), null
+                    )?.use { if (it.moveToFirst()) uri = android.content.ContentUris.withAppendedId(coll, it.getLong(0)) }
+                    if (uri == null) {
+                        val v = android.content.ContentValues()
+                        v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                        v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, rel)
+                        uri = cr.insert(coll, v)
+                    }
+                    uri?.let { u -> cr.openOutputStream(u, "wt")?.use { o -> o.write(text.toByteArray(Charsets.UTF_8)); ok = true } }
+                } else {
+                    val d = c.getExternalFilesDir(null)
+                    if (d != null) { java.io.File(d, name).writeText(text, Charsets.UTF_8); ok = true }
+                }
+            } catch (e: Exception) {
+            }
+            if (done != null) main.post { done(ok) }
         }
     }
 
@@ -905,13 +948,23 @@ object CoglasData {
         else -> CgError("Ошибка $status: " + text.take(300))
     }
 
-    suspend fun call(path: String, body: String): String {
-        val (st, txt) = CoglasWeb.api(
-            "PUT", "/server/api/Process/executeAction?actionKey=$path", body
-        )
-        if (st != 200) throw apiError(st, txt)
-        CoglasWeb.lastRaw = txt
-        return txt
+    /** retry = true только для чтения (поиск списков): при обрыве сети запрос повторяется до 3 раз. Запись не повторяем: риск дубля. */
+    suspend fun call(path: String, body: String, retry: Boolean = false): String {
+        var last: CgError? = null
+        for (attempt in 0..2) {
+            val (st, txt) = CoglasWeb.api(
+                "PUT", "/server/api/Process/executeAction?actionKey=$path", body
+            )
+            if (st == 200) {
+                CoglasWeb.lastRaw = txt
+                return txt
+            }
+            last = apiError(st, txt)
+            val transient = st == 0 || st == -2 || st in 502..504
+            if (!retry || !transient || attempt == 2) throw last
+            kotlinx.coroutines.delay(1000L * (attempt + 1))
+        }
+        throw last ?: CgError("Ошибка сети.")
     }
 
     private inline fun <T> parsing(block: () -> T): T =
