@@ -136,26 +136,45 @@
     } catch (e) { return 'err:' + e; }
   };
 
-  // ---------- вид ПК: сайт рисуется как на большом мониторе ----------
+  // ---------- вид ПК: сайт рисуется как в Chrome «Версия для ПК» ----------
+  // Ширина 980 — как у Chrome в режиме «версия для ПК» (она же даёт на сайте тот же вид, что на скриншоте из Chrome).
+  // Важно: у сайта своя meta viewport (width=device-width) приходит позже нашей и перебивает её, поэтому
+  // правятся ВСЕ meta viewport, и по мере появления новых — тоже.
   try {
     var desk = false;
     try { desk = !!(window.WmsBridge && window.WmsBridge.desktopOn && window.WmsBridge.desktopOn()); } catch (e) {}
     if (desk) {
-      var VW = 1024;
+      var VW = 980, VC = 'width=' + VW;
+      // сайт не должен считать устройство телефоном
+      try {
+        Object.defineProperty(navigator, 'platform', { get: function(){ return 'Linux x86_64'; } });
+        Object.defineProperty(navigator, 'userAgentData', {
+          get: function(){ return { mobile: false, platform: 'Linux', brands: [{ brand: 'Chromium', version: '120' }], getHighEntropyValues: function(){ return Promise.resolve({ mobile: false, platform: 'Linux' }); } }; }
+        });
+      } catch (e) {}
       var setVp = function(){
         try {
-          var h = document.head || document.documentElement;
-          if (!h) return;
-          var m = document.querySelector('meta[name=viewport]');
-          if (!m) { m = document.createElement('meta'); m.setAttribute('name', 'viewport'); h.appendChild(m); }
-          var c = 'width=' + VW;
-          if (m.getAttribute('content') !== c) m.setAttribute('content', c);
+          var root = document.head || document.documentElement;
+          if (!root) return;
+          var all = document.querySelectorAll('meta[name=viewport]');
+          if (!all.length) {
+            var nm = document.createElement('meta');
+            nm.setAttribute('name', 'viewport');
+            nm.setAttribute('content', VC);
+            root.appendChild(nm);
+            return;
+          }
+          for (var i = 0; i < all.length; i++) {
+            if (all[i].getAttribute('content') !== VC) all[i].setAttribute('content', VC);
+          }
         } catch (e) {}
       };
       setVp();
+      try {
+        new MutationObserver(setVp).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['content'] });
+      } catch (e) {}
       document.addEventListener('DOMContentLoaded', setVp);
       window.addEventListener('load', setVp);
-      var n = 0, iv = setInterval(function(){ setVp(); if (++n > 12) clearInterval(iv); }, 800);
     }
   } catch (e) {}
 
