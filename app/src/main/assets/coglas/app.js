@@ -208,6 +208,9 @@
       var splash = txt.length < 40 || (/loading/i.test(txt) && txt.length < 80);
       var quiet = Date.now() - last > 800;
       var waited = Date.now() - t0;
+      // пока на экране форма входа — не переводим и ничего не трогаем: ждём, пока пользователь войдёт
+      var loginUp = !!document.querySelector('input[type=password]');
+      if (loginUp) { t0 = Date.now(); setTimeout(wait, 500); return; }
       if (!splash && quiet) {
         try { if (idle) idle.disconnect(); } catch (e) {}
         window.__cgStat = 'on';

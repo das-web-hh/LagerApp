@@ -86,10 +86,33 @@
     var r = e.getBoundingClientRect();
     return r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.6;
   }
-  var n = 0, hidden = 0;
+  var n = 0, hidden = 0, fixedN = 0;
+  function unhide(){
+    // форма входа есть в DOM, но невидима (прозрачность 0 / скрыта / анимация «зависла») — принудительно показываем
+    var pw = document.querySelector('input[type=password]');
+    if (!pw || fixedN >= 12) return;
+    var e = pw;
+    while (e && e !== document.documentElement) {
+      var cs = getComputedStyle(e), bad = [];
+      if (parseFloat(cs.opacity) < 0.99) bad.push('opacity:1');
+      if (cs.visibility === 'hidden') bad.push('visibility:visible');
+      if (bad.length) {
+        for (var i = 0; i < bad.length; i++) {
+          var kv = bad[i].split(':');
+          e.style.setProperty(kv[0], kv[1], 'important');
+        }
+        e.style.setProperty('animation', 'none', 'important');
+        e.style.setProperty('transition', 'none', 'important');
+        fixedN++;
+        L('forced visible: ' + e.tagName + (e.id ? '#' + e.id : '') + (typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\s+/).join('.') : '') + ' (' + bad.join(',') + ')');
+      }
+      e = e.parentElement;
+    }
+  }
   function tick(){
     n++;
     try {
+      if (document.readyState === 'complete' && n >= 3) unhide();
       if (document.readyState === 'complete' && document.body && hidden < 3) {
         var x = window.innerWidth / 2, y = window.innerHeight / 2;
         var top = document.elementFromPoint(x, y);

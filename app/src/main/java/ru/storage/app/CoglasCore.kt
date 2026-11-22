@@ -203,7 +203,7 @@ object CoglasWeb {
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
-                if (hostOk(url)) { view.evaluateJavascript(script, null); watch(view) }
+                if (hostOk(url)) { view.evaluateJavascript(script, null); watch(view); nudge(view, 0) }
                 canGoBack = view.canGoBack()
             }
 
@@ -283,10 +283,23 @@ object CoglasWeb {
                         trNote = "Сайт не отрисовался с переводом — открыт без перевода."
                         view.reload()
                     }
-                    else -> trNote = "Сайт не вышел с экрана загрузки (перевод ещё не запускался). Проверьте интернет и вход."
+                    "nostart" -> trNote = "Сайт не вышел с экрана загрузки (перевод ещё не запускался). Проверьте интернет и вход."
+                    else -> { }
                 }
             }
         }, 25000L)
+    }
+
+    /** Раз в полсекунды заставляем WebView перерисоваться: без этого он мог «замирать» с пустым экраном. */
+    private fun nudge(view: WebView, n: Int) {
+        if (n > 60) return
+        main.postDelayed({
+            if (web === view) {
+                view.invalidate()
+                if (n % 4 == 0) { view.onResume(); view.resumeTimers() }
+                nudge(view, n + 1)
+            }
+        }, 500L)
     }
 
     private fun recreateView() {

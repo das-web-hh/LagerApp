@@ -15,6 +15,15 @@
     for (var k = 0; k < st.length && k < 6; k++) out.push('  ' + d(st[k]));
     out.push('');
   } catch (e) {}
+  try {
+    var u = document.querySelector('input[name=Username],input[type=password]');
+    out.push('Цепочка от поля входа вверх:');
+    for (var q = u, m = 0; q && m < 12; q = q.parentElement, m++) {
+      var c2 = getComputedStyle(q);
+      out.push('  ' + d(q) + ' ovf=' + c2.overflow + ' tr=' + (c2.transform === 'none' ? '-' : 'Y') + ' anim=' + c2.animationName + ' ptr=' + c2.pointerEvents);
+    }
+    out.push('');
+  } catch (e) {}
   var els = document.querySelectorAll('a,button,input,select,textarea,[role=button],[onclick],[ng-click]');
   var n = 0;
   for (var i = 0; i < els.length && n < 150; i++) {
