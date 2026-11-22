@@ -190,9 +190,14 @@ object ReceiveStore {
     @Synchronized
     fun forOrder(ctx: Context, o: CgOrder, d: CgOrderDetail): RecvJob {
         load(ctx)
-        jobs[o.id]?.let { return it }
+        // рамка в календаре — на «План прихода» заказа (а не на дату, которую сайт ставит в форме накладной)
+        val plan = Regex("\\d{2}\\.\\d{2}\\.\\d{4}").find(
+            d.header.firstOrNull { it.first == "План прихода" }?.second ?: o.planned
+        )?.value.orEmpty()
+        jobs[o.id]?.let { if (plan.isNotBlank() && it.siteDate != plan) it.siteDate = plan; return it }
         val j = RecvJob(o.id, o.number, o.supplier)
         j.date = today()
+        j.siteDate = plan
         d.positions.forEach { p ->
             val name = p.name.ifBlank { p.title }
             val row = ItemRow(name, fmtQ(p.qty))
@@ -402,6 +407,7 @@ fun ReceiveScreen(job: RecvJob) {
             emptyText = "Отсканируйте товар — он появится в списке",
             recvStyle = true,
             pool = job.pool,
+            multiScanTick = st.receiveScanTick,
             onAdded = { error = "" },
             scanner = true,
             inventory = true,

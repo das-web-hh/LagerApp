@@ -584,6 +584,28 @@ object CoglasWeb {
         return if (w.canGoBack()) { w.goBack(); true } else false
     }
 
+    /**
+     * Системная «Назад» на вкладке «Сайт»: сайт — одностраничный (история WebView не меняется), поэтому нажимаем
+     * кнопку «Назад» самой страницы (.btn-back или кнопка с текстом Назад/Zurück). onResult(true) — нажата.
+     */
+    fun siteBack(onResult: (Boolean) -> Unit) {
+        main.post {
+            runJs(SITE_BACK_JS) { r -> onResult(r == "clicked") }
+        }
+    }
+
+    private const val SITE_BACK_JS = "(function(){" +
+        "function vis(e){try{var r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return false;" +
+        "var cs=getComputedStyle(e);return cs.visibility!=='hidden'&&cs.display!=='none';}catch(x){return false;}}" +
+        "var rx=/^(назад|zurück|zurueck|back)$/i;" +
+        "var c=[].slice.call(document.querySelectorAll('.btn-back,a,button,[role=button]')).filter(function(e){" +
+        "if(!vis(e)||e.disabled||e.id==='__cgScanBtn')return false;" +
+        "if(e.classList&&e.classList.contains('btn-back'))return true;" +
+        "return rx.test((e.textContent||'').replace(/\\s+/g,' ').trim());});" +
+        "if(!c.length)return 'none';" +
+        "var b=c.filter(function(e){return e.classList&&e.classList.contains('btn-back');})[0]||c[0];" +
+        "try{b.click();}catch(x){return 'none';}return 'clicked';})()"
+
     fun reload() { web?.reload() }
     fun home() { web?.loadUrl(START_URL) }
 

@@ -120,6 +120,8 @@ object CoglasState {
     var receiveOpen by mutableStateOf(false)
     var receiveStep by mutableIntStateOf(0)
     var receiveSearchTick by mutableIntStateOf(0)
+    /** растёт при нажатии «Скан» в шапке «Приема товаров» — открывается сканер на 10 минут */
+    var receiveScanTick by mutableIntStateOf(0)
 
     fun loadOrders() {
         if (ordersBusy) return
@@ -219,7 +221,8 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             st.tab == 0 && st.receiveOpen -> if (st.receiveStep == 1) st.receiveStep = 0 else st.receiveOpen = false
             st.tab == 0 && st.appPage == "orders" && st.openOrder != null -> st.closeOrder()
             st.tab == 0 && st.appPage.isNotEmpty() -> st.appPage = ""
-            st.tab == 1 && CoglasWeb.canGoBack -> CoglasWeb.goBack()
+            // на сайте системная «Назад» нажимает кнопку «Назад» самой страницы; нет её — шаг назад по истории, потом выход
+            st.tab == 1 -> CoglasWeb.siteBack { clicked -> if (!clicked && !CoglasWeb.goBack()) onBack() }
             st.tab == 2 -> st.tab = 0
             else -> onBack()
         }
@@ -287,7 +290,8 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             onHome = { st.tab = 1; CoglasWeb.home() },
             onScan = { if (tab == 1) CoglasWeb.requestScan() else scanFor = "info" },
             receive = tab == 0 && st.receiveOpen,
-            onSearch = { st.receiveSearchTick++ }
+            onSearch = { st.receiveSearchTick++ },
+            receiveScan = if (tab == 0 && st.receiveOpen && st.receiveStep == 0) ({ st.receiveScanTick++ }) else null
         )
         if (tab == 1 && CoglasWeb.progress in 1..99) {
             LinearProgressIndicator(progress = { CoglasWeb.progress / 100f }, modifier = Modifier.fillMaxWidth())
@@ -377,7 +381,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
 }
 
 @Composable
-private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit, onScan: () -> Unit, receive: Boolean = false, onSearch: () -> Unit = {}) {
+private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit, onScan: () -> Unit, receive: Boolean = false, onSearch: () -> Unit = {}, receiveScan: (() -> Unit)? = null) {
     // название открытого окна — по центру шапки
     val title = when (tab) {
         0 -> if (receive) "Прием товаров" else when (appPage) {
@@ -422,6 +426,10 @@ private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: 
                 }
                 if (tab == 1) {
                     IconButton(onClick = onHome) { Icon(Icons.Default.Home, contentDescription = "Главная Coglas") }
+                }
+                if (receive && receiveScan != null) {
+                    // «Прием товаров»: сканер на 10 минут — товары подряд, внизу срок годности последнего
+                    TextButton(onClick = receiveScan) { Text("Скан") }
                 }
                 if (!receive) {
                     // в приеме товаров сканер и поиск — внутри окна, наверху кнопок нет

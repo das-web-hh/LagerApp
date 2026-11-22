@@ -140,7 +140,9 @@ fun ScannerScreen(
     /** true — сканер не закрывается после кода: каждый код уходит в onResult, пока не нажмут «Закрыть» */
     continuous: Boolean = false,
     /** подпись сверху (для непрерывного режима: что добавилось) */
-    status: String = ""
+    status: String = "",
+    /** не null — полоса внизу экрана сканера (например, срок годности последнего товара) */
+    bottomContent: (@Composable () -> Unit)? = null
 ) {
     val context = LocalContext.current
     var hasPermission by remember {
@@ -308,7 +310,7 @@ fun ScannerScreen(
         )
         if (hint.isNotEmpty()) {
             Surface(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 32.dp, end = 32.dp, bottom = 104.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 32.dp, end = 32.dp, bottom = if (bottomContent != null) 190.dp else 104.dp),
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
                 color = Color.Black.copy(alpha = 0.6f)
             ) {
@@ -372,8 +374,11 @@ fun ScannerScreen(
                         }
                     })
                 },
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp)
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = if (bottomContent != null) 118.dp else 32.dp)
             ) { Text(if (aiBusy) "ИИ…" else "Снимок") }
+        }
+        if (bottomContent != null) {
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) { bottomContent() }
         }
     }
 }

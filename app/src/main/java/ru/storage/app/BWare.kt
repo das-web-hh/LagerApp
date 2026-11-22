@@ -347,7 +347,9 @@ fun CatalogWheel(
     /** «Прием товаров»: вид строки без слов «арт.», «срок», «план» и без значка штрихкода */
     recvStyle: Boolean = false,
     /** «Прием товаров»: скрытые плановые позиции; в списке появляются только после скана (или выбора в поиске) */
-    pool: SnapshotStateList<ItemRow>? = null
+    pool: SnapshotStateList<ItemRow>? = null,
+    /** растёт — открывается сканер на 10 минут (кнопка «Скан» в шапке «Приема товаров»): коды идут подряд, внизу срок годности последнего товара */
+    multiScanTick: Int = 0
 ) {
     val ctx = LocalContext.current
     val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -369,6 +371,20 @@ fun CatalogWheel(
     ScanBanner(scanBanner)
     var scanMode by remember { mutableStateOf<String?>(null) } // "add" — добавить товар по коду, "bind" — привязать код к строке
     var bindRow by remember { mutableStateOf<ItemRow?>(null) }
+    // сканер на 10 минут: когда закончится, какой товар сканировали последним (его срок годности и правится внизу)
+    var multiUntil by remember { mutableStateOf(0L) }
+    var lastScan by remember { mutableStateOf<ItemRow?>(null) }
+    var multiTickSeen by remember { mutableIntStateOf(multiScanTick) }
+    LaunchedEffect(multiScanTick) {
+        if (multiScanTick != multiTickSeen) {
+            multiTickSeen = multiScanTick
+            if (scanner) {
+                multiUntil = System.currentTimeMillis() + 10L * 60L * 1000L
+                lastScan = null
+                scanMode = "multi"
+            }
+        }
+    }
     var query by remember { mutableStateOf("") }
     var suggestions by remember { mutableStateOf(emptyList<Product>()) }
     var addTick by remember { mutableIntStateOf(0) }
@@ -493,6 +509,7 @@ fun CatalogWheel(
             if (row != null) {
                 row.fact = fmtQ(bwQty(row.fact) + 1)
                 focusTarget = row; addTick++
+                if (mode == "multi") lastScan = row
                 Haptics.pulse(ctx, Haptics.TAP)
                 ScanFeedback.beep(true)
                 scanBanner = "${row.name.trim()} · ${row.fact}" to true
@@ -503,6 +520,7 @@ fun CatalogWheel(
             val p = if (isolated) null else withContext(Dispatchers.IO) { db.findByBarcode(code) }
             if (p != null) {
                 addRow(p.name, p.id, fact = "1", barcode = code)
+                if (mode == "multi") lastScan = focusTarget
                 Haptics.pulse(ctx, Haptics.TAP)
                 ScanFeedback.beep(true)
                 scanBanner = "Добавлено: ${p.name.trim()}" to true
@@ -518,7 +536,10 @@ fun CatalogWheel(
     val scanModeRef = rememberUpdatedState(scanMode)
     if (scanner) {
         DisposableEffect(Unit) {
-            val h: (String) -> Unit = { c -> if (scanModeRef.value == null) onCodeRef.value(c, "ext") }
+            val h: (String) -> Unit = { c ->
+                if (scanModeRef.value == null) onCodeRef.value(c, "ext")
+                else if (scanModeRef.value == "multi") onCodeRef.value(c, "multi")
+            }
             BtScan.handler = h
             onDispose { if (BtScan.handler === h) BtScan.handler = null }
         }
@@ -684,7 +705,79 @@ fun CatalogWheel(
             }
         }
     }
-    scanMode?.let { mode ->
+    if (scanMode == "multi") {
+        var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+        var expRow by remember { mutableStateOf<ItemRow?>(null) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(1000)
+                nowMs = System.currentTimeMillis()
+                if (nowMs >= multiUntil) {
+                    scanMode = null
+                    Toast.makeText(ctx, "Сканер закрыт: прошло 10 минут", Toast.LENGTH_LONG).show()
+                    break
+                }
+            }
+        }
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { scanMode = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
+        ) {
+            Surface(Modifier.fillMaxSize()) {
+                // экран не гаснет, пока идёт сканирование
+                val hostView = androidx.compose.ui.platform.LocalView.current
+                DisposableEffect(Unit) {
+                    val old = hostView.keepScreenOn
+                    hostView.keepScreenOn = true
+                    onDispose { hostView.keepScreenOn = old }
+                }
+                val left = ((multiUntil - nowMs) / 1000L).coerceAtLeast(0L)
+                val last = lastScan
+                val miss = scanBanner?.takeIf { !it.second }?.first
+                ScannerScreen(
+                    prefs = remember { Prefs(ctx) },
+                    continuous = true,
+                    status = "Скан · осталось " + (left / 60L) + ":" + (left % 60L).toString().padStart(2, '0') +
+                        (if (last != null) "\n" + last.name.trim() + " · " + last.fact else "") +
+                        (if (miss != null) "\n" + miss else ""),
+                    onResult = { raw -> onCodeRef.value(raw, "multi") },
+                    onClose = { scanMode = null },
+                    // внизу всегда срок годности товара, который сканировали последним; правка меняет только его
+                    bottomContent = {
+                        androidx.compose.material3.Surface(Modifier.fillMaxWidth(), color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.78f)) {
+                            androidx.compose.foundation.layout.Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
+                                    Text(
+                                        if (last != null) last.name.trim() else "Отсканируйте товар",
+                                        color = androidx.compose.ui.graphics.Color.White,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "Срок годности: " + (if (last == null) "—" else last.expiry.ifBlank { "не указан" }),
+                                        color = androidx.compose.ui.graphics.Color.White,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                }
+                                androidx.compose.material3.Button(enabled = last != null, onClick = { expRow = last }) { Text("Изменить") }
+                            }
+                        }
+                    }
+                )
+                expRow?.let { row ->
+                    ExpiryPickerDialog(
+                        initial = row.expiry,
+                        onPick = { row.expiry = it; expRow = null },
+                        onDismiss = { expRow = null }
+                    )
+                }
+            }
+        }
+    }
+    scanMode?.takeIf { it != "multi" }?.let { mode ->
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { scanMode = null },
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
