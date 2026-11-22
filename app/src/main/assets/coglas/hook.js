@@ -147,3 +147,12 @@
   }
   setTimeout(tick, 2000);
 })();
+
+// Пульс страницы: считаем кадры отрисовки и таймеры — по ним диагностика видит, «спит» ли WebView.
+(function(){
+  if (window.__cgBeat) return;
+  window.__cgBeat = true;
+  window.__cgRaf = 0; window.__cgTim = 0;
+  (function r(){ window.__cgRaf++; if (window.__cgRaf < 4000) requestAnimationFrame(r); })();
+  var t = setInterval(function(){ window.__cgTim++; if (window.__cgTim > 600) clearInterval(t); }, 500);
+})();

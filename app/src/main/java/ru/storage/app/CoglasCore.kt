@@ -150,10 +150,11 @@ object CoglasWeb {
         val s = w.settings
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
-        s.useWideViewPort = true
-        s.loadWithOverviewMode = true
-        s.setSupportZoom(true)
-        s.builtInZoomControls = true
+        // сайт адаптивный: никакого «обзорного» режима и масштабирования щипком (из-за них страница могла сместиться за экран)
+        s.useWideViewPort = false
+        s.loadWithOverviewMode = false
+        s.setSupportZoom(false)
+        s.builtInZoomControls = false
         s.displayZoomControls = false
         s.mediaPlaybackRequiresUserGesture = false
         s.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW

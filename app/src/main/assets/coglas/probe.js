@@ -6,9 +6,16 @@
       ' pos=' + cs.position + ' z=' + cs.zIndex + ' op=' + cs.opacity + ' disp=' + cs.display + ' vis=' + cs.visibility +
       ' ' + Math.round(r.width) + 'x' + Math.round(r.height) + '@' + Math.round(r.left) + ',' + Math.round(r.top);
   }
+  var vv = window.visualViewport;
+  var beat = 'raf=' + (window.__cgRaf || 0) + ' timers=' + (window.__cgTim || 0) + ' (прошлый замер raf=' + (window.__cgPrevRaf || 0) + ')';
+  window.__cgPrevRaf = window.__cgRaf || 0;
+  var se = document.scrollingElement || document.documentElement;
+  var geo = 'scroll=' + Math.round(window.scrollX) + ',' + Math.round(window.scrollY) +
+    ' scrollH=' + se.scrollHeight + ' scrollW=' + se.scrollWidth +
+    (vv ? ' vv.scale=' + vv.scale + ' vv.off=' + Math.round(vv.offsetLeft) + ',' + Math.round(vv.offsetTop) + ' vv=' + Math.round(vv.width) + 'x' + Math.round(vv.height) : '');
   var out = ['URL: ' + location.href, 'TITLE: ' + document.title,
     'state=' + document.readyState + ' visibility=' + document.visibilityState + ' hidden=' + document.hidden +
-    ' win=' + innerWidth + 'x' + innerHeight + ' dpr=' + devicePixelRatio + ' stat=' + (window.__cgStat || '-'), ''];
+    ' win=' + innerWidth + 'x' + innerHeight + ' dpr=' + devicePixelRatio + ' stat=' + (window.__cgStat || '-'), beat, geo, ''];
   try {
     out.push('В центре экрана (сверху вниз):');
     var st = document.elementsFromPoint(innerWidth / 2, innerHeight / 2);
