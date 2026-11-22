@@ -300,6 +300,14 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 )
             }
 
+            if (tab == 1 && CoglasWeb.loadError.isEmpty()) {
+                // сканер приложения: код подставится в поле, которого вы коснулись последним (или в пустое поле «Артикул / GTIN»)
+                androidx.compose.material3.SmallFloatingActionButton(
+                    onClick = { CoglasWeb.requestScan() },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 16.dp)
+                ) { Text("Скан") }
+            }
+
             if (tab == 1 && CoglasWeb.loadError.isNotEmpty()) {
                 Column(
                     Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
