@@ -30,10 +30,11 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -84,11 +85,7 @@ import kotlinx.coroutines.launch
 object CoglasState {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    var tab by mutableIntStateOf(1) // 0 App, 1 Сайт, 2 Настройки (только админ); первый раз открывается сайт — нужно войти
-    /** Что открыто внутри вкладки App: "" — меню, "orders" — заказы, "info" — Infoscan. */
-    var appPage by mutableStateOf("")
-    /** Окно Coglas открыто: боковой свайп вкладок главного экрана на это время выключен (мешал прокрутке сайта). */
-    var active by mutableStateOf(false)
+    var tab by mutableIntStateOf(2) // 0 заказы, 1 Infoscan, 2 сайт, 3 инструменты; первый раз открывается сайт — нужно войти
 
     var orders by mutableStateOf<CgOrdersPage?>(null)
     var ordersBusy by mutableStateOf(false)
@@ -173,22 +170,14 @@ object CoglasState {
 @Composable
 fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     val st = CoglasState
-    val ctx = LocalContext.current
-    val isAdmin = Session.isAdmin
-    // кто просит сканер: "" никто, "info" — Infoscan в App, "site" — сайт (вместо своей камеры)
-    var scanFor by remember { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
 
     val camLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         CoglasWeb.camResult(it)
     }
     DisposableEffect(Unit) {
         CoglasWeb.camLauncher = { camLauncher.launch(Manifest.permission.CAMERA) }
-        CoglasWeb.onSiteScan = { scanFor = "site" }
-        st.active = true
         onDispose {
-            st.active = false
-            CoglasWeb.onSiteScan = null
-            CoglasWeb.scanClosed()
             CoglasWeb.camLauncher = null
             CoglasWeb.detach()
         }
@@ -197,37 +186,27 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     // «Назад» на телефоне: сначала шаг внутри Coglas (заказ → список, страница сайта назад), потом выход из окна
     BackHandler {
         when {
-            st.tab == 0 && st.appPage == "orders" && st.openOrder != null -> st.closeOrder()
-            st.tab == 0 && st.appPage.isNotEmpty() -> st.appPage = ""
-            st.tab == 1 && CoglasWeb.canGoBack -> CoglasWeb.goBack()
+            st.tab == 0 && st.openOrder != null -> st.closeOrder()
+            st.tab == 2 && CoglasWeb.canGoBack -> CoglasWeb.goBack()
             else -> onBack()
         }
     }
 
-    if (scanFor.isNotEmpty()) {
-        val target = scanFor
+    if (scanning) {
         ScannerScreen(
             prefs = prefs,
             onResult = { code ->
-                scanFor = ""
-                CoglasWeb.scanClosed()
-                if (target == "site") {
-                    st.tab = 1
-                    CoglasWeb.deliverScan(code)
-                } else {
-                    st.tab = 0
-                    st.appPage = "info"
-                    st.query = code
-                    st.search(code)
-                }
+                scanning = false
+                st.tab = 1
+                st.query = code
+                st.search(code)
             },
-            onClose = { scanFor = ""; CoglasWeb.scanClosed() }
+            onClose = { scanning = false }
         )
         return
     }
 
-    // «Настройки» видит только админ
-    val tab = if (st.tab == 2 && !isAdmin) 1 else st.tab
+    val tab = st.tab
     // экран не гаснет, пока сайт грузится и переводится (иначе при переводе телефон «засыпает»)
     KeepScreenOn(resetKey = CoglasWeb.progress / 20 + CoglasWeb.trBusy)
     // после возврата в приложение будим WebView, чтобы сайт не оставался пустым
@@ -243,29 +222,19 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CgTopBar(
             tab = tab,
-            appPage = st.appPage,
-            desktop = CoglasWeb.desktop,
-            onToggleView = {
-                val on = !CoglasWeb.desktop
-                CoglasWeb.setDesktop(ctx, on)
-                Toast.makeText(ctx, if (on) "Вид: ПК (как на мониторе). Масштабируйте щипком." else "Вид: мобильный", Toast.LENGTH_SHORT).show()
-            },
             onBack = onBack,
             onRefresh = {
                 when (tab) {
-                    0 -> when (st.appPage) {
-                        "orders" -> if (st.openOrder != null) st.open(st.openOrder!!) else st.loadOrders()
-                        "info" -> if (st.scanned.isNotEmpty()) st.search(st.scanned)
-                        else -> { }
-                    }
+                    0 -> if (st.openOrder != null) st.open(st.openOrder!!) else st.loadOrders()
+                    1 -> if (st.scanned.isNotEmpty()) st.search(st.scanned)
                     else -> CoglasWeb.reload()
                 }
             },
-            onHome = { st.tab = 1; CoglasWeb.home() }
+            onHome = { st.tab = 2; CoglasWeb.home() }
         )
-        if (tab == 1 && CoglasWeb.progress in 1..99) {
+        if (tab == 2 && CoglasWeb.progress in 1..99) {
             LinearProgressIndicator(progress = { CoglasWeb.progress / 100f }, modifier = Modifier.fillMaxWidth())
-        } else if (tab == 1 && CoglasWeb.trOn && CoglasWeb.trBusy > 0) {
+        } else if (tab == 2 && CoglasWeb.trOn && CoglasWeb.trBusy > 0) {
             // страница уже загружена, идёт перевод — показываем это, а не «зависший» сайт
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
@@ -283,15 +252,16 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                             )
                         }
                     },
-                    // update вызывается при каждой перекомпоновке (а прогресс загрузки меняется десятки раз) —
-                    // тяжёлых вызовов здесь быть не должно, иначе прокрутка сайта дёргается
                     update = { w ->
-                        if (w.visibility != android.view.View.VISIBLE) w.visibility = android.view.View.VISIBLE
+                        // WebView обязан быть «видимым» и не на паузе, иначе анимации и скрипты сайта не доходят до конца
+                        w.visibility = android.view.View.VISIBLE
+                        w.onResume()
+                        w.resumeTimers()
                     }
                 )
             }
 
-            if (tab == 1 && CoglasWeb.loadError.isNotEmpty()) {
+            if (tab == 2 && CoglasWeb.loadError.isNotEmpty()) {
                 Column(
                     Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
                     verticalArrangement = Arrangement.Center,
@@ -303,11 +273,12 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 }
             }
 
-            if (tab != 1) {
+            if (tab != 2) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     when (tab) {
-                        0 -> AppTab(onCamera = { scanFor = "info" }, goSite = { st.tab = 1 })
-                        else -> SettingsTab { st.tab = 1 }
+                        0 -> OrdersTab { st.tab = 2 }
+                        1 -> InfoscanTab(onCamera = { scanning = true }) { st.tab = 2 }
+                        else -> ToolsTab { st.tab = 2 }
                     }
                 }
             }
@@ -316,48 +287,43 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         NavigationBar {
             NavigationBarItem(
                 selected = tab == 0, onClick = { st.tab = 0 },
-                icon = { Icon(Icons.Default.Menu, contentDescription = "App") }, label = { Text("App") }
+                icon = { Icon(Icons.Default.ShoppingCart, contentDescription = "Заказы") }, label = { Text("Заказы") }
             )
             NavigationBarItem(
                 selected = tab == 1, onClick = { st.tab = 1 },
+                icon = { Icon(Icons.Default.Search, contentDescription = "Infoscan") }, label = { Text("Infoscan") }
+            )
+            NavigationBarItem(
+                selected = tab == 2, onClick = { st.tab = 2 },
                 icon = { Icon(Icons.Default.Home, contentDescription = "Сайт") }, label = { Text("Сайт") }
             )
-            if (isAdmin) {
-                NavigationBarItem(
-                    selected = tab == 2, onClick = { st.tab = 2 },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "Настройки") }, label = { Text("Настройки") }
-                )
-            }
+            NavigationBarItem(
+                selected = tab == 3, onClick = { st.tab = 3 },
+                icon = { Icon(Icons.Default.Build, contentDescription = "Инструменты") }, label = { Text("Инструменты") }
+            )
         }
     }
 }
 
 @Composable
-private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit) {
+private fun CgTopBar(tab: Int, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад") }
             Column(Modifier.weight(1f)) {
                 Text("Coglas", style = MaterialTheme.typography.titleLarge)
                 val sub = when (tab) {
-                    0 -> when (appPage) {
-                        "orders" -> "App · заказы на приход"
-                        "info" -> "App · Infoscan: штрихкод или номер LE"
-                        else -> "App"
-                    }
-                    1 -> (if (CoglasWeb.trOn && !CoglasWeb.trSafe) "Сайт · перевод на русский" else if (CoglasWeb.trOn) "Сайт · без перевода (авария)" else "Сайт · оригинал (немецкий)") +
-                        (if (CoglasWeb.desktop) " · ПК" else "")
-                    else -> "Настройки (админ)"
+                    0 -> "Заказы на приход"
+                    1 -> "Infoscan: штрихкод или номер LE"
+                    2 -> if (CoglasWeb.trOn && !CoglasWeb.trSafe) "Сайт · перевод на русский" else if (CoglasWeb.trOn) "Сайт · без перевода (авария)" else "Сайт · оригинал (немецкий)"
+                    else -> "Инструменты и перевод"
                 }
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (tab == 1) {
-                TextButton(onClick = onToggleView) { Text(if (desktop) "ПК" else "Моб.") }
-            }
-            if (tab == 1 || (tab == 0 && appPage.isNotEmpty())) {
+            if (tab != 3) {
                 IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Обновить") }
             }
-            if (tab == 1) {
+            if (tab == 2) {
                 IconButton(onClick = onHome) { Icon(Icons.Default.Home, contentDescription = "Главная Coglas") }
             }
         }
@@ -586,131 +552,7 @@ private fun InfoscanTab(onCamera: () -> Unit, goSite: () -> Unit) {
     }
 }
 
-// ---------------------------------------------------------------- вкладка App
-
-@Composable
-private fun AppTab(onCamera: () -> Unit, goSite: () -> Unit) {
-    val st = CoglasState
-    when (st.appPage) {
-        "orders" -> OrdersTab(goSite)
-        "info" -> InfoscanTab(onCamera, goSite)
-        else -> AppHome()
-    }
-}
-
-/** Пункт меню System сайта: de — немецкое название на сайте, ru — название в App. */
-private data class MenuItem(val de: String, val ru: String)
-private data class MenuGroup(val title: String, val items: List<MenuItem>)
-
-/** Меню System сайта Coglas (снято с окна System). Группы названы по смыслу и порядку пунктов. */
-private val SYSTEM_MENU = listOf(
-    MenuGroup("Справочники", listOf(
-        MenuItem("Anhänge", "Вложения"),
-        MenuItem("Artikel", "Артикулы"),
-        MenuItem("Checklistenvorlagen", "Шаблоны чек-листов"),
-        MenuItem("Geschäftspartner", "Партнёры"),
-        MenuItem("Ladehilfsmitteltypen", "Типы паллет и тары")
-    )),
-    MenuGroup("Рабочее место", listOf(
-        MenuItem("Aktuelle Arbeitsstation", "Текущая рабочая станция"),
-        MenuItem("Arbeitsstationen", "Рабочие станции"),
-        MenuItem("Bildschirmskalierung", "Масштаб экрана"),
-        MenuItem("Mein Profil", "Мой профиль")
-    )),
-    MenuGroup("Склад", listOf(
-        MenuItem("Infoscan", "Инфоскан"),
-        MenuItem("Lagerübersicht", "Обзор склада"),
-        MenuItem("Shopfloor", "Shopfloor"),
-        MenuItem("Bestandsbewegungen", "Движение запасов"),
-        MenuItem("Chargenverfolgung", "Отслеживание партий"),
-        MenuItem("Inventuraufträge", "Задания инвентаризации"),
-        MenuItem("Inventurlisten", "Списки инвентаризации"),
-        MenuItem("Inventurzählung", "Подсчёт инвентаризации"),
-        MenuItem("Vorwarnzeit Haltbarkeit", "Предупреждение о сроке годности")
-    )),
-    MenuGroup("Приход", listOf(
-        MenuItem("Bestellungen", "Заказы"),
-        MenuItem("Lieferscheine", "Накладные"),
-        MenuItem("Wareneingänge", "Приходы товара")
-    )),
-    MenuGroup("Комплектация", listOf(
-        MenuItem("Kommissionierleitstand", "Пульт комплектации"),
-        MenuItem("Kommissionierung", "Комплектация")
-    )),
-    MenuGroup("Перемещение и транспорт", listOf(
-        MenuItem("Lagereinheit umlagern", "Переместить складскую единицу"),
-        MenuItem("Transport", "Транспорт"),
-        MenuItem("Transportleitstand", "Пульт транспорта"),
-        MenuItem("Vorholungsbedarfe", "Потребность в подвозе")
-    )),
-    MenuGroup("Отгрузка", listOf(
-        MenuItem("Kundenaufträge", "Заказы клиентов"),
-        MenuItem("Scan, Label & Ship", "Скан, этикетка и отправка"),
-        MenuItem("Verladung", "Погрузка"),
-        MenuItem("Verpackung", "Упаковка"),
-        MenuItem("Warenausgänge", "Отгрузки")
-    )),
-    MenuGroup("Прочее", listOf(
-        MenuItem("About", "О программе")
-    ))
-)
-
-@Composable
-private fun AppHome() {
-    val st = CoglasState
-    var q by remember { mutableStateOf("") }
-    val needle = q.trim().lowercase()
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text("Родные экраны приложения", style = MaterialTheme.typography.titleSmall)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { st.appPage = "orders" }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Заказы на приход") }
-            Button(onClick = { st.appPage = "info" }, modifier = Modifier.weight(1f).height(52.dp)) { Text("Infoscan") }
-        }
-
-        Text("Меню системы", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
-        Text(
-            "Нажмите на пункт: откроется то же окно сайта (вкладка «Сайт»). Для вида как на мониторе нажмите «ПК» вверху вкладки «Сайт».",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        OutlinedTextField(
-            value = q, onValueChange = { q = it }, singleLine = true,
-            label = { Text("Поиск по меню") }, modifier = Modifier.fillMaxWidth()
-        )
-        var shown = 0
-        SYSTEM_MENU.forEach { g ->
-            val items = g.items.filter { needle.isEmpty() || it.ru.lowercase().contains(needle) || it.de.lowercase().contains(needle) }
-            if (items.isEmpty()) return@forEach
-            shown += items.size
-            Text(g.title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
-            items.forEach { m ->
-                Card(
-                    onClick = { st.tab = 1; CoglasWeb.openMenu(m.de, m.ru) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
-                        Text(m.ru, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                        if (!m.de.equals(m.ru, ignoreCase = true)) {
-                            Text(m.de, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
-        }
-        if (shown == 0) Text("Ничего не найдено", style = MaterialTheme.typography.bodyMedium)
-        Text(
-            "Заказы и Infoscan в «Родных экранах» работают через вход на вкладке «Сайт»: войдите один раз, и сессия общая.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}
-
-// ---------------------------------------------------------------- настройки (только админ)
+// ---------------------------------------------------------------- инструменты
 
 private fun cgCopy(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -727,58 +569,11 @@ private fun cgShare(ctx: Context, text: String) {
 }
 
 @Composable
-private fun PageLines(label: String, v: List<String>) {
-    if (v.isEmpty()) return
-    Spacer(Modifier.height(6.dp))
-    Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Text(v.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-}
-
-@Composable
-private fun PageCard(p: CgPage) {
-    var open by remember(p.key) { mutableStateOf(false) }
-    val app = p.inApp()
-    Card(
-        onClick = { open = !open },
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (app.isNotEmpty()) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
-            else MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Text(p.title.ifEmpty { p.key }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(p.key, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(2.dp))
-            Text(
-                (if (app.isEmpty()) "В App: нет — нужно сделать" else "В App: есть ($app)") +
-                    " · заходов ${p.visits} · API ${p.apis.size}",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (app.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (open) {
-                PageLines("Меню", p.menu)
-                PageLines("Заголовки", p.headings)
-                PageLines("Кнопки", p.buttons)
-                PageLines("Поля", p.fields)
-                if (p.inputs > 0 || p.tables > 0) PageLines("Элементы", listOf("полей ввода ${p.inputs}", "таблиц ${p.tables}"))
-                PageLines("Запросы API", p.apis)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsTab(goSite: () -> Unit) {
+private fun ToolsTab(goSite: () -> Unit) {
     val st = CoglasState
     val ctx = LocalContext.current
     var clickDialog by remember { mutableStateOf(false) }
     var clickText by remember { mutableStateOf("") }
-    var dev by remember { mutableStateOf(false) }
-    var showPages by remember { mutableStateOf(false) }
-    @Suppress("UNUSED_VARIABLE") val ver = CoglasPages.version
-    val pages = CoglasPages.list()
 
     val result = st.tool
     if (result.isNotEmpty()) {
@@ -807,7 +602,7 @@ private fun SettingsTab(goSite: () -> Unit) {
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // ---- перевод сайта ----
+        // ---- перевод ----
         Card(
             Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -816,13 +611,13 @@ private fun SettingsTab(goSite: () -> Unit) {
             Column(Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Перевод сайта на русский", style = MaterialTheme.typography.titleMedium)
+                        Text("Перевод на русский", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Словарь + ИИ. Артикулы, коды и номера не меняются.",
+                            "Сайт переводится словарём и ИИ. Названия товаров, артикулы и номера не меняются.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Switch(checked = CoglasWeb.trOn, onCheckedChange = { CoglasWeb.setTranslate(ctx, it); st.tab = 1 })
+                    Switch(checked = CoglasWeb.trOn, onCheckedChange = { CoglasWeb.setTranslate(ctx, it); st.tab = 2 })
                 }
                 val note = CoglasWeb.trNote
                 Spacer(Modifier.height(6.dp))
@@ -832,131 +627,44 @@ private fun SettingsTab(goSite: () -> Unit) {
                     color = if (note.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { CoglasWeb.retryTranslate(true); st.tab = 1 },
-                    enabled = CoglasWeb.trOn,
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) { Text("Перевести страницу полностью") }
-                Text(
-                    "Обычный перевод пропускает длинные строки, строки с цифрами и слова ЗАГЛАВНЫМИ. Эта кнопка переводит и их (до перезагрузки страницы).",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-                Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { CoglasWeb.retryTranslate(false); st.tab = 1 }, modifier = Modifier.weight(1f)) { Text("Перевести заново") }
+                    OutlinedButton(onClick = { CoglasWeb.retryTranslate(); st.tab = 2 }, modifier = Modifier.weight(1f)) { Text("Перевести заново") }
                     OutlinedButton(onClick = { CoglasTr.clearCache(ctx); CoglasWeb.trNote = "Память переводов очищена" }, modifier = Modifier.weight(1f)) { Text("Очистить память") }
                 }
             }
         }
 
-        // ---- вид сайта ----
-        Card(
-            Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Вид сайта: ПК", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Сайт рисуется как на большом мониторе (широкая страница), масштаб меняется щипком. Тот же переключатель есть вверху вкладки «Сайт».",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(checked = CoglasWeb.desktop, onCheckedChange = { CoglasWeb.setDesktop(ctx, it); st.tab = 1 })
-            }
-        }
-
-        // ---- сканер ----
-        Card(
-            Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Сканер приложения на сайте", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Когда сайт просит камеру, открывается сканер приложения (с ИИ), а код подставляется в поле страницы. Выключите, чтобы сайт использовал свою камеру.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(checked = CoglasWeb.nativeScan, onCheckedChange = { CoglasWeb.setNativeScan(ctx, it) })
-            }
-        }
-
-        // ---- страницы сайта для развития App ----
+        // ---- сайт ----
         Card(
             Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Страницы сайта для развития App", style = MaterialTheme.typography.titleMedium)
-                val todo = pages.count { it.inApp().isEmpty() }
-                Text(
-                    if (pages.isEmpty()) "Пока пусто. Походите по разделам во вкладке «Сайт» — страницы, кнопки, поля и запросы записываются сами."
-                    else "Страниц: ${pages.size} · уже в App: ${pages.size - todo} · нужно сделать: $todo",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text("Инструменты сайта", style = MaterialTheme.typography.titleMedium)
+                Button(onClick = { CoglasWeb.probe(ctx) { st.tool = it.ifEmpty { "Пусто" } } }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text("Разведка: кнопки и поля страницы")
+                }
+                Button(onClick = { CoglasWeb.pageText { st.tool = it.ifEmpty { "Пусто" } } }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text("Текст страницы")
+                }
                 Button(
-                    onClick = { CoglasWeb.snapshot { Toast.makeText(ctx, "Данные страницы сохранены", Toast.LENGTH_SHORT).show() } },
+                    onClick = {
+                        val n = CoglasWeb.bridge.size()
+                        st.tool = if (n == 0) "Лог пуст. Походите по сайту (откройте заказ, поиск и т.д.), затем снова нажмите «Лог запросов»."
+                        else "Запросов в логе: $n\n(данные входа и токены скрыты)\n\n" + CoglasWeb.bridge.dump()
+                    },
                     modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) { Text("Снять данные открытой страницы") }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { st.tool = CoglasPages.report() },
-                        enabled = pages.isNotEmpty(), modifier = Modifier.weight(1f)
-                    ) { Text("Отчёт") }
-                    OutlinedButton(
-                        onClick = { showPages = !showPages },
-                        enabled = pages.isNotEmpty(), modifier = Modifier.weight(1f)
-                    ) { Text(if (showPages) "Скрыть список" else "Список") }
-                    OutlinedButton(
-                        onClick = { CoglasPages.clear() },
-                        enabled = pages.isNotEmpty(), modifier = Modifier.weight(1f)
-                    ) { Text("Очистить") }
-                }
-                if (showPages) pages.forEach { PageCard(it) }
-            }
-        }
-
-        // ---- инструменты разработчика (свёрнуты) ----
-        OutlinedButton(onClick = { dev = !dev }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-            Text(if (dev) "Скрыть инструменты разработчика" else "Инструменты разработчика")
-        }
-        if (dev) {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { CoglasWeb.probe(ctx) { st.tool = it.ifEmpty { "Пусто" } } }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                        Text("Разведка: кнопки и поля страницы")
-                    }
-                    Button(onClick = { CoglasWeb.pageText { st.tool = it.ifEmpty { "Пусто" } } }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                        Text("Текст страницы")
-                    }
-                    Button(
-                        onClick = {
-                            val n = CoglasWeb.bridge.size()
-                            st.tool = if (n == 0) "Лог пуст. Походите по сайту (откройте заказ, поиск и т.д.), затем снова нажмите «Лог запросов»."
-                            else "Запросов в логе: $n\n(данные входа и токены скрыты)\n\n" + CoglasWeb.bridge.dump()
-                        },
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) { Text("Лог запросов сайта") }
-                    Button(onClick = { clickDialog = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Нажать кнопку по тексту") }
-                    OutlinedButton(
-                        onClick = { st.tool = if (CoglasWeb.lastRaw.isEmpty()) "Пусто" else CoglasWeb.lastRaw.take(60000) },
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) { Text("Raw: последний ответ сервера") }
-                    OutlinedButton(
-                        onClick = { CoglasWeb.bridge.clear(); Toast.makeText(ctx, "Лог очищен", Toast.LENGTH_SHORT).show() },
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) { Text("Очистить лог") }
-                }
+                ) { Text("Лог запросов сайта") }
+                Button(onClick = { clickDialog = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Нажать кнопку по тексту") }
+                OutlinedButton(
+                    onClick = { st.tool = if (CoglasWeb.lastRaw.isEmpty()) "Пусто" else CoglasWeb.lastRaw.take(60000) },
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) { Text("Raw: последний ответ сервера") }
+                OutlinedButton(
+                    onClick = { CoglasWeb.bridge.clear(); Toast.makeText(ctx, "Лог очищен", Toast.LENGTH_SHORT).show() },
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) { Text("Очистить лог") }
             }
         }
 
@@ -964,6 +672,10 @@ private fun SettingsTab(goSite: () -> Unit) {
             Text("Открыть главную Coglas")
         }
         HorizontalDivider()
+        Text(
+            "Заказы и Infoscan работают через вход на вкладке «Сайт»: войдите один раз, и сессия общая для всего окна Coglas.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 
     if (clickDialog) {

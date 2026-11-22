@@ -10,7 +10,6 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -59,12 +58,7 @@ class CgBridge {
     private val main = Handler(Looper.getMainLooper())
     var onResult: ((Int, Int, String) -> Unit)? = null
     var onTranslate: ((String) -> Unit)? = null
-    var onScan: (() -> Unit)? = null
-    var onMenuResult: ((String) -> Unit)? = null
-    var onPageChanged: (() -> Unit)? = null
     @Volatile var translateOn = true
-    @Volatile var scanNative = true
-    @Volatile var desktopMode = false
 
     @JavascriptInterface
     fun log(line: String) {
@@ -72,32 +66,6 @@ class CgBridge {
             items.add(line)
             if (items.size > 200) items.removeAt(0)
         }
-        CoglasPages.noteLog(line)
-    }
-
-    /** Сайт открывает свой сканер (getUserMedia) — вместо камеры сайта открываем сканер приложения. */
-    @JavascriptInterface
-    fun scanOn(): Boolean = scanNative
-
-    @JavascriptInterface
-    fun scan() {
-        main.post { onScan?.invoke() }
-    }
-
-    /** Включён вид «ПК»: страница читает это при загрузке и ставит ширину окна как у монитора. */
-    @JavascriptInterface
-    fun desktopOn(): Boolean = desktopMode
-
-    /** Итог открытия пункта меню System: "ok" или текст ошибки. */
-    @JavascriptInterface
-    fun menuResult(msg: String) {
-        main.post { onMenuResult?.invoke(msg) }
-    }
-
-    /** На сайте сменилась страница (заголовок). */
-    @JavascriptInterface
-    fun pageChanged(title: String) {
-        main.post { onPageChanged?.invoke() }
     }
 
     @JavascriptInterface
@@ -143,78 +111,6 @@ object CoglasWeb {
     var viewKey by mutableIntStateOf(0)
     var lastRaw = ""
 
-    /** Вид сайта: true — как на ПК (широкая страница, десктопный User-Agent), false — мобильный. */
-    var desktop by mutableStateOf(false)
-    private var mobileUa = ""
-    private var desktopUa = ""
-
-    private fun applyUa(w: WebView) {
-        w.settings.userAgentString = if (desktop) desktopUa else mobileUa
-    }
-
-    fun setDesktop(ctx: Context, on: Boolean) {
-        CoglasTr.setDesktop(ctx, on)
-        desktop = on
-        bridge.desktopMode = on
-        val w = web ?: return
-        applyUa(w)
-        w.reload()
-    }
-
-    /** Открыть окно сайта из меню System по названию (de — немецкое, ru — русское). */
-    fun openMenu(de: String, ru: String) {
-        main.post {
-            runJs("window.__cgOpenMenu ? window.__cgOpenMenu(" + JSONObject.quote(de) + "," + JSONObject.quote(ru) +
-                ") : 'nohook'") { r ->
-                if (r == "nohook") menuToast("Сайт ещё не загрузился. Подождите и нажмите снова.")
-            }
-        }
-    }
-
-    private fun menuToast(msg: String) {
-        val c = appCtx ?: return
-        android.widget.Toast.makeText(c, msg, android.widget.Toast.LENGTH_LONG).show()
-    }
-
-    /** Сканер штрихкодов приложения (с ИИ) вместо камеры сайта. */
-    var nativeScan by mutableStateOf(true)
-    var onSiteScan: (() -> Unit)? = null
-    private var scanOpen = false
-    private var snapToken = 0
-
-    fun requestScan() {
-        main.post {
-            if (scanOpen) return@post
-            val f = onSiteScan ?: return@post
-            scanOpen = true
-            f()
-        }
-    }
-
-    fun scanClosed() { scanOpen = false }
-
-    fun setNativeScan(ctx: Context, on: Boolean) {
-        CoglasTr.setScan(ctx, on)
-        nativeScan = on
-        bridge.scanNative = on
-    }
-
-    /** Код со сканера приложения подставляется в поле страницы и подтверждается Enter, как от сканера-«клавиатуры». */
-    fun deliverScan(code: String) {
-        main.post {
-            runJs("window.__cgScanResult ? window.__cgScanResult(" + JSONObject.quote(code) + ") : 'nohook'") { r ->
-                if (r != "ok") {
-                    val ctx = appCtx
-                    if (ctx != null) {
-                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("barcode", code))
-                        android.widget.Toast.makeText(ctx, "Нет поля для кода на странице. Код скопирован: $code", android.widget.Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
-        }
-    }
-
     // камера для сканера на сайте: сначала разрешение Android, потом разрешение странице
     var camLauncher: (() -> Unit)? = null
     private var pendingPermission: PermissionRequest? = null
@@ -247,11 +143,6 @@ object CoglasWeb {
         val app = ctx.applicationContext
         trOn = CoglasTr.enabled(app)
         bridge.translateOn = trOn
-        nativeScan = CoglasTr.scan(app)
-        bridge.scanNative = nativeScan
-        desktop = CoglasTr.desktop(app)
-        bridge.desktopMode = desktop
-        CoglasPages.init(app)
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
         script = asset(app, "hook.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict)
@@ -271,23 +162,7 @@ object CoglasWeb {
         s.mediaPlaybackRequiresUserGesture = false
         s.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         s.textZoom = 100
-        mobileUa = s.userAgentString
-        // десктопный User-Agent: без "Android", "Mobile" и "wv"
-        desktopUa = mobileUa
-            .replace(Regex("\\(Linux; Android[^)]*\\)"), "(X11; Linux x86_64)")
-            .replace(" Mobile", "")
-            .replace("; wv", "")
-        if (desktop) s.userAgentString = desktopUa
         w.overScrollMode = View.OVER_SCROLL_NEVER
-        // Свайп вверх-вниз по сайту: не отдавать жест родителям (боковой свайп вкладок, прокрутки Compose),
-        // иначе сайт получает ACTION_CANCEL посреди движения и «залипает».
-        w.setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> v.parent?.requestDisallowInterceptTouchEvent(true)
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
-            }
-            false
-        }
         w.isVerticalScrollBarEnabled = false
         w.isHorizontalScrollBarEnabled = false
         w.setBackgroundColor(Color.WHITE)
@@ -299,10 +174,6 @@ object CoglasWeb {
 
         bridge.onResult = { id, status, body -> pending.remove(id)?.invoke(status, body) }
         bridge.onTranslate = { json -> translate(json) }
-        bridge.onScan = { requestScan() }
-        bridge.onMenuResult = { m -> if (m != "ok") menuToast(m) }
-        bridge.onPageChanged = { if (Session.isAdmin) scheduleSnapshot(900L) }
-        CoglasPages.onNewForm = { if (Session.isAdmin) scheduleSnapshot(1800L) }
         w.addJavascriptInterface(bridge, "WmsBridge")
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(w, script, setOf("https://stroeh.coglas.com"))
@@ -342,7 +213,6 @@ object CoglasWeb {
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 canGoBack = view.canGoBack()
-                if (Session.isAdmin && hostOk(url)) scheduleSnapshot(2500L)
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
@@ -366,12 +236,6 @@ object CoglasWeb {
                     val okHost = request.origin.host?.endsWith(HOST) == true
                     if (!okHost || PermissionRequest.RESOURCE_VIDEO_CAPTURE !in request.resources) {
                         request.deny()
-                        return@post
-                    }
-                    if (nativeScan) {
-                        // запасной путь: страница всё же попросила камеру — отдаём сканеру приложения
-                        request.deny()
-                        requestScan()
                         return@post
                     }
                     if (ContextCompat.checkSelfPermission(app, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
@@ -432,7 +296,7 @@ object CoglasWeb {
 
     /** Раз в полсекунды заставляем WebView перерисоваться: без этого он мог «замирать» с пустым экраном. */
     private fun nudge(view: WebView, n: Int) {
-        if (n > 12) return
+        if (n > 60) return
         main.postDelayed({
             if (web === view) {
                 view.invalidate()
@@ -477,25 +341,9 @@ object CoglasWeb {
         web?.reload()
     }
 
-    /** full = true: «перевести полностью» — в перевод идут и длинные строки, и строки с цифрами, и слова ЗАГЛАВНЫМИ. */
-    fun retryTranslate(full: Boolean = false) {
+    fun retryTranslate() {
         trNote = ""
-        web?.evaluateJavascript("window.__cgRetry && window.__cgRetry(" + full + ")", null)
-    }
-
-    /** Снять данные страницы через delay мс; частые вызовы склеиваются в один. */
-    fun scheduleSnapshot(delay: Long) {
-        val t = ++snapToken
-        main.postDelayed({ if (t == snapToken && web != null) snapshot() }, delay)
-    }
-
-    /** Снять данные текущей страницы сайта (заголовки, кнопки, меню, поля) для списка «что делать в App». */
-    fun snapshot(done: (() -> Unit)? = null) {
-        val ctx = appCtx ?: return
-        runJs(asset(ctx, "pageinfo.js")) { txt ->
-            CoglasPages.update(txt)
-            done?.invoke()
-        }
+        web?.evaluateJavascript("window.__cgRetry && window.__cgRetry()", null)
     }
 
     // ---------------- выполнить JS на странице ----------------
@@ -576,10 +424,6 @@ object CoglasTr {
 
     fun enabled(ctx: Context): Boolean = sp(ctx).getBoolean("on", true)
     fun setEnabled(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("on", on).apply() }
-    fun desktop(ctx: Context): Boolean = sp(ctx).getBoolean("desktop", false)
-    fun setDesktop(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("desktop", on).apply() }
-    fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
-    fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
     fun cacheSize(ctx: Context): Int = cache(ctx).length()
     fun clearCache(ctx: Context) { sp(ctx).edit().remove("cache").apply() }
 
@@ -683,184 +527,6 @@ object CoglasTr {
         "infoscan" to "Инфоскан", "lagerort" to "Место", "gewicht" to "Вес", "volumen" to "Объём", "preis" to "Цена",
         "mehr" to "Ещё", "weniger" to "Меньше", "details" to "Детали", "detail" to "Детали", "verlauf" to "История", "historie" to "История"
     )
-}
-
-
-// ======================= страницы сайта: что уже есть в App, что ещё нужно сделать =======================
-
-class CgPage(
-    val key: String,
-    var title: String = "",
-    var url: String = "",
-    var visits: Int = 0,
-    var last: Long = 0L,
-    var headings: List<String> = emptyList(),
-    var buttons: List<String> = emptyList(),
-    var menu: List<String> = emptyList(),
-    var fields: List<String> = emptyList(),
-    var inputs: Int = 0,
-    var tables: Int = 0,
-    var apis: List<String> = emptyList()
-) {
-    /** Какая часть этой страницы уже сделана в App родным экраном ("" — нет). */
-    fun inApp(): String = when {
-        apis.any { it.contains("GoodsInOrder.Forms.GoodsInOrder") } -> "Заказы на приход"
-        apis.any { it.contains("InfoScan", ignoreCase = true) } -> "Infoscan"
-        else -> ""
-    }
-}
-
-/** Журнал страниц сайта, по которым ходили в окне «Сайт»: заголовки, кнопки, поля и запросы API. Хранится на телефоне. */
-object CoglasPages {
-    private val map = LinkedHashMap<String, CgPage>()
-    private var ctx: Context? = null
-    private val main = Handler(Looper.getMainLooper())
-    @Volatile private var current = ""
-    var version by mutableIntStateOf(0)
-
-    private val saver = Runnable { save() }
-
-    private fun sp() = ctx?.getSharedPreferences("coglas_pages", Context.MODE_PRIVATE)
-
-    @Synchronized
-    fun init(c: Context) {
-        if (ctx != null) return
-        ctx = c.applicationContext
-        try {
-            val arr = JSONArray(sp()?.getString("pages", "[]") ?: "[]")
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                fun strs(k: String): List<String> {
-                    val a = o.optJSONArray(k) ?: return emptyList()
-                    return (0 until a.length()).map { a.optString(it) }
-                }
-                if (!o.getString("key").startsWith("form:")) continue // старые записи по адресу (он у сайта один) не нужны
-                val p = CgPage(
-                    o.getString("key"), o.optString("title"), o.optString("url"), o.optInt("visits"), o.optLong("last"),
-                    strs("headings"), strs("buttons"), strs("menu"), strs("fields"), o.optInt("inputs"), o.optInt("tables"), strs("apis")
-                )
-                map[p.key] = p
-            }
-        } catch (e: Exception) {
-        }
-    }
-
-    @Synchronized
-    private fun save() {
-        try {
-            val arr = JSONArray()
-            for (p in map.values) {
-                arr.put(
-                    JSONObject().put("key", p.key).put("title", p.title).put("url", p.url).put("visits", p.visits).put("last", p.last)
-                        .put("headings", JSONArray(p.headings)).put("buttons", JSONArray(p.buttons)).put("menu", JSONArray(p.menu))
-                        .put("fields", JSONArray(p.fields)).put("inputs", p.inputs).put("tables", p.tables).put("apis", JSONArray(p.apis))
-                )
-            }
-            sp()?.edit()?.putString("pages", arr.toString())?.apply()
-        } catch (e: Exception) {
-        }
-    }
-
-    private fun changed() {
-        main.removeCallbacks(saver)
-        main.postDelayed(saver, 1500L)
-        main.post { version++ }
-    }
-
-    private fun page(key: String): CgPage = synchronized(this) {
-        map.getOrPut(key) {
-            if (map.size >= 150) map.keys.firstOrNull()?.let { map.remove(it) }
-            CgPage(key)
-        }
-    }
-
-    /** Форма сайта из запроса: formKey=... или начало actionKey до ".LayoutItems". */
-    private fun formOf(line: String): String? {
-        Regex("formKey=([A-Za-z0-9_.]+)").find(line)?.let { return it.groupValues[1] }
-        val a = Regex("actionKey=([A-Za-z0-9_.]+)").find(line)?.groupValues?.get(1) ?: return null
-        val i = a.indexOf(".LayoutItems")
-        return if (i > 0) a.substring(0, i) else null
-    }
-
-    /** Запросы сайта: адрес в браузере всегда "#", поэтому страницы различаем по форме (formKey) в запросах API. */
-    @Synchronized
-    fun noteLog(line: String) {
-        if (!Session.isAdmin) return
-        val form = formOf(line)
-        if (form != null && "form:$form" != current) {
-            current = "form:$form"
-            val p = page(current)
-            p.visits++
-            p.last = System.currentTimeMillis()
-            if (p.title.isBlank()) p.title = form.substringAfterLast('.')
-            main.post { onNewForm?.invoke() }
-        }
-        val key = current
-        if (key.isEmpty()) return
-        val api = Regex("actionKey=([A-Za-z0-9_.]+)").find(line)?.groupValues?.get(1)
-            ?: Regex("^\\S+ (?:GET|POST|PUT|DELETE|PATCH) \\d+ (\\S+)").find(line)?.groupValues?.get(1)
-                ?.substringBefore('?')?.takeIf { it.contains("/api/", ignoreCase = true) }
-            ?: return
-        val p = page(key)
-        if (api in p.apis || p.apis.size >= 40) return
-        p.apis = p.apis + api
-        changed()
-    }
-
-    var onNewForm: (() -> Unit)? = null
-
-    /** Ответ pageinfo.js: данные открытой страницы записываются на последнюю открытую форму. */
-    @Synchronized
-    fun update(json: String) {
-        try {
-            val o = JSONObject(json)
-            val key = current
-            if (!key.startsWith("form:")) return
-            val p = page(key)
-            fun strs(k: String): List<String> {
-                val a = o.optJSONArray(k) ?: return emptyList()
-                return (0 until a.length()).map { a.optString(it) }
-            }
-            p.url = o.optString("url").take(300)
-            val h = strs("headings")
-            val t = h.firstOrNull() ?: o.optString("title")
-            if (t.isNotBlank()) p.title = t.take(80)
-            p.headings = h; p.buttons = strs("buttons"); p.menu = strs("menu"); p.fields = strs("fields")
-            p.inputs = o.optInt("inputs"); p.tables = o.optInt("tables")
-            p.last = System.currentTimeMillis()
-            changed()
-        } catch (e: Exception) {
-        }
-    }
-
-    /** Страницы: сначала те, которых ещё нет в App, потом по числу заходов. */
-    @Synchronized
-    fun list(): List<CgPage> = map.values.sortedWith(compareBy<CgPage> { it.inApp().isNotEmpty() }.thenByDescending { it.visits })
-
-    @Synchronized
-    fun clear() { map.clear(); current = ""; changed() }
-
-    @Synchronized
-    fun report(): String {
-        val all = list()
-        val todo = all.count { it.inApp().isEmpty() }
-        val sb = StringBuilder()
-        sb.append("Страницы сайта Coglas для App\n")
-        sb.append("Всего: ${all.size} · уже в App: ${all.size - todo} · нужно сделать: $todo\n")
-        for (p in all) {
-            sb.append("\n== ").append(p.title.ifEmpty { "(без названия)" }).append("\n")
-            sb.append("путь: ").append(p.key).append(" · заходов: ").append(p.visits).append("\n")
-            val a = p.inApp()
-            sb.append("в App: ").append(if (a.isEmpty()) "НЕТ" else "есть ($a)").append("\n")
-            if (p.menu.isNotEmpty()) sb.append("меню: ").append(p.menu.joinToString(" | ")).append("\n")
-            if (p.headings.isNotEmpty()) sb.append("заголовки: ").append(p.headings.joinToString(" | ")).append("\n")
-            if (p.buttons.isNotEmpty()) sb.append("кнопки: ").append(p.buttons.joinToString(" | ")).append("\n")
-            if (p.fields.isNotEmpty()) sb.append("поля: ").append(p.fields.joinToString(" | ")).append("\n")
-            if (p.inputs > 0 || p.tables > 0) sb.append("полей ввода: ${p.inputs} · таблиц: ${p.tables}\n")
-            if (p.apis.isNotEmpty()) sb.append("запросы API:\n").append(p.apis.joinToString("\n") { "  $it" }).append("\n")
-        }
-        return sb.toString()
-    }
 }
 
 // ======================= данные Coglas (API сайта) =======================
