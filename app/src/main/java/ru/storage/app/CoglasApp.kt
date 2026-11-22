@@ -394,8 +394,9 @@ fun MenuWorkScreen(key: String) {
     var info by remember { mutableStateOf(false) }
     val action = CgList.searchAction(e)
     Column(Modifier.fillMaxSize()) {
+        // название раздела теперь в шапке окна, здесь только кнопка «i»
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(e.ru, modifier = Modifier.weight(1f), fontSize = 22.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
             IconButton(onClick = { info = true }) {
                 Icon(Icons.Default.Info, contentDescription = "Подробности", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }

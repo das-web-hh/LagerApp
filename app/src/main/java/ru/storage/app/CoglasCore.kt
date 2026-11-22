@@ -1045,7 +1045,11 @@ object CoglasPages {
 
 data class CgOrder(val id: Long, val number: String, val supplier: String, val planned: String, val status: String, val positions: Int)
 data class CgOrdersPage(val items: List<CgOrder>, val total: Int)
-data class CgPos(val number: Int, val title: String, val details: String, val done: Boolean)
+data class CgPos(
+    val number: Int, val title: String, val details: String, val done: Boolean,
+    /** для «Приема товаров»: артикул, название, штрихкод (GTIN), плановое количество и единица */
+    val article: String = "", val name: String = "", val gtin: String = "", val qty: Double = 0.0, val unit: String = ""
+)
 data class CgOrderDetail(
     val id: Long, val number: String, val header: List<Pair<String, String>>, val total: Int, val shown: Int,
     val done: Int, val proc: Int, val created: Int, val positions: List<CgPos>
@@ -1233,8 +1237,12 @@ object CoglasData {
                             "Created" -> created++
                         }
                         val parts = ArrayList<String>()
+                        var planQty = 0.0
+                        var planUnit = ""
                         if (!p.isNull("Quantity")) {
                             val unit = unitName(art?.optJSONObject("Calculated")?.optJSONObject("QuantityUnit"))
+                            planQty = p.optDouble("Quantity")
+                            planUnit = unit
                             parts.add((num(p.optDouble("Quantity")) + " " + unit).trim())
                         }
                         val gtin = art?.str("GTIN") ?: ""
@@ -1243,7 +1251,7 @@ object CoglasData {
                         if (mhd.isNotEmpty()) parts.add("MHD $mhd")
                         val sr = statusRu(key)
                         if (sr.isNotEmpty()) parts.add(sr)
-                        positions.add(CgPos(p.optInt("Number"), title, parts.joinToString(" · "), key == "Done"))
+                        positions.add(CgPos(p.optInt("Number"), title, parts.joinToString(" · "), key == "Done", art?.str("Number") ?: "", art?.str("Name") ?: "", gtin, planQty, planUnit))
                     }
                 }
                 items?.length() ?: 0

@@ -152,6 +152,10 @@ class ItemRow(
     var fact by mutableStateOf("")
     var defect by mutableStateOf("")
 
+    /** «Прием товаров» в Coglas: часть поставки (A, B, C…) и вид упаковки (Паллет, Картон…). По умолчанию — A и паллет. */
+    var part by mutableStateOf("A")
+    var pack by mutableStateOf("Паллет")
+
     /** Фото брака (имена файлов в медиа-папке), снимаются в окне «Брак»; печатаются на последнем листе документа. */
     val defectPhotos = mutableStateListOf<String>()
 

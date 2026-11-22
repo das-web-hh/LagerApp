@@ -392,6 +392,15 @@ fun CountWheelList(
     focusTarget: ItemRow? = null,
     /** не null — у строки третья кнопка свайпа «Причины» (инвентарь B-Ware); вызывается с этой строкой */
     onDetails: ((ItemRow) -> Unit)? = null,
+    /** не null — долгое нажатие на строку вызывает это вместо окна «Изменить» («Прием товаров»: «Разделить») */
+    onLongPress: ((ItemRow) -> Unit)? = null,
+    /** true — в строке после срока годности стоит часть поставки: -A-, -B-… */
+    showPart: Boolean = false,
+    /** не null (вместе с groupHeader) — список разбит на группы: заголовок группы сверху, между группами линия */
+    groupOf: ((ItemRow) -> String)? = null,
+    groupHeader: (@Composable (String) -> Unit)? = null,
+    /** цвет заливки строки (свой у каждой группы) */
+    rowTint: ((ItemRow) -> androidx.compose.ui.graphics.Color?)? = null,
     /** true — обычный список (без колеса); используется в B-Ware и в «Приём вручную» */
     plain: Boolean = false,
     /** подпись под названием у строки, добавленной вручную (нет в плане); пусто — без подписи */
@@ -631,10 +640,21 @@ fun CountWheelList(
             } else if (plainNow) {
                 val plainState = rememberLazyListState()
                 val plainItemPx = with(density) { 68.dp.roundToPx() }
+                // группы (типы упаковки): по алфавиту, внутри — по части A, B, C…; заголовок группы — строка-текст
+                val grouped = groupOf != null && groupHeader != null
+                val display: List<Any> = if (!grouped) rows.toList() else buildList {
+                    val sorted = rows.toList().sortedWith(compareBy<ItemRow>({ groupOf!!(it).lowercase() }, { it.part }))
+                    var last: String? = null
+                    sorted.forEach { r ->
+                        val g = groupOf!!(r)
+                        if (g != last) { add(g); last = g }
+                        add(r)
+                    }
+                }
                 LaunchedEffect(focusRow, n) {
                     val fr = focusRow
                     if (fr != null) {
-                        val k = rows.indexOf(fr)
+                        val k = display.indexOf(fr)
                         if (k >= 0) {
                             if (focusAfterIme) awaitStableViewport(plainState)
                             // строка — на середину списка (у самого начала и конца списка — насколько хватает места)
@@ -651,7 +671,12 @@ fun CountWheelList(
                     }
                 }
                 LazyColumn(state = plainState, modifier = Modifier.fillMaxSize()) {
-                    items(rows.toList(), key = { System.identityHashCode(it) }) { row ->
+                    items(display, key = { if (it is ItemRow) System.identityHashCode(it) else "g:$it" }) { d ->
+                      if (d is String) {
+                        if (d != display.firstOrNull()) androidx.compose.material3.HorizontalDivider(thickness = 2.dp, modifier = Modifier.padding(vertical = 6.dp))
+                        groupHeader?.invoke(d)
+                      } else {
+                        val row = d as ItemRow
                         WheelRow(
                             row = row,
                             blinkKey = if (row === blinkRow) blinkTick else 0,
@@ -661,13 +686,13 @@ fun CountWheelList(
                             editable = editable,
                             plain = true,
                             bware = bware,
-                            extraLabel = extraLabel,
+                            extraLabel = extraLabel, showPart = showPart, tint = rowTint?.invoke(row),
                             rowH = rowH, centerOnly = false, bigText = false, planBeside = nameMode, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
                             onPickExpiry = { expiryRow = row },
                             onDetails = onDetails?.let { cb -> { cb(row) } },
                             onPickFact = { picking = row to true },
                             onPickDefect = { picking = row to false },
-                            onEdit = { editing = row },
+                            onEdit = { if (onLongPress != null) onLongPress(row) else editing = row },
                             onDelete = { rows.remove(row) },
                             onEan = onScanBind?.let { cb -> { cb(row) } },
                             onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
@@ -675,6 +700,7 @@ fun CountWheelList(
                             defectButton = rowDefect,
                             expiryHint = expiryHint
                         )
+                      }
                     }
                 }
             } else {
@@ -769,13 +795,13 @@ fun CountWheelList(
                                     editable = editable,
                                     plain = false,
                                     bware = bware,
-                                    extraLabel = extraLabel,
+                                    extraLabel = extraLabel, showPart = showPart,
                                     rowH = rowH, centerOnly = bigRows, bigText = bigRows, planBeside = nameMode, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
                                     onPickExpiry = { expiryRow = row },
                                     onDetails = onDetails?.let { cb -> { cb(row) } },
                                     onPickFact = { picking = row to true },
                                     onPickDefect = { picking = row to false },
-                                    onEdit = { editing = row },
+                                    onEdit = { if (onLongPress != null) onLongPress(row) else editing = row },
                                     onDelete = { rows.remove(row) },
                                     onEan = onScanBind?.let { cb -> { cb(row) } },
                                     onPickQty = if ((nameMode && !bware) || photoButton) ({ qtyRow = row }) else null,
@@ -892,6 +918,8 @@ private fun WheelRow(
     plain: Boolean,
     bware: Boolean,
     extraLabel: String,
+    showPart: Boolean = false,
+    tint: androidx.compose.ui.graphics.Color? = null,
     /** линия выбора в пикселях от верха списка; null — середина списка */
     anchorPx: Float? = null,
     rowH: Dp,
@@ -1104,6 +1132,7 @@ private fun WheelRow(
                 .fillMaxSize()
                 .clip(RoundedCornerShape(14.dp))
                 .background(scheme.surfaceVariant)
+                .then(if (tint != null && !selected) Modifier.background(tint) else Modifier)
                 // средняя строка колеса другого цвета: плавно «заливается» по мере подхода к середине
                 .drawBehind {
                     if (selected) {
@@ -1194,12 +1223,17 @@ private fun WheelRow(
                     // «Инвентаризация»: срок не выбран — слово «срок» красным в этой же строке (после артикула); выбрали срок — слово становится серым
                     // с датой. На печать товар идёт и без срока.
                     val hintNow = expiryHint && row.expiry.isBlank()
-                    if (sub.isNotEmpty() || hintNow) Text(
+                    if (sub.isNotEmpty() || hintNow || showPart) Text(
                         buildAnnotatedString {
                             append(sub)
                             if (hintNow) {
                                 if (sub.isNotEmpty()) append(" · ")
                                 withStyle(SpanStyle(color = scheme.error)) { append("срок") }
+                            }
+                            // после срока годности — часть поставки: -A-, -B-…
+                            if (showPart) {
+                                if (sub.isNotEmpty() || hintNow) append(" · ")
+                                withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = scheme.onSurface)) { append("-${row.part}-") }
                             }
                         },
                         fontSize = if (bigText) 11.sp else 12.sp, lineHeight = if (bigText) 13.sp else 14.sp, maxLines = 1, color = scheme.onSurfaceVariant

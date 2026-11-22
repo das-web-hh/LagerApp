@@ -268,7 +268,7 @@ fun CompactField(
 
 /** Поиск товара: лупа, надпись «Товар», «+» справа. */
 @Composable
-private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit, onScan: (() -> Unit)? = null, focusRequester: androidx.compose.ui.focus.FocusRequester? = null, busy: Boolean = false) {
+private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: () -> Unit, onScan: (() -> Unit)? = null, focusRequester: androidx.compose.ui.focus.FocusRequester? = null, busy: Boolean = false, showAdd: Boolean = true) {
     Row(
         Modifier.fillMaxWidth()
             .height(44.dp)
@@ -305,7 +305,7 @@ private fun BWareSearchField(query: String, onChange: (String) -> Unit, onAdd: (
         if (onScan != null) {
             IconButton(onClick = onScan) { BarcodeScannerIcon(color = MaterialTheme.colorScheme.primary) }
         }
-        IconButton(onClick = onAdd) {
+        if (showAdd) IconButton(onClick = onAdd) {
             Icon(Icons.Default.Add, contentDescription = "Добавить товар", tint = MaterialTheme.colorScheme.primary)
         }
     }
@@ -334,7 +334,16 @@ fun CatalogWheel(
     /** true (вместе с isolated) — можно считать только товары списка; чего нет в списке, добавить нельзя */
     strict: Boolean = false,
     /** растёт — курсор встаёт в поле поиска и открывается клавиатура (кнопка поиска в шапке экрана) */
-    focusSearchTick: Int = 0
+    focusSearchTick: Int = 0,
+    /** false — в поле поиска нет кнопки «+» */
+    showAdd: Boolean = true,
+    /** не null — долгое нажатие на строку вызывает это вместо «Изменить» */
+    onRowLongPress: ((ItemRow) -> Unit)? = null,
+    /** true — у строки видны «часть · упаковка» */
+    showPart: Boolean = false,
+    groupOf: ((ItemRow) -> String)? = null,
+    groupHeader: (@Composable (String) -> Unit)? = null,
+    rowTint: ((ItemRow) -> androidx.compose.ui.graphics.Color?)? = null
 ) {
     val ctx = LocalContext.current
     val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -701,7 +710,8 @@ fun CatalogWheel(
                 }
             },
             onScan = if (scanner) ({ scanMode = "add" }) else null,
-            focusRequester = searchFocus
+            focusRequester = searchFocus,
+            showAdd = showAdd
         )
         if (errorText.isNotBlank()) {
             Text(errorText, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
@@ -721,6 +731,9 @@ fun CatalogWheel(
                 extraLabel = if (inventory) "" else "нет в плане",
                 focusTarget = focusTarget,
                 onDetails = { r -> detailsRow = r },
+                onLongPress = onRowLongPress,
+                showPart = showPart,
+                groupOf = groupOf, groupHeader = groupHeader, rowTint = rowTint,
                 onScanBind = if (scanner) ({ r -> bindRow = r; scanMode = "bind" }) else null,
                 photoButton = scanner,
                 // «Инвентаризация»: в строке нет кнопок «Фото» и «Брак»
@@ -767,7 +780,7 @@ fun CatalogWheel(
                                 ) {
                                     Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                     val sub = listOf(
-                                        "из списка", if (r.article.isNotBlank()) "арт. ${r.article}" else "",
+                                        "из списка", if (showPart) "${r.part} · ${r.pack}" else "", if (r.article.isNotBlank()) "арт. ${r.article}" else "",
                                         if (r.barcode.isNotBlank()) "ШК ${r.barcode}" else ""
                                     ).filter { it.isNotEmpty() }.joinToString(" · ")
                                     Text(sub, style = MaterialTheme.typography.bodySmall)

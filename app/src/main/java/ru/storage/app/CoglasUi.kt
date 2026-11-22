@@ -11,6 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,10 +33,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -112,6 +116,11 @@ object CoglasState {
     var posQuery by mutableStateOf("")
     var posFilter by mutableIntStateOf(0)
 
+    /** «Прием товаров» открыт из заказа; шаг 0 — счёт, 1 — документ. */
+    var receiveOpen by mutableStateOf(false)
+    var receiveStep by mutableIntStateOf(0)
+    var receiveSearchTick by mutableIntStateOf(0)
+
     fun loadOrders() {
         if (ordersBusy) return
         ordersBusy = true
@@ -150,6 +159,8 @@ object CoglasState {
     }
 
     fun closeOrder() {
+        receiveOpen = false
+        receiveStep = 0
         openOrder = null
         detail = null
         detailErr = null
@@ -193,6 +204,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         st.active = true
         onDispose {
             st.active = false
+            CoglasAuto.close()
             CoglasWeb.onSiteScan = null
             CoglasWeb.scanClosed()
             CoglasWeb.camLauncher = null
@@ -204,6 +216,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     // тот же шаг назад делает и стрелка в шапке окна
     val stepBack: () -> Unit = {
         when {
+            st.tab == 0 && st.receiveOpen -> if (st.receiveStep == 1) st.receiveStep = 0 else st.receiveOpen = false
             st.tab == 0 && st.appPage == "orders" && st.openOrder != null -> st.closeOrder()
             st.tab == 0 && st.appPage.isNotEmpty() -> st.appPage = ""
             st.tab == 1 && CoglasWeb.canGoBack -> CoglasWeb.goBack()
@@ -271,7 +284,10 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                     else -> CoglasWeb.reload()
                 }
             },
-            onHome = { st.tab = 1; CoglasWeb.home() }
+            onHome = { st.tab = 1; CoglasWeb.home() },
+            onScan = { if (tab == 1) CoglasWeb.requestScan() else scanFor = "info" },
+            receive = tab == 0 && st.receiveOpen,
+            onSearch = { st.receiveSearchTick++ }
         )
         if (tab == 1 && CoglasWeb.progress in 1..99) {
             LinearProgressIndicator(progress = { CoglasWeb.progress / 100f }, modifier = Modifier.fillMaxWidth())
@@ -322,6 +338,10 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 }
             }
 
+            if (tab == 1 && CoglasAuto.visible) {
+                CoglasAutoBanner(Modifier.align(Alignment.BottomCenter))
+            }
+
             if (tab != 1) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     when (tab) {
@@ -357,34 +377,57 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
 }
 
 @Composable
-private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit) {
+private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit, onScan: () -> Unit, receive: Boolean = false, onSearch: () -> Unit = {}) {
+    // название открытого окна — по центру шапки
+    val title = when (tab) {
+        0 -> if (receive) "Прием товаров" else when (appPage) {
+            "orders" -> "Заказы на приход"
+            "info" -> "Infoscan"
+            else -> if (appPage.startsWith("menu:")) (CoglasSchema.find(appPage.removePrefix("menu:"))?.ru ?: "App") else "App"
+        }
+        1 -> "Сайт"
+        else -> "Настройки"
+    }
     Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад") }
-            Column(Modifier.weight(1f)) {
-                Text("Coglas", style = MaterialTheme.typography.titleLarge)
-                val sub = when (tab) {
-                    0 -> when (appPage) {
-                        "orders" -> "App · заказы на приход"
-                        "info" -> "App · Infoscan: штрихкод или номер LE"
-                        else -> if (appPage.startsWith("menu:")) "App · " + (CoglasSchema.find(appPage.removePrefix("menu:"))?.ru ?: "") else "App"
-                    }
-                    1 -> (if (CoglasWeb.trOn && !CoglasWeb.trSafe) "Сайт · перевод на русский" else if (CoglasWeb.trOn) "Сайт · без перевода (авария)" else "Сайт · оригинал (немецкий)") +
-                        (if (CoglasWeb.desktop) " · ПК" else "")
-                    else -> "Настройки (админ)"
+        Box(Modifier.fillMaxWidth().height(56.dp)) {
+            Text(
+                title,
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = 96.dp),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            // слева: «назад» как в iOS — шеврон и подпись
+            Row(
+                Modifier.align(Alignment.CenterStart)
+                    .clickable(onClick = onBack)
+                    .padding(start = 4.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Назад",
+                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp)
+                )
+                Text("Назад", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge)
+            }
+            // справа: сканер (и обновление/вид, если нужно)
+            Row(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (tab == 1) {
+                    TextButton(onClick = onToggleView) { Text(if (desktop) "ПК" else "Моб.") }
                 }
-                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (tab == 1) {
-                // кнопка сканера наверху: клавиатура её не закрывает; код подставится в поле, которого вы коснулись последним
-                TextButton(onClick = { CoglasWeb.requestScan() }) { Text("Скан") }
-                TextButton(onClick = onToggleView) { Text(if (desktop) "ПК" else "Моб.") }
-            }
-            if (tab == 1 || (tab == 0 && appPage.isNotEmpty())) {
-                IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Обновить") }
-            }
-            if (tab == 1) {
-                IconButton(onClick = onHome) { Icon(Icons.Default.Home, contentDescription = "Главная Coglas") }
+                if (tab == 1 || (tab == 0 && appPage.isNotEmpty() && !receive)) {
+                    IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Обновить") }
+                }
+                if (tab == 1) {
+                    IconButton(onClick = onHome) { Icon(Icons.Default.Home, contentDescription = "Главная Coglas") }
+                }
+                if (!receive) {
+                    // в приеме товаров сканер и поиск — внутри окна, наверху кнопок нет
+                    // кнопка сканера: на сайте — в поле сайта, в App — Infoscan
+                    TextButton(onClick = onScan) { Text("Скан") }
+                }
             }
         }
     }
@@ -451,6 +494,7 @@ private fun OrdersTab(goSite: () -> Unit) {
     }
     val page = st.orders
     val err = st.ordersErr
+    var oq by remember { mutableStateOf("") }
     when {
         page == null && err != null -> CgErrorBox(err, onRetry = { st.loadOrders() }, goSite = goSite)
         page == null -> CgLoading("Загружаю заказы…")
@@ -472,7 +516,21 @@ private fun OrdersTab(goSite: () -> Unit) {
             if (err != null) {
                 item { Text(err.message ?: "Ошибка", color = MaterialTheme.colorScheme.error) }
             }
-            items(page.items) { o ->
+            item {
+                OutlinedTextField(
+                    value = oq, onValueChange = { oq = it }, singleLine = true,
+                    placeholder = { Text("Поиск: номер заказа, поставщик") },
+                    modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large
+                )
+            }
+            val needle = oq.trim().lowercase()
+            val shownOrders = if (needle.isEmpty()) page.items else page.items.filter {
+                (it.number + " " + it.supplier + " " + it.status + " " + it.planned).lowercase().contains(needle)
+            }
+            if (needle.isNotEmpty() && shownOrders.isEmpty()) {
+                item { Text("Среди загруженных заказов ничего не найдено", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            items(shownOrders) { o ->
                 Card(
                     onClick = { st.open(o) },
                     modifier = Modifier.fillMaxWidth(),
@@ -502,12 +560,12 @@ private fun OrderDetailView(goSite: () -> Unit) {
     val o = st.openOrder ?: return
     val d = st.detail
     val err = st.detailErr
+    val ctx = LocalContext.current
+    if (st.receiveOpen && d != null) {
+        ReceiveScreen(remember(o.id) { ReceiveStore.forOrder(ctx, o, d) })
+        return
+    }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { st.closeOrder() }) { Text("← К списку") }
-            Spacer(Modifier.weight(1f))
-            Text(o.number, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(end = 12.dp))
-        }
         when {
             err != null -> CgErrorBox(err, onRetry = { st.open(o) }, goSite = goSite)
             d == null -> CgLoading("Загружаю заказ ${o.number}…")
@@ -516,6 +574,14 @@ private fun OrderDetailView(goSite: () -> Unit) {
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // единственная кнопка заказа
+                item {
+                    Button(
+                        onClick = { st.receiveStep = 0; st.receiveOpen = true },
+                        enabled = d.positions.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth().height(56.dp)
+                    ) { Text("Прием товаров", style = MaterialTheme.typography.titleMedium) }
+                }
                 item {
                     Card(
                         Modifier.fillMaxWidth(),
@@ -532,7 +598,6 @@ private fun OrderDetailView(goSite: () -> Unit) {
                         }
                     }
                 }
-                item { OrderTools(o, d) }
                 item {
                     Text(
                         "Позиции: ${d.total} · ✓ готово ${d.done} · в работе ${d.proc} · создано ${d.created}" +
@@ -540,7 +605,7 @@ private fun OrderDetailView(goSite: () -> Unit) {
                         style = MaterialTheme.typography.titleSmall
                     )
                 }
-                items(visiblePositions(d)) { p ->
+                items(d.positions) { p ->
                     Card(
                         Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
