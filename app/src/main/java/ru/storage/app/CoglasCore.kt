@@ -64,6 +64,8 @@ class CgBridge {
     /** Сканер меню: сюда приходит список пунктов System (JSON). */
     var onMenuList: ((String) -> Unit)? = null
     var onPageChanged: (() -> Unit)? = null
+    /** Страница просит показать клавиатуру (двойное/тройное нажатие или долгое удержание на поле). */
+    var onShowKb: (() -> Unit)? = null
     @Volatile var translateOn = true
     @Volatile var scanNative = true
     @Volatile var desktopMode = false
@@ -99,6 +101,17 @@ class CgBridge {
     @JavascriptInterface
     fun menuList(json: String) {
         main.post { onMenuList?.invoke(json) }
+    }
+
+    @JavascriptInterface
+    fun showKb() {
+        main.post { onShowKb?.invoke() }
+    }
+
+    /** Шапка сайта найдена (true) или на странице её нет, например экран входа (false). */
+    @JavascriptInterface
+    fun barFound(found: Boolean) {
+        main.post { CoglasWeb.siteBar = found }
     }
 
     /** На сайте сменилась страница (заголовок). */
@@ -145,6 +158,8 @@ object CoglasWeb {
     var trBusy by mutableIntStateOf(0)
     /** Перевод временно отключён сторожем: страница с ним не отрисовалась. */
     var trSafe by mutableStateOf(false)
+    /** Шапка самого сайта (домик, окна, гамбургер, кнопка сканера) найдена на странице. */
+    var siteBar by mutableStateOf(false)
     private var watchToken = 0
     /** Меняется, когда WebView пришлось создать заново (система убила его процесс). */
     var viewKey by mutableIntStateOf(0)
@@ -155,6 +170,50 @@ object CoglasWeb {
     private var mobileUa = ""
     private var desktopUa = ""
 
+    // ---- масштаб: на каком масштабе оставили окно, на таком открываются и остальные
+    private var zoomSaved = 0f
+    private var curScale = 0f
+    private var zoomUntil = 0L
+    private var zoomApplying = false
+    private var lastUpAt = 0L
+
+    private fun noteTouch(e: MotionEvent) {
+        val now = System.currentTimeMillis()
+        when (e.actionMasked) {
+            MotionEvent.ACTION_POINTER_DOWN -> zoomUntil = now + 2500L // щипок двумя пальцами
+            MotionEvent.ACTION_DOWN -> if (now - lastUpAt < 350L) zoomUntil = now + 2500L // двойное касание
+            MotionEvent.ACTION_UP -> lastUpAt = now
+        }
+    }
+
+    private fun onScale(newScale: Float) {
+        curScale = newScale
+        if (zoomApplying) return
+        val ctx = appCtx ?: return
+        if (System.currentTimeMillis() < zoomUntil) {
+            // масштаб поменял сам человек: запоминаем
+            zoomSaved = newScale
+            CoglasTr.setZoom(ctx, desktop, newScale)
+        } else if (zoomSaved > 0f && Math.abs(newScale / zoomSaved - 1f) > 0.03f) {
+            // страница сама сбросила масштаб (новое окно, перерисовка) — возвращаем сохранённый
+            applyZoom(500L)
+        }
+    }
+
+    /** Вернуть сохранённый масштаб (через delay мс: страница к этому времени успевает разложиться). */
+    @Suppress("DEPRECATION")
+    fun applyZoom(delay: Long) {
+        main.postDelayed({
+            val w = web ?: return@postDelayed
+            if (zoomSaved <= 0f || zoomApplying) return@postDelayed
+            val cur = if (curScale > 0f) curScale else w.scale
+            if (cur <= 0f || Math.abs(cur / zoomSaved - 1f) <= 0.03f) return@postDelayed
+            zoomApplying = true
+            try { w.zoomBy((zoomSaved / cur).coerceIn(0.05f, 20f)) } catch (e: Exception) { }
+            main.postDelayed({ zoomApplying = false }, 900L)
+        }, delay)
+    }
+
     private fun applyUa(w: WebView) {
         w.settings.userAgentString = if (desktop) desktopUa else mobileUa
     }
@@ -162,6 +221,8 @@ object CoglasWeb {
     fun setDesktop(ctx: Context, on: Boolean) {
         CoglasTr.setDesktop(ctx, on)
         desktop = on
+        zoomSaved = CoglasTr.zoom(ctx, on)
+        curScale = 0f
         bridge.desktopMode = on
         val w = web ?: return
         applyUa(w)
@@ -264,7 +325,8 @@ object CoglasWeb {
         CoglasPages.init(app)
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
-        script = asset(app, "hook.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict)
+        zoomSaved = CoglasTr.zoom(app, desktop)
+        script = asset(app, "hook.js") + "\n" + asset(app, "bar.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict)
 
         val w = WebView(MutableContextWrapper(ctx))
         // ВАЖНО: без match_parent WebView внутри Compose считает свою высоту «по содержимому» (0),
@@ -292,6 +354,7 @@ object CoglasWeb {
         // Свайп вверх-вниз по сайту: не отдавать жест родителям (боковой свайп вкладок, прокрутки Compose),
         // иначе сайт получает ACTION_CANCEL посреди движения и «залипает».
         w.setOnTouchListener { v, e ->
+            noteTouch(e)
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> v.parent?.requestDisallowInterceptTouchEvent(true)
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
@@ -310,6 +373,14 @@ object CoglasWeb {
         bridge.onResult = { id, status, body -> pending.remove(id)?.invoke(status, body) }
         bridge.onTranslate = { json -> translate(json) }
         bridge.onScan = { requestScan() }
+        bridge.onShowKb = {
+            val v = web
+            if (v != null) {
+                v.requestFocus()
+                val imm = app.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                imm.showSoftInput(v, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
         bridge.onMenuResult = { m ->
             val l = menuListener
             if (l != null) l(m) else if (m != "ok") menuToast(m)
@@ -355,8 +426,15 @@ object CoglasWeb {
                 if (!docStart && hostOk(url)) view.evaluateJavascript(script, null)
             }
 
+            override fun onScaleChanged(view: WebView?, oldScale: Float, newScale: Float) {
+                onScale(newScale)
+            }
+
             override fun onPageFinished(view: WebView, url: String?) {
-                if (hostOk(url)) { view.evaluateJavascript(script, null); watch(view); nudge(view, 0) }
+                if (hostOk(url)) {
+                    view.evaluateJavascript(script, null); watch(view); nudge(view, 0)
+                    applyZoom(400L); applyZoom(1500L); applyZoom(3500L)
+                }
                 canGoBack = view.canGoBack()
             }
 
@@ -600,6 +678,9 @@ object CoglasTr {
     fun setDesktop(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("desktop", on).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
+    /** Масштаб сайта, на котором человек оставил окно (отдельно для вида ПК и мобильного). */
+    fun zoom(ctx: Context, desktop: Boolean): Float = sp(ctx).getFloat(if (desktop) "zoom_d" else "zoom_m", 0f)
+    fun setZoom(ctx: Context, desktop: Boolean, v: Float) { sp(ctx).edit().putFloat(if (desktop) "zoom_d" else "zoom_m", v).apply() }
     fun cacheSize(ctx: Context): Int = cache(ctx).length()
     fun clearCache(ctx: Context) { sp(ctx).edit().remove("cache").apply() }
 

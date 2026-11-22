@@ -29,7 +29,84 @@
         t.blur();
       } catch (x) {}
     }, true);
-    // Клавиатура не должна закрывать результаты: пока поле в фокусе, снизу временно добавляется пустое место,
+    // ---- Клавиатура: одно касание поля её НЕ открывает (код может приходить от сканера/«клавиатуры»).
+    // Открывается двойным, тройным и более нажатием на поле или долгим удержанием.
+    var kbEl = null, tapEl = null, tapAt = 0, tapN = 0, holdT = null, holdX = 0, holdY = 0;
+    function setNone(el){
+      try {
+        if (!el || el === kbEl) return;
+        if (el.__kbSaved === undefined) el.__kbSaved = el.hasAttribute('inputmode') ? el.getAttribute('inputmode') : null;
+        el.setAttribute('inputmode', 'none');
+      } catch (x) {}
+    }
+    function unNone(el){
+      try {
+        if (!el || el.__kbSaved === undefined) return;
+        if (el.__kbSaved === null) el.removeAttribute('inputmode'); else el.setAttribute('inputmode', el.__kbSaved);
+        delete el.__kbSaved;
+      } catch (x) {}
+    }
+    function armAll(root){
+      try {
+        var l = (root && root.querySelectorAll ? root : document).querySelectorAll('input,textarea');
+        for (var i = 0; i < l.length; i++) if (isText(l[i])) setNone(l[i]);
+        if (root && root.nodeType === 1 && isText(root)) setNone(root);
+      } catch (x) {}
+    }
+    function allowKb(el){
+      if (!el || !isText(el)) return;
+      kbEl = el;
+      unNone(el);
+      window.__wmsAllowFocus = true;
+      try { el.blur(); } catch (x) {}
+      setTimeout(function(){
+        try {
+          el.focus();
+          if (window.WmsBridge && WmsBridge.showKb) WmsBridge.showKb();
+        } catch (x) {}
+        setTimeout(function(){ window.__wmsAllowFocus = false; }, 600);
+      }, 40);
+    }
+    function textTarget(e){
+      var t = e.target;
+      if (t && t.nodeType === 3) t = t.parentElement;
+      return isText(t) ? t : null;
+    }
+    document.addEventListener('touchstart', function(e){
+      var t = textTarget(e);
+      if (!t) return;
+      if (t !== kbEl) setNone(t);
+      var p = e.touches && e.touches[0];
+      holdX = p ? p.clientX : 0; holdY = p ? p.clientY : 0;
+      clearTimeout(holdT);
+      holdT = setTimeout(function(){ allowKb(t); }, 550); // удержание
+    }, true);
+    document.addEventListener('touchmove', function(e){
+      var p = e.touches && e.touches[0];
+      if (p && (Math.abs(p.clientX - holdX) > 12 || Math.abs(p.clientY - holdY) > 12)) clearTimeout(holdT);
+    }, true);
+    ['touchend', 'touchcancel'].forEach(function(n){
+      document.addEventListener(n, function(e){
+        clearTimeout(holdT);
+        if (n !== 'touchend') return;
+        var t = textTarget(e);
+        if (!t) return;
+        var now = Date.now();
+        if (t === tapEl && now - tapAt < 500) tapN++; else tapN = 1;
+        tapEl = t; tapAt = now;
+        if (tapN >= 2) allowKb(t); // двойное, тройное и больше
+      }, true);
+    });
+    document.addEventListener('mousedown', function(e){ var t = textTarget(e); if (t && t !== kbEl) setNone(t); }, true);
+    document.addEventListener('dblclick', function(e){ var t = textTarget(e); if (t) allowKb(t); }, true);
+    document.addEventListener('contextmenu', function(e){ var t = textTarget(e); if (t) allowKb(t); }, true);
+    // ввод с клавиатуры-сканера идёт в поле и без экранной клавиатуры; снова «замыкаем» поле, когда курсор ушёл
+    document.addEventListener('focusin', function(e){
+      var t = e.target;
+      if (!isText(t)) return;
+      if (t !== kbEl) setNone(t);
+    }, true);
+    // Клавиатура не должна закрывать результаты: пока она открыта (по двойному нажатию), снизу временно добавляется пустое место,
     // и поле прокручивается к верху видимой области. После выхода из поля всё возвращается как было.
     var padEl = null;
     function addPad(){
@@ -45,6 +122,7 @@
       if (!isText(t) || document.activeElement !== t) return;
       window.__wmsLast = t;
       window.__wmsLastAt = Date.now();
+      if (t !== kbEl) return; // без клавиатуры ничего не двигаем
       addPad();
       setTimeout(function(){
         try {
@@ -54,9 +132,25 @@
         } catch (x) {}
       }, 350);
     }, true);
-    document.addEventListener('focusout', function(){
-      setTimeout(function(){ if (!isText(document.activeElement)) dropPad(); }, 400);
+    document.addEventListener('focusout', function(e){
+      var t = e.target;
+      setTimeout(function(){
+        if (document.activeElement !== t && kbEl === t) { kbEl = null; setNone(t); }
+        if (!isText(document.activeElement)) dropPad();
+      }, 400);
     }, true);
+    try {
+      var st = document.createElement('style');
+      st.textContent = 'input,textarea{touch-action:manipulation}';
+      (document.head || document.documentElement).appendChild(st);
+      document.addEventListener('DOMContentLoaded', function(){ armAll(document); });
+      new MutationObserver(function(ms){
+        for (var i = 0; i < ms.length; i++) {
+          var n = ms[i].addedNodes;
+          for (var j = 0; j < n.length; j++) if (n[j].nodeType === 1) armAll(n[j]);
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (x) {}
     function strip(){
       try {
         [].forEach.call(document.querySelectorAll('[autofocus]'), function(e){ e.removeAttribute('autofocus'); });
@@ -193,27 +287,42 @@
         if (e.tagName === 'TEXTAREA') return true;
         return e.tagName === 'INPUT' && /^(text|search|number|tel|)$/i.test(e.type || '');
       }
-      function visible(e){ return e && e.isConnected && e.offsetParent !== null; }
+      function visible(e){ try { return e && e.isConnected && e.getClientRects().length > 0; } catch (x) { return false; } }
+      // подпись поля: текст ближайших родителей, пока он короткий (строка «Артикул: GTIN | содержит | [поле]»)
       function labelOf(e){
-        try { var r = e.closest('tr,.row,.form-group,.filter-row') || (e.parentElement && e.parentElement.parentElement); return (r && r.innerText) || ''; } catch (x) { return ''; }
+        try {
+          var p = e, t = '';
+          for (var i = 0; i < 4; i++) {
+            p = p.parentElement;
+            if (!p || p === document.body) break;
+            var s = (p.innerText || '').replace(/\s+/g, ' ').trim();
+            if (s.length > 100) break;
+            t = s;
+          }
+          return t;
+        } catch (x) { return ''; }
       }
-      var el = document.activeElement;
-      if (!okInput(el)) {
-        el = null;
-        var last = window.__wmsLast;
-        // поле, которого человек коснулся последним (до 3 минут назад)
-        if (last && okInput(last) && visible(last) && Date.now() - (window.__wmsLastAt || 0) < 180000) el = last;
-      }
+      function attrs(e){ return (e.name || '') + ' ' + (e.id || '') + ' ' + (e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || ''); }
+      var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){ return okInput(e) && visible(e); });
+      var el = null;
+      // 1) поле «Артикул: GTIN» (пустое — раньше, иначе любое)
+      var art = all.filter(function(e){ return /артикул|gtin|artikel|article/i.test(labelOf(e)) || /gtin|artikel|article/i.test(attrs(e)); });
+      el = art.filter(function(e){ return !e.value; })[0] || art[0] || null;
+      // 2) нет такой строки в окне — строка поиска
       if (!el) {
-        var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){ return okInput(e) && visible(e); });
-        // пустое поле фильтра «Артикул / GTIN»
-        var art = all.filter(function(e){ return !e.value && /артикул|gtin|artikel|article/i.test(labelOf(e)); });
-        var pri = all.filter(function(e){
-          var h = (e.name || '') + ' ' + (e.id || '') + ' ' + (e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '');
-          return /barcode|scan|ean|gtin|code|штрих|скан|код|lager|le\b/i.test(h);
-        });
-        el = art[0] || pri[0] || all[0];
+        var srch = all.filter(function(e){ return e.type === 'search' || /поиск|search|suche/i.test(attrs(e)) || /^\s*(поиск|search|suche)\s*$/i.test(labelOf(e)); });
+        el = srch[0] || null;
       }
+      // 3) совсем ничего — поле, в котором стоит курсор / которого коснулись последним
+      if (!el) {
+        var cur = document.activeElement;
+        if (okInput(cur)) el = cur;
+        else {
+          var last = window.__wmsLast;
+          if (last && okInput(last) && visible(last) && Date.now() - (window.__wmsLastAt || 0) < 180000) el = last;
+        }
+      }
+      if (!el) el = all[0];
       if (!el) return 'noinput';
       var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;

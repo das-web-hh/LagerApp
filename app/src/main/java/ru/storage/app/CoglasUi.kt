@@ -250,7 +250,8 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        CgTopBar(
+        // на вкладке «Сайт» своей шапки у приложения нет: наверху шапка самого сайта (домик, окна, гамбургер, скан)
+        if (tab != 1) CgTopBar(
             tab = tab,
             appPage = st.appPage,
             desktop = CoglasWeb.desktop,
@@ -300,7 +301,8 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 )
             }
 
-            if (tab == 1 && CoglasWeb.loadError.isEmpty()) {
+            if (tab == 1 && CoglasWeb.loadError.isEmpty() && !CoglasWeb.siteBar) {
+                // запасная кнопка: только когда шапки сайта нет на странице (например, экран входа)
                 // сканер приложения: код подставится в поле, которого вы коснулись последним (или в пустое поле «Артикул / GTIN»)
                 androidx.compose.material3.SmallFloatingActionButton(
                     onClick = { CoglasWeb.requestScan() },
