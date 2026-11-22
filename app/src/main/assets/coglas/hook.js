@@ -156,3 +156,27 @@
   (function r(){ window.__cgRaf++; if (window.__cgRaf < 4000) requestAnimationFrame(r); })();
   var t = setInterval(function(){ window.__cgTim++; if (window.__cgTim > 600) clearInterval(t); }, 500);
 })();
+
+// ГЛАВНОЕ ИСПРАВЛЕНИЕ: в WebView у html/body/#applicationHost высота получалась 0, и форма входа центрировалась
+// вокруг верхнего края экрана (половина уходила за экран). Задаём цепочке высот полный размер экрана.
+(function(){
+  if (window.__cgFit) return;
+  window.__cgFit = true;
+  var CSS = 'html,body,#applicationHost{height:100%!important;min-height:100%!important;}' +
+            '#wrapper{height:100%;}' +
+            '.login-container{min-height:100vh;}';
+  function add(){
+    try {
+      if (document.getElementById('__cgFit')) return;
+      var s = document.createElement('style');
+      s.id = '__cgFit';
+      s.textContent = CSS;
+      (document.head || document.documentElement).appendChild(s);
+    } catch (e) {}
+  }
+  add();
+  document.addEventListener('DOMContentLoaded', add);
+  window.addEventListener('load', add);
+  // если сайт пересоздал head/стили — вернуть нашу вставку
+  setInterval(add, 1500);
+})();
