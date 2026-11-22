@@ -244,7 +244,14 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             key(CoglasWeb.viewKey) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
-                    factory = { c -> CoglasWeb.view(c) },
+                    factory = { c ->
+                        CoglasWeb.view(c).apply {
+                            layoutParams = android.view.ViewGroup.LayoutParams(
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        }
+                    },
                     update = { w ->
                         // WebView обязан быть «видимым» и не на паузе, иначе анимации и скрипты сайта не доходят до конца
                         w.visibility = android.view.View.VISIBLE

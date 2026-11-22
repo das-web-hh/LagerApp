@@ -135,6 +135,7 @@ object CoglasWeb {
         web?.let { w ->
             (w.context as? MutableContextWrapper)?.baseContext = ctx
             (w.parent as? ViewGroup)?.removeView(w)
+            w.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             w.onResume()
             w.resumeTimers()
             return w
@@ -147,14 +148,16 @@ object CoglasWeb {
         script = asset(app, "hook.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict)
 
         val w = WebView(MutableContextWrapper(ctx))
+        // ВАЖНО: без match_parent WebView внутри Compose считает свою высоту «по содержимому» (0),
+        // и у сайта 100% / 100vh превращаются в 0 — страница рисуется только шапкой.
+        w.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         val s = w.settings
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
-        // сайт адаптивный: никакого «обзорного» режима и масштабирования щипком (из-за них страница могла сместиться за экран)
-        s.useWideViewPort = false
-        s.loadWithOverviewMode = false
-        s.setSupportZoom(false)
-        s.builtInZoomControls = false
+        s.useWideViewPort = true
+        s.loadWithOverviewMode = true
+        s.setSupportZoom(true)
+        s.builtInZoomControls = true
         s.displayZoomControls = false
         s.mediaPlaybackRequiresUserGesture = false
         s.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
