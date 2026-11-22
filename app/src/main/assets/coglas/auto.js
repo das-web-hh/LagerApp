@@ -322,6 +322,24 @@
   }
 
   // ---------- шаг 1: форма «Добавить товарную накладную» ----------
+  // что видно на форме накладной: значения нужных полей и тексты ошибок (для отчёта)
+  function formDiag(f){
+    var out = [];
+    try {
+      f.forEach(function(x){
+        var el = inputByLabel(x.rx);
+        out.push(x.n + '=' + (el ? '«' + el.value + '»' : 'поле не найдено') + (x.v ? ' (нужно «' + x.v + '»)' : ' (пусто в задании)'));
+      });
+      var errs = all('.invalid-feedback,.text-danger,.has-error,.help-block,[class*=error],[class*=invalid],.field-validation-error').filter(vis)
+        .map(function(e){ return (e.innerText || '').replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+      if (errs.length) out.push('ошибки на форме: ' + errs.slice(0, 5).join(' | '));
+      var empt = all('input,select,textarea').filter(vis).filter(function(e){
+        return (e.required || e.getAttribute('aria-required') === 'true') && !String(e.value || '').trim();
+      }).map(function(e){ return e.placeholder || e.name || e.id || '?'; });
+      if (empt.length) out.push('пустые обязательные: ' + empt.slice(0, 6).join(', '));
+    } catch (x) {}
+    return out.join('; ');
+  }
   function stepAddNote(job, st){
     var f = [
       { rx: /^внеш\.?\s*номер$|^extern\S*\s*nummer$/, v: job.waybill, n: 'номер накладной' },
@@ -361,7 +379,7 @@
       click(sb);
       return { status: 'acted', msg: 'Нажимаю «Добавить товарную накладную»', warn: w2 };
     }
-    if (Date.now() - st.s.clicked > 12000) return { status: 'error', msg: 'Накладная не создалась. ' + alertText() };
+    if (Date.now() - st.s.clicked > 12000) return { status: 'error', msg: 'Накладная не создалась. ' + alertText() + ' ' + formDiag(f) };
     return { status: 'wait', msg: 'Жду страницу накладной…' };
   }
 
