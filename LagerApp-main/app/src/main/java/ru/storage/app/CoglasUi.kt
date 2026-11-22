@@ -936,6 +936,18 @@ private fun SettingsTab(goSite: () -> Unit) {
                         enabled = pages.isNotEmpty(), modifier = Modifier.weight(1f)
                     ) { Text("Очистить") }
                 }
+                OutlinedButton(
+                    onClick = {
+                        CoglasPages.exportFile { ok ->
+                            Toast.makeText(
+                                ctx,
+                                if (ok) "Сохранено: Загрузки / coglas_report.txt" else "Не удалось сохранить файл",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    },
+                    enabled = pages.isNotEmpty(), modifier = Modifier.fillMaxWidth()
+                ) { Text("Сохранить файл в «Загрузки»") }
                 if (showPages) pages.forEach { PageCard(it) }
             }
         }

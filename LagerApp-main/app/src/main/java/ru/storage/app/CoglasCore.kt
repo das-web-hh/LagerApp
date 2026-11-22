@@ -756,6 +756,7 @@ object CoglasPages {
             }
         } catch (e: Exception) {
         }
+        main.postDelayed({ exportFile() }, 3000L)
     }
 
     @Synchronized
@@ -779,11 +780,12 @@ object CoglasPages {
      * Весь отчёт по страницам сайта сам обновляется одним файлом «Загрузки/coglas_report.txt» на телефоне
      * (после каждого нового окна/запроса, с паузой ~1,5 с). Его можно прикрепить из памяти телефона.
      */
-    private fun exportFile() {
-        val c = ctx ?: return
-        if (map.isEmpty()) return
+    fun exportFile(done: ((Boolean) -> Unit)? = null) {
+        val c = ctx ?: run { done?.invoke(false); return }
+        if (map.isEmpty()) { done?.invoke(false); return }
         val text = report()
         thread {
+            var ok = false
             try {
                 val name = "coglas_report.txt"
                 if (android.os.Build.VERSION.SDK_INT >= 29) {
@@ -804,13 +806,14 @@ object CoglasPages {
                         v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, rel)
                         uri = cr.insert(coll, v)
                     }
-                    uri?.let { u -> cr.openOutputStream(u, "wt")?.use { o -> o.write(text.toByteArray(Charsets.UTF_8)) } }
+                    uri?.let { u -> cr.openOutputStream(u, "wt")?.use { o -> o.write(text.toByteArray(Charsets.UTF_8)); ok = true } }
                 } else {
-                    val d = c.getExternalFilesDir(null) ?: return@thread
-                    java.io.File(d, name).writeText(text, Charsets.UTF_8)
+                    val d = c.getExternalFilesDir(null)
+                    if (d != null) { java.io.File(d, name).writeText(text, Charsets.UTF_8); ok = true }
                 }
             } catch (e: Exception) {
             }
+            if (done != null) main.post { done(ok) }
         }
     }
 
