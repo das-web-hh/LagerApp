@@ -88,7 +88,7 @@ object CoglasAuto {
                     JSONObject()
                         .put("part", r.part)
                         .put("pack", r.pack)
-                        .put("packName", j.packNames[r.pack].orEmpty().trim())
+                        .put("packName", j.packNames[packKey(r)].orEmpty().trim())
                         .put("typeRx", typeRx(r.pack))
                         .put("qty", fmtQ(parseQ(r.fact)))
                         .put("expiry", r.expiry.trim())
@@ -196,6 +196,62 @@ object CoglasAuto {
                 if (now - lastProgress > 40000) {
                     fail(app, "Нет движения 40 секунд. Сейчас сайт на шаге «$phase», страница «$kind». " + msg)
                     return@launch
+                }
+            }
+        }
+    }
+
+    private var probeJob: Job? = null
+
+    /**
+     * Узнать в фоне дату приема, которую сайт ставит сам: открыть заказ, отметить позиции, один раз нажать
+     * «Добавить накладную … (поз.)», прочитать «Дата поставки» и закрыть форму кнопкой «Отмена».
+     * Результат — j.siteDate (в календаре «Прием товаров» на этой дате рамка). Накладная не создаётся.
+     */
+    fun probeDate(ctx: Context, j: RecvJob) {
+        if (running || probeJob?.isActive == true || j.siteDate.isNotBlank()) return
+        val app = ctx.applicationContext
+        val items = JSONArray()
+        (j.pool.toList() + j.rows.toList()).map { it.article.trim() }.filter { it.isNotEmpty() }.distinct().forEach {
+            items.put(JSONObject().put("article", it))
+        }
+        if (items.length() == 0) return
+        val payload = JSONObject().put("order", j.orderNumber.trim()).put("items", items).toString()
+        probeJob = scope.launch {
+            var st = "{\"phase\":\"order\",\"s\":{}}"
+            var menuTries = 0
+            var menuWaitUntil = 0L
+            val startedAt = System.currentTimeMillis()
+            while (isActive && !running && System.currentTimeMillis() - startedAt < 90000L) {
+                delay(700)
+                val now = System.currentTimeMillis()
+                if (now < menuWaitUntil) continue
+                val raw = js("(window.__cgProbeTick ? window.__cgProbeTick(" + JSONObject.quote(payload) + "," + JSONObject.quote(st) + ") : 'nohook')")
+                if (raw == "nohook") { js(CoglasWeb.asset(app, "auto.js")); continue }
+                if (raw.isEmpty()) continue
+                val o = try { JSONObject(raw) } catch (e: Exception) { return@launch } // сайт ещё не открыт — без шума
+                o.optJSONObject("st")?.let { st = it.toString() }
+                when (o.optString("status")) {
+                    "need_menu" -> {
+                        if (menuTries >= 2) return@launch
+                        menuTries++
+                        CoglasWeb.openMenu("Bestellungen", "Заказы")
+                        menuWaitUntil = now + 5000
+                    }
+                    "done" -> {
+                        val d = o.optString("date").trim()
+                        // сайт может показать дату как 22.11.2026 или 2026-11-22
+                        val m1 = Regex("^(\\d{2})\\.(\\d{2})\\.(\\d{4})").find(d)
+                        val m2 = Regex("^(\\d{4})-(\\d{2})-(\\d{2})").find(d)
+                        j.siteDate = when {
+                            m1 != null -> m1.value
+                            m2 != null -> m2.groupValues[3] + "." + m2.groupValues[2] + "." + m2.groupValues[1]
+                            else -> ""
+                        }
+                        if (j.siteDate.isNotBlank()) ReceiveStore.save(app)
+                        return@launch
+                    }
+                    "error" -> return@launch
                 }
             }
         }

@@ -343,7 +343,11 @@ fun CatalogWheel(
     showPart: Boolean = false,
     groupOf: ((ItemRow) -> String)? = null,
     groupHeader: (@Composable (String) -> Unit)? = null,
-    rowTint: ((ItemRow) -> androidx.compose.ui.graphics.Color?)? = null
+    rowTint: ((ItemRow) -> androidx.compose.ui.graphics.Color?)? = null,
+    /** «Прием товаров»: вид строки без слов «арт.», «срок», «план» и без значка штрихкода */
+    recvStyle: Boolean = false,
+    /** «Прием товаров»: скрытые плановые позиции; в списке появляются только после скана (или выбора в поиске) */
+    pool: SnapshotStateList<ItemRow>? = null
 ) {
     val ctx = LocalContext.current
     val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -483,6 +487,9 @@ fun CatalogWheel(
         scope.launch {
             val row = rows.firstOrNull { sameBarcode(it.barcode, code) }
                 ?: (if (listBase) rows.firstOrNull { it.article.isNotBlank() && it.article.trim().equals(code, true) } else null)
+                // «Прием товаров»: товар берётся из скрытого плана и впервые появляется в списке
+                ?: pool?.firstOrNull { sameBarcode(it.barcode, code) || (it.article.isNotBlank() && it.article.trim().equals(code, true)) }
+                    ?.also { p -> pool?.remove(p); rows.add(0, p) }
             if (row != null) {
                 row.fact = fmtQ(bwQty(row.fact) + 1)
                 focusTarget = row; addTick++
@@ -739,11 +746,12 @@ fun CatalogWheel(
                 // «Инвентаризация»: в строке нет кнопок «Фото» и «Брак»
                 rowPhoto = !inventory,
                 rowDefect = !inventory,
-                expiryHint = inventory && !listBase
+                expiryHint = inventory && !listBase,
+                recvStyle = recvStyle
             )
             val typed = query.trim()
             // «Сборка»: сначала товары из самого списка партии (работает без интернета)
-            val listHits = if (listBase && typed.length >= MIN_SEARCH_CHARS) rows.filter { r ->
+            val listHits = if (listBase && typed.length >= MIN_SEARCH_CHARS) (rows.toList() + (pool?.toList() ?: emptyList())).filter { r ->
                 r.name.contains(typed, true) || (r.article.isNotBlank() && r.article.contains(typed, true)) ||
                     (r.barcode.isNotBlank() && r.barcode.contains(typed))
             }.take(8) else emptyList()
@@ -772,6 +780,7 @@ fun CatalogWheel(
                             listHits.forEachIndexed { zi, r ->
                                 Column(
                                     Modifier.fillMaxWidth().background(if (zi % 2 == 1) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent).clickable {
+                                        if (pool != null && pool.remove(r)) rows.add(0, r)
                                         r.fact = fmtQ(bwQty(r.fact) + 1)
                                         focusTarget = r; addTick++; query = ""
                                         Haptics.pulse(ctx, Haptics.TAP)
@@ -779,7 +788,7 @@ fun CatalogWheel(
                                     }.padding(horizontal = 14.dp, vertical = 10.dp)
                                 ) {
                                     Text(r.name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    val sub = listOf(
+                                    val sub = if (recvStyle) listOf(r.article.trim(), r.barcode.trim()).filter { it.isNotEmpty() }.joinToString(" - ") else listOf(
                                         "из списка", if (showPart) "${r.part} · ${r.pack}" else "", if (r.article.isNotBlank()) "арт. ${r.article}" else "",
                                         if (r.barcode.isNotBlank()) "ШК ${r.barcode}" else ""
                                     ).filter { it.isNotEmpty() }.joinToString(" · ")

@@ -66,6 +66,10 @@ class RecvJob(val orderId: Long, val orderNumber: String, val supplier: String) 
     var truck by mutableStateOf("")
     var date by mutableStateOf("")
     val rows = mutableStateListOf<ItemRow>()
+    /** Плановые позиции заказа: скрыты, пока товар не отсканирован (или не выбран в поиске) — тогда переходят в rows. */
+    val pool = mutableStateListOf<ItemRow>()
+    /** Дата приема, которую сайт Coglas ставит сам в форме накладной (узнаётся один раз в фоне); в календаре на ней рамка. */
+    var siteDate by mutableStateOf("")
     /** Имя упаковки (отсканированный код) для каждого типа упаковки: «Паллет» → «PAL-001». Новое сканирование заменяет имя. */
     val packNames = androidx.compose.runtime.mutableStateMapOf<String, String>()
 }
@@ -80,9 +84,41 @@ internal fun packColor(p: String): androidx.compose.ui.graphics.Color = when (p)
     else -> androidx.compose.ui.graphics.Color.hsv((p.hashCode().toLong().let { if (it < 0) -it else it } % 360).toFloat(), 0.6f, 0.9f)
 }
 
-/** Строки в порядке показа: типы упаковки по алфавиту, внутри — по части A, B, C… */
+/** Строки в порядке показа: по части A, B, C…, внутри — по типу упаковки. */
 internal fun recvSorted(rows: List<ItemRow>): List<ItemRow> =
-    rows.sortedWith(compareBy<ItemRow>({ it.pack.lowercase() }, { it.part }))
+    rows.sortedWith(compareBy<ItemRow>({ it.part }, { it.pack.lowercase() }))
+
+/** Ключ группы строк: часть + тип упаковки («A|Паллет»). Под ним хранится имя (код) упаковки. */
+internal fun packKey(r: ItemRow): String = r.part + "|" + r.pack
+
+/** Как тип упаковки называется в заголовке группы. «Паллет» — это тип EURO на сайте Coglas. */
+internal fun packLabel(p: String): String = when (p) {
+    "Паллет" -> "Euro Pallet"
+    "Картон" -> "Karton"
+    else -> p
+}
+
+/** «- A - Euro Pallet - 00850 -» */
+internal fun packTitle(key: String, name: String): String =
+    "- " + key.substringBefore('|') + " - " + packLabel(key.substringAfter('|')) + " - " + name.trim().ifEmpty { "…" } + " -"
+
+private fun rowToJson(r: ItemRow): JSONObject =
+    JSONObject().put("n", r.name).put("q", r.qty).put("x", r.extra).put("f", r.fact).put("d", r.defect)
+        .put("e", r.expiry).put("b", r.barcode).put("a", r.article).put("pid", r.productId).put("ph", r.photo)
+        .put("pt", r.part).put("pk", r.pack)
+
+private fun rowFromJson(r: JSONObject): ItemRow {
+    val row = ItemRow(r.optString("n"), r.optString("q"), extra = r.optBoolean("x"), productId = r.optString("pid"))
+    row.fact = r.optString("f")
+    row.defect = r.optString("d")
+    row.expiry = r.optString("e")
+    row.barcode = r.optString("b")
+    row.article = r.optString("a")
+    row.photo = r.optString("ph")
+    row.part = r.optString("pt").ifEmpty { "A" }
+    row.pack = r.optString("pk").ifEmpty { "Паллет" }
+    return row
+}
 
 object ReceiveStore {
     private val jobs = HashMap<Long, RecvJob>()
@@ -107,19 +143,22 @@ object ReceiveStore {
                 j.waybill = o.optString("wb")
                 j.truck = o.optString("tr")
                 j.date = o.optString("dt")
+                j.siteDate = o.optString("sd")
                 val rs = o.optJSONArray("rows")
-                if (rs != null) for (k in 0 until rs.length()) {
-                    val r = rs.optJSONObject(k) ?: continue
-                    val row = ItemRow(r.optString("n"), r.optString("q"), extra = r.optBoolean("x"), productId = r.optString("pid"))
-                    row.fact = r.optString("f")
-                    row.defect = r.optString("d")
-                    row.expiry = r.optString("e")
-                    row.barcode = r.optString("b")
-                    row.article = r.optString("a")
-                    row.photo = r.optString("ph")
-                    row.part = r.optString("pt").ifEmpty { "A" }
-                    row.pack = r.optString("pk").ifEmpty { "Паллет" }
-                    j.rows.add(row)
+                if (rs != null) for (k in 0 until rs.length()) j.rows.add(rowFromJson(rs.optJSONObject(k) ?: continue))
+                val ps = o.optJSONArray("pool")
+                if (ps != null) for (k in 0 until ps.length()) j.pool.add(rowFromJson(ps.optJSONObject(k) ?: continue))
+                else {
+                    // старый сохранённый приём: нетронутые плановые строки уходят в скрытый план, в списке остаются только посчитанные
+                    val untouched = j.rows.filter { !it.extra && it.fact.isBlank() && it.defect.isBlank() && it.expiry.isBlank() && it.photo.isBlank() }
+                    j.pool.addAll(untouched)
+                    j.rows.removeAll(untouched.toSet())
+                }
+                // старые имена упаковок хранились по типу («Паллет»): раздаём их частям, которые есть в приёме
+                j.packNames.keys.toList().filter { '|' !in it }.forEach { k ->
+                    val nm = j.packNames.remove(k).orEmpty()
+                    val parts = (j.rows + j.pool).filter { it.pack == k }.map { it.part }.distinct().ifEmpty { listOf("A") }
+                    parts.forEach { p -> j.packNames["$p|$k"] = nm }
                 }
                 jobs[j.orderId] = j
             }
@@ -133,16 +172,12 @@ object ReceiveStore {
             val a = JSONArray()
             jobs.values.toList().forEach { j ->
                 val rs = JSONArray()
-                j.rows.toList().forEach { r ->
-                    rs.put(
-                        JSONObject().put("n", r.name).put("q", r.qty).put("x", r.extra).put("f", r.fact).put("d", r.defect)
-                            .put("e", r.expiry).put("b", r.barcode).put("a", r.article).put("pid", r.productId).put("ph", r.photo)
-                            .put("pt", r.part).put("pk", r.pack)
-                    )
-                }
+                j.rows.toList().forEach { r -> rs.put(rowToJson(r)) }
+                val ps = JSONArray()
+                j.pool.toList().forEach { r -> ps.put(rowToJson(r)) }
                 a.put(
                     JSONObject().put("oid", j.orderId).put("on", j.orderNumber).put("sup", j.supplier)
-                        .put("wb", j.waybill).put("tr", j.truck).put("dt", j.date).put("rows", rs)
+                        .put("wb", j.waybill).put("tr", j.truck).put("dt", j.date).put("sd", j.siteDate).put("rows", rs).put("pool", ps)
                         .put("pn", JSONObject().also { pn -> j.packNames.toMap().forEach { (k, v) -> pn.put(k, v) } })
                 )
             }
@@ -163,7 +198,7 @@ object ReceiveStore {
             val row = ItemRow(name, fmtQ(p.qty))
             row.barcode = p.gtin
             row.article = p.article
-            j.rows.add(row)
+            j.pool.add(row) // список счёта сначала пуст: товар появляется после скана
         }
         jobs[o.id] = j
         save(ctx)
@@ -219,12 +254,9 @@ internal fun recvHtml(j: RecvJob, now: Long): String {
         val f = parseQ(r.fact)
         val d = parseQ(r.defect)
         plan += p; fact += f; defect += d
-        if (r.pack != lastPack) {
-            lastPack = r.pack
-            val nm = j.packNames[r.pack].orEmpty()
-            sb.append("<tr><td colspan='8' style='background:#e8e8e8;font-weight:bold;border-top:2px solid #000'>${bwEsc(r.pack)}")
-            if (nm.isNotBlank()) sb.append(" · имя упаковки: ${bwEsc(nm)}")
-            sb.append("</td></tr>")
+        if (packKey(r) != lastPack) {
+            lastPack = packKey(r)
+            sb.append("<tr><td colspan='8' style='background:#e8e8e8;font-weight:bold;border-top:2px solid #000'>${bwEsc(packTitle(packKey(r), j.packNames[packKey(r)].orEmpty()))}</td></tr>")
         }
         sb.append("<tr><td class='c'>${i + 1}</td><td>${bwEsc(r.article)}</td><td>${bwEsc(r.name)}<br><small>${bwEsc(r.barcode)}</small></td><td class='c'>-${bwEsc(r.part)}-</td>")
         sb.append("<td class='c'>${fmtQ(p)}</td><td class='c'>${fmtQ(f)}</td><td class='c'>${if (d > 0) fmtQ(d) else ""}</td><td class='c'>${bwEsc(r.expiry)}</td></tr>")
@@ -243,7 +275,7 @@ private fun recvCsv(j: RecvJob): String = buildString {
     append("Артикул;Название;Штрих-код;Упаковка;Имя упаковки;Часть;План;Факт;Брак;MHD\n")
     recvSorted(j.rows.toList()).forEach { r ->
         append(q(r.article)).append(';').append(q(r.name)).append(';').append(q(r.barcode)).append(';').append(q(r.pack)).append(';')
-            .append(q(j.packNames[r.pack].orEmpty())).append(';').append(q(r.part)).append(';')
+            .append(q(j.packNames[packKey(r)].orEmpty())).append(';').append(q(r.part)).append(';')
             .append(fmtQ(if (r.extra) 0.0 else parseQ(r.qty))).append(';').append(fmtQ(parseQ(r.fact))).append(';')
             .append(fmtQ(parseQ(r.defect))).append(';').append(q(r.expiry)).append('\n')
     }
@@ -256,11 +288,9 @@ private fun recvText(j: RecvJob): String = buildString {
     append("Дата приема: ").append(j.date.trim().ifEmpty { "—" }).append("\n\n")
     var lastPack: String? = null
     recvSorted(j.rows.toList()).forEachIndexed { i, r ->
-        if (r.pack != lastPack) {
-            lastPack = r.pack
-            append("\n== ").append(r.pack)
-            j.packNames[r.pack]?.takeIf { it.isNotBlank() }?.let { append(" · имя упаковки: ").append(it) }
-            append(" ==\n")
+        if (packKey(r) != lastPack) {
+            lastPack = packKey(r)
+            append("\n").append(packTitle(packKey(r), j.packNames[packKey(r)].orEmpty())).append("\n")
         }
         append(i + 1).append(". ").append(r.article.ifBlank { "—" }).append(" · ").append(r.name)
             .append(" -").append(r.part).append("-")
@@ -280,6 +310,8 @@ fun ReceiveScreen(job: RecvJob) {
     val st = CoglasState
     // состояние пишем на телефон каждые пару секунд и при выходе
     LaunchedEffect(job) { while (true) { delay(2000); ReceiveStore.save(ctx) } }
+    // дату приема, которую сайт ставит сам, узнаём один раз в фоне — на ней в календаре будет рамка
+    LaunchedEffect(job) { if (job.siteDate.isBlank()) CoglasAuto.probeDate(ctx, job) }
     DisposableEffect(job) { onDispose { ReceiveStore.save(ctx) } }
 
     if (st.receiveStep == 1) {
@@ -289,6 +321,7 @@ fun ReceiveScreen(job: RecvJob) {
 
     var splitRow by remember { mutableStateOf<ItemRow?>(null) }
     var scanPack by remember { mutableStateOf<String?>(null) }
+    var editGroup by remember { mutableStateOf<String?>(null) }
     // «Далее»: без срока годности у посчитанных строк — уведомление и двойное подтверждение (шаг 1 и шаг 2)
     var expiryAsk by remember { mutableStateOf(0) }
     val counted = job.rows.filter { parseQ(it.fact) > 0 }
@@ -366,7 +399,9 @@ fun ReceiveScreen(job: RecvJob) {
             groups = emptyList(),
             modifier = Modifier.weight(1f).fillMaxWidth(),
             errorText = error,
-            emptyText = "В заказе нет позиций",
+            emptyText = "Отсканируйте товар — он появится в списке",
+            recvStyle = true,
+            pool = job.pool,
             onAdded = { error = "" },
             scanner = true,
             inventory = true,
@@ -378,33 +413,61 @@ fun ReceiveScreen(job: RecvJob) {
             showPart = true,
             onRowLongPress = { splitRow = it },
             // типы упаковки: по алфавиту, у каждого свой цвет, между типами линия; сверху — имя упаковки и сканер
-            groupOf = { it.pack },
+            groupOf = { packKey(it) },
             rowTint = { packColor(it.pack).copy(alpha = 0.28f) },
-            groupHeader = { pack ->
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(packColor(pack).copy(alpha = 0.40f))
-                        .padding(start = 12.dp, top = 2.dp, bottom = 2.dp, end = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(pack, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        val nm = job.packNames[pack].orEmpty()
-                        Text(
-                            if (nm.isBlank()) "Имя упаковки: не задано" else "Имя упаковки: $nm",
-                            style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    androidx.compose.material3.IconButton(onClick = { scanPack = pack }) {
-                        BarcodeScannerIcon(color = MaterialTheme.colorScheme.primary)
-                    }
+            // над каждой частью: линия и строка «- A - Euro Pallet - 00850 -»; нажатие — изменить тип и имя упаковки
+            groupHeader = { key ->
+                Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    androidx.compose.material3.HorizontalDivider(thickness = 2.dp, color = packColor(key.substringAfter('|')))
+                    Text(
+                        packTitle(key, job.packNames[key].orEmpty()),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().clickable { editGroup = key }.padding(horizontal = 4.dp, vertical = 8.dp)
+                    )
                 }
             }
         )
     }
 
     splitRow?.let { r -> SplitDialog(job, r) { splitRow = null } }
+    editGroup?.let { key ->
+        val part = key.substringBefore('|')
+        val pack0 = key.substringAfter('|')
+        var pack by remember(key) { mutableStateOf(pack0) }
+        var nm by remember(key) { mutableStateOf(job.packNames[key].orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { editGroup = null },
+            title = { Text("Часть $part") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Тип упаковки", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SPLIT_PACKS.forEach { p ->
+                            FilterChip(selected = pack == p, onClick = { pack = p }, label = { Text(packLabel(p)) })
+                        }
+                    }
+                    OutlinedTextField(
+                        value = nm, onValueChange = { nm = it }, singleLine = true,
+                        label = { Text("Имя упаковки (код)") }, modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(onClick = { editGroup = null; scanPack = key }, modifier = Modifier.fillMaxWidth()) { Text("Сканировать код") }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val newKey = "$part|$pack"
+                    job.rows.filter { it.part == part && it.pack == pack0 }.forEach { it.pack = pack }
+                    job.packNames.remove(key)
+                    if (nm.isNotBlank()) job.packNames[newKey] = nm.trim()
+                    ReceiveStore.save(ctx)
+                    editGroup = null
+                }) { Text("Готово") }
+            },
+            dismissButton = { TextButton(onClick = { editGroup = null }) { Text("Отмена") } }
+        )
+    }
     if (expiryAsk > 0) {
         val names = missing.joinToString("\n") { "• $it" } +
             (if (noExpiry.isNotEmpty()) "\n\nБез срока годности:\n" + noExpiry.take(5).joinToString("\n") { "· " + it.name.trim() + " (" + it.pack + " -" + it.part + "-)" } +
@@ -435,7 +498,7 @@ fun ReceiveScreen(job: RecvJob) {
                 ScannerScreen(
                     prefs = remember { Prefs(ctx) },
                     continuous = false,
-                    status = "Имя упаковки: $pack",
+                    status = "Имя упаковки: " + packTitle(pack, ""),
                     onResult = { raw ->
                         val code = raw.trim()
                         val p = pack
@@ -448,7 +511,7 @@ fun ReceiveScreen(job: RecvJob) {
                                     // нет связи с сайтом: код записываем, но без проверки
                                     job.packNames[p] = code
                                     ReceiveStore.save(ctx)
-                                    packMsg = "$p: $code записан без проверки (нет связи с сайтом)" to 2
+                                    packMsg = "${packTitle(p, code)} записан без проверки (нет связи с сайтом)" to 2
                                 }
                                 res.contentTotal > 0 ->
                                     packMsg = "Код $code занят: внутри уже есть товар (${res.contentTotal}). Отсканируйте другой." to 1
@@ -459,7 +522,7 @@ fun ReceiveScreen(job: RecvJob) {
                                     job.packNames[p] = code
                                     ReceiveStore.save(ctx)
                                     packMsg = null
-                                    Toast.makeText(ctx, "$p: $code — пусто, ок", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(ctx, "${packTitle(p, code)} — пусто, ок", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -502,6 +565,7 @@ fun ReceiveScreen(job: RecvJob) {
         // тот же выбор даты, что и для срока годности
         ExpiryPickerDialog(
             initial = job.date,
+            mark = job.siteDate,
             onPick = { job.date = it; datePick = false; ReceiveStore.save(ctx) },
             onDismiss = { datePick = false }
         )
@@ -614,6 +678,7 @@ private fun SplitDialog(job: RecvJob, row: ItemRow, onClose: () -> Unit) {
     }
     var partTouched by remember { mutableStateOf(false) }
     var part by remember { mutableStateOf(freePart("Паллет")) }
+    var packName by remember { mutableStateOf("") }
     androidx.compose.runtime.LaunchedEffect(pack) { if (!partTouched) part = freePart(pack) }
     AlertDialog(
         onDismissRequest = onClose,
@@ -634,9 +699,13 @@ private fun SplitDialog(job: RecvJob, row: ItemRow, onClose: () -> Unit) {
                 Text("Упаковка", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SPLIT_PACKS.forEach { p ->
-                        FilterChip(selected = pack == p, onClick = { pack = p }, label = { Text(p) })
+                        FilterChip(selected = pack == p, onClick = { pack = p }, label = { Text(packLabel(p)) })
                     }
                 }
+                OutlinedTextField(
+                    value = packName, onValueChange = { packName = it }, singleLine = true,
+                    label = { Text("Имя упаковки (код)") }, modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
@@ -652,6 +721,7 @@ private fun SplitDialog(job: RecvJob, row: ItemRow, onClose: () -> Unit) {
                     n.pack = pack
                     val at = job.rows.indexOf(row)
                     job.rows.add(if (at >= 0) at + 1 else job.rows.size, n)
+                    if (packName.isNotBlank()) job.packNames["$part|$pack"] = packName.trim()
                     ReceiveStore.save(ctx)
                     onClose()
                 }

@@ -513,6 +513,38 @@
     } catch (x) { return 'err'; }
   };
 
+  // ---------- зонд даты: один раз открыть форму накладной, прочитать «Дата поставки» и закрыть форму ----------
+  // Накладная НЕ создаётся: кнопку «Добавить товарную накладную» зонд не нажимает, форма закрывается кнопкой «Отмена».
+  window.__cgProbeTick = function(jobJson, stJson){
+    var res;
+    var st = { phase: 'order', s: {} };
+    try { st = JSON.parse(stJson) || st; if (!st.s) st.s = {}; } catch (x) {}
+    try {
+      var job = JSON.parse(jobJson);
+      var k = kind();
+      if (k === 'addnote') {
+        var el = inputByLabel(/^дата поставки$|^lieferdatum$/);
+        var v = el ? String(el.value || '').trim() : '';
+        if (!v) {
+          if (bump(st, 'noDate') > 10) res = { status: 'error', msg: 'Поле даты на форме накладной не найдено.' };
+          else res = { status: 'wait', msg: '' };
+        } else {
+          var cancel = findBtn(/^отмена$|^abbrechen$/);
+          if (cancel) click(cancel);
+          res = { status: 'done', date: v, msg: 'Дата на сайте: ' + v };
+        }
+      } else if (k === 'order' || k === 'orders' || k === 'other') {
+        res = stepOrder(job, st, k);
+      } else {
+        res = { status: 'error', msg: 'Неожиданная страница: ' + k };
+      }
+    } catch (e) {
+      res = { status: 'error', msg: 'Сбой скрипта: ' + (e && e.message ? e.message : e) };
+    }
+    res.st = st;
+    return JSON.stringify(res);
+  };
+
   // ---------- вход ----------
   window.__cgAutoTick = function(jobJson, stJson){
     var res;

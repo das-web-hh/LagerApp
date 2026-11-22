@@ -443,7 +443,9 @@ fun CountWheelList(
     /** false — правка строки (артикул, штрих-код) меняет только эту строку, каталог не трогает (инвентаризация, сборка: каталог обновляет «Сохранить») */
     catalogSync: Boolean = true,
     /** true — «Инвентаризация»: у строки без срока годности под названием красная надпись «срок: не указан» */
-    expiryHint: Boolean = false
+    expiryHint: Boolean = false,
+    /** «Прием товаров» (Coglas): план стоит рядом с количеством без слова «план», без значка штрихкода, в подстроке — «артикул - код - срок» */
+    recvStyle: Boolean = false
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val scanBurst = remember { longArrayOf(0L, 0L) } // [время последнего символа, символов подряд «быстро»]
@@ -673,7 +675,7 @@ fun CountWheelList(
                 LazyColumn(state = plainState, modifier = Modifier.fillMaxSize()) {
                     items(display, key = { if (it is ItemRow) System.identityHashCode(it) else "g:$it" }) { d ->
                       if (d is String) {
-                        if (d != display.firstOrNull()) androidx.compose.material3.HorizontalDivider(thickness = 2.dp, modifier = Modifier.padding(vertical = 6.dp))
+                        // линию над группой (в том числе над первой) рисует сам заголовок группы
                         groupHeader?.invoke(d)
                       } else {
                         val row = d as ItemRow
@@ -687,7 +689,7 @@ fun CountWheelList(
                             plain = true,
                             bware = bware,
                             extraLabel = extraLabel, showPart = showPart, tint = rowTint?.invoke(row),
-                            rowH = rowH, centerOnly = false, bigText = false, planBeside = nameMode, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
+                            rowH = rowH, centerOnly = false, bigText = false, planBeside = nameMode || recvStyle, recvStyle = recvStyle, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
                             onPickExpiry = { expiryRow = row },
                             onDetails = onDetails?.let { cb -> { cb(row) } },
                             onPickFact = { picking = row to true },
@@ -796,7 +798,7 @@ fun CountWheelList(
                                     plain = false,
                                     bware = bware,
                                     extraLabel = extraLabel, showPart = showPart,
-                                    rowH = rowH, centerOnly = bigRows, bigText = bigRows, planBeside = nameMode, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
+                                    rowH = rowH, centerOnly = bigRows, bigText = bigRows, planBeside = nameMode || recvStyle, recvStyle = recvStyle, onSelect = { focusRow = row }, onTap = { if (nameMode && query.isNotEmpty()) query = "" },
                                     onPickExpiry = { expiryRow = row },
                                     onDetails = onDetails?.let { cb -> { cb(row) } },
                                     onPickFact = { picking = row to true },
@@ -943,7 +945,8 @@ private fun WheelRow(
     onPhoto: (() -> Unit)? = null,
     /** false — в свайпе нет кнопки «Брак» */
     defectButton: Boolean = true,
-    expiryHint: Boolean = false
+    expiryHint: Boolean = false,
+    recvStyle: Boolean = false
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
@@ -1208,7 +1211,14 @@ private fun WheelRow(
                 } else {
                     // номер артикула (из каталога или введённый вручную) стоит вместо надписи «нет в плане»
                     val art = remember(row, row.article, row.name, row.barcode, row.productId) { ArticleLookup.find(row) }
-                    val sub = buildList {
+                    val sub = if (recvStyle) buildList {
+                        // «Прием товаров»: просто «артикул - штрихкод - срок», без подписей
+                        if (art.isNotEmpty()) add(art)
+                        if (row.barcode.isNotBlank()) add(row.barcode.trim())
+                        if (defD > 0) add("брак ${fmtQ(defD)}")
+                        if (row.others > 0.0) add("другие ${fmtQ(row.others)}")
+                        if (row.expiry.isNotBlank()) add(row.expiry)
+                    }.joinToString(" - ") else buildList {
                         // в компактной строке план стоит рядом с фактом, а не под названием
                         if (row.extra) {
                             if (art.isNotEmpty()) add("арт. $art") else if (extraLabel.isNotEmpty()) add(extraLabel)
@@ -1232,7 +1242,7 @@ private fun WheelRow(
                             }
                             // после срока годности — часть поставки: -A-, -B-…
                             if (showPart) {
-                                if (sub.isNotEmpty() || hintNow) append(" · ")
+                                if (sub.isNotEmpty() || hintNow) append(if (recvStyle) "  " else " · ")
                                 withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = scheme.onSurface)) { append("-${row.part}-") }
                             }
                         },
@@ -1249,7 +1259,7 @@ private fun WheelRow(
                 )
             }
             // «Приём по имени»: есть ли у товара штрих-код — значок, нет кода — перечёркнутый значок
-            if (onEan != null && !bware) {
+            if (onEan != null && !bware && !recvStyle) {
                 BarcodeStatusIcon(has = row.barcode.isNotBlank(), size = if (bigText && !emph) 16.dp else 20.dp)
                 Spacer(Modifier.width(8.dp))
             }

@@ -97,11 +97,13 @@ private fun centerIndex(state: LazyListState): Int? {
 }
 
 @Composable
-fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () -> Unit, mark: String = "") {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val today = remember { Calendar.getInstance() }
     val parsed = remember(initial) { Regex("""^(\d{2})\.(\d{2})\.(\d{4})$""").find(initial.trim()) }
+    // дата, на которую ставится рамка (например, дата приема по умолчанию на сайте Coglas)
+    val markParsed = remember(mark) { Regex("""^(\d{2})\.(\d{2})\.(\d{4})$""").find(mark.trim()) }
     val simple = remember { DateCfg.simple }
     val numbersOnly = DateCfg.monthNumbersOnly
     val startYear = parsed?.groupValues?.get(3)?.toInt() ?: if (simple) DateCfg.DEFAULT_YEAR else today.get(Calendar.YEAR)
@@ -293,6 +295,10 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                                             val isToday = dn == today.get(Calendar.DAY_OF_MONTH) &&
                                                 month == today.get(Calendar.MONTH) + 1 &&
                                                 year == today.get(Calendar.YEAR)
+                                            val isMark = markParsed != null && inMonth &&
+                                                markParsed.groupValues[1].toInt() == dn &&
+                                                markParsed.groupValues[2].toInt() == month &&
+                                                markParsed.groupValues[3].toInt() == year
                                             Box(
                                                 Modifier.fillMaxSize().clip(CircleShape)
                                                     .then(
@@ -300,6 +306,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
                                                         else if (isToday) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, CircleShape)
                                                         else Modifier
                                                     )
+                                                    .then(if (isMark) Modifier.border(3.dp, MaterialTheme.colorScheme.error, CircleShape) else Modifier)
                                                     .clickable(enabled = inMonth) {
                                                         day = dn
                                                         Haptics.pulse(ctx, Haptics.TAP)
