@@ -148,17 +148,34 @@
     for (var i = 0; i < job.items.length; i++) if (job.items[i].article && same(job.items[i].article, art)) return true;
     return false;
   }
-  // Отметить в списке ровно те позиции, что принимаются. Возвращает {state:'wait'|'acted'|'ready'|'error', msg}
-  function selectPositions(job, st){
+  function selectedCount(){
+    var m = /(\d+)\s*(выбрано|ausgewählt)/.exec(bodyText());
+    return m ? parseInt(m[1], 10) : null;
+  }
+  // ввести текст в поле «Поиск» так же, как это делает человек
+  function doSearch(si, text){
+    setValue(si, text);
+    fire(si, ['keydown', 'keypress', 'keyup']);
+    try { si.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true })); } catch (x) {}
+    try { si.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, which: 13, bubbles: true })); } catch (x) {}
+  }
+  // короткое слово из названия для запасного поиска: «… (Apfel)» → «Apfel», иначе первые слова
+  function shortName(name){
+    var m = /\(([^)]{3,30})\)\s*$/.exec(name || '');
+    if (m) return m[1].trim();
+    return String(name || '').split(/\s+/).slice(0, 3).join(' ');
+  }
+  // Запасной вариант без поиска (нет поля «Поиск»): отметить нужные строки в текущем списке.
+  // Строки со статусом «Выполнено» ТОЖЕ берём: на сайте их выбирают так же, как «В работе».
+  function selectPositionsPlain(job, st){
     var rows = posRows();
     if (!rows.length) {
       if (bump(st, 'noRows') > 25) return { state: 'error', msg: 'Не вижу список позиций на странице.' };
       return { state: 'wait', msg: 'Жду список позиций…' };
     }
-    var wanted = rows.filter(function(r){ return !r.done && wantedArticle(job, r.article); });
+    var wanted = rows.filter(function(r){ return wantedArticle(job, r.article); });
     var needArts = job.items.filter(function(i){ return i.article; }).length;
     if (wanted.length < needArts && !st.s.big) {
-      // позиций может не хватать на первой странице: пробуем «50 на странице»
       var b50 = all('button,a,li,span').filter(vis).filter(function(e){ return txt(e) === '50' && e.children.length === 0; })[0];
       if (b50) { st.s.big = 1; click(b50); return { state: 'acted', msg: 'Показываю 50 позиций на странице…' }; }
     }
@@ -170,6 +187,89 @@
     });
     if (changed) return { state: 'acted', msg: 'Выбираю позиции (' + wanted.length + ')…' };
     return { state: 'ready', msg: '' };
+  }
+  // Основной вариант, как вручную: сбросить выбор → для каждого товара набрать артикул в «Поиск»
+  // (если не нашёл — слово из названия) → отметить строку → в конце очистить поиск и проверить «N выбрано».
+  // Возвращает {state:'wait'|'acted'|'ready'|'error', msg, warn?}
+  function selectPositions(job, st){
+    var si = searchInput();
+    if (!si) return selectPositionsPlain(job, st);
+    var now = Date.now();
+    var S = st.s.sel;
+    if (!S) S = st.s.sel = { i: 0, tryNo: 0, t: 0, found: 0, miss: [], stage: 'reset', at: now };
+    var items = job.items;
+
+    // 0) снять старый выбор со всех страниц
+    if (S.stage === 'reset') {
+      var cnt = selectedCount();
+      if (cnt && !S.resetClicked) {
+        var rb = findBtn(/снять выбор со всех страниц|auswahl.*aller seiten/);
+        S.resetClicked = now;
+        if (rb) { click(rb); return { state: 'acted', msg: 'Снимаю старый выбор…' }; }
+      }
+      if (S.resetClicked && now - S.resetClicked < 800) return { state: 'wait', msg: '' };
+      S.stage = 'search'; S.at = now;
+    }
+
+    // 1) поиск и отметка по одному товару
+    if (S.stage === 'search') {
+      while (S.i < items.length && !items[S.i].article) S.i++;
+      if (S.i < items.length) {
+        var it = items[S.i];
+        if (!S.t) {
+          var text = S.tryNo === 0 ? it.article : shortName(it.name);
+          doSearch(si, text);
+          S.t = now;
+          return { state: 'acted', msg: 'Ищу «' + text + '» (' + (S.i + 1) + '/' + items.length + ')…' };
+        }
+        var elapsed = now - S.t;
+        var vr = posRows();
+        var mine = vr.filter(function(r){ return same(r.article, it.article); });
+        var onlyMine = vr.length > 0 && vr.length === mine.length;
+        if (mine.length && (onlyMine || elapsed > 2500) && elapsed > 600) {
+          // если артикул встретился несколько раз — берём незавершённые, иначе все
+          var pick = mine.filter(function(r){ return !r.done; });
+          if (!pick.length) pick = mine;
+          var w = [];
+          if (mine.length > 1) w.push('Артикул ' + it.article + ' встречается в заказе ' + mine.length + ' раз(а) — проверьте выбор.');
+          pick.forEach(function(r){ if (!isChecked(r.cb)) click(r.cb); });
+          S.found += pick.length;
+          S.i++; S.t = 0; S.tryNo = 0;
+          return { state: 'acted', msg: 'Отметил ' + it.article + ' (' + S.found + ')', warn: w };
+        }
+        if (elapsed > 6500) {
+          if (S.tryNo === 0 && shortName(it.name)) { S.tryNo = 1; S.t = 0; return { state: 'acted', msg: '' }; }
+          S.miss.push(it.article);
+          S.i++; S.t = 0; S.tryNo = 0;
+          return { state: 'acted', msg: '', warn: ['Артикул ' + it.article + ' («' + it.name + '») не найден в списке — отметьте вручную.'] };
+        }
+        return { state: 'wait', msg: '' };
+      }
+      S.stage = 'clear'; S.at = 0;
+    }
+
+    // 2) очистить поиск, чтобы выбор был виден целиком
+    if (S.stage === 'clear') {
+      if (!S.at) {
+        doSearch(si, '');
+        S.at = now;
+        return { state: 'acted', msg: 'Очищаю поиск…' };
+      }
+      if (now - S.at < 1800) return { state: 'wait', msg: '' };
+      S.stage = 'check';
+    }
+
+    // 3) проверить «N выбрано»
+    if (S.stage === 'check') {
+      if (!S.found) return { state: 'error', msg: 'Принимаемых позиций нет в этом списке (проверьте артикулы).' };
+      var c = selectedCount();
+      if (c !== null && c !== S.found) {
+        if (bump(st, 'chk') > 8) return { state: 'error', msg: 'Выбрано на сайте: ' + c + ', нужно: ' + S.found + '. Проверьте список.' };
+        return { state: 'wait', msg: 'Проверяю выбор…' };
+      }
+      return { state: 'ready', msg: '', warn: S.miss.length ? ['Не найдены артикулы: ' + S.miss.join(', ')] : [] };
+    }
+    return { state: 'wait', msg: '' };
   }
 
   // ---------- шаг 0: заказ ----------
@@ -195,12 +295,12 @@
       var r = selectPositions(job, st);
       if (r.state === 'error') return { status: 'error', msg: r.msg };
       if (r.state === 'wait') return { status: 'wait', msg: r.msg };
-      if (r.state === 'acted') return { status: 'acted', msg: r.msg };
+      if (r.state === 'acted') return { status: 'acted', msg: r.msg, warn: r.warn };
       if (st.s.clicked && Date.now() - st.s.clicked < 9000) return { status: 'wait', msg: 'Жду форму накладной…' };
       if (st.s.clicked) return { status: 'error', msg: 'Форма накладной не открылась. ' + alertText() };
       st.s.clicked = Date.now();
       click(findBtn(RX_ADD_NOTE_POS));
-      return { status: 'acted', msg: 'Нажимаю «Добавить накладную … (поз.)»' };
+      return { status: 'acted', msg: 'Нажимаю «Добавить накладную … (поз.)»', warn: r.warn };
     }
     if (k === 'orders') {
       var link = orderLink(job.order);
@@ -270,12 +370,12 @@
     var r = selectPositions(job, st);
     if (r.state === 'error') return { status: 'error', msg: r.msg };
     if (r.state === 'wait') return { status: 'wait', msg: r.msg };
-    if (r.state === 'acted') return { status: 'acted', msg: r.msg };
+    if (r.state === 'acted') return { status: 'acted', msg: r.msg, warn: r.warn };
     if (st.s.clicked && Date.now() - st.s.clicked < 9000) return { status: 'wait', msg: 'Жду окно оприходования…' };
     if (st.s.clicked) return { status: 'error', msg: 'Окно оприходования не открылось. ' + alertText() };
     st.s.clicked = Date.now();
     click(findBtn(RX_MANUAL_POS));
-    return { status: 'acted', msg: 'Нажимаю «Ручное оприходование (поз.)»' };
+    return { status: 'acted', msg: 'Нажимаю «Ручное оприходование (поз.)»', warn: r.warn };
   }
 
   // ---------- шаг 3: окно «Оприходование» ----------
