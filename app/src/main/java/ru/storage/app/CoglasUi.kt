@@ -53,6 +53,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -1018,6 +1019,38 @@ private fun SettingsTab(goSite: () -> Unit) {
                     )
                 }
                 Switch(checked = CoglasWeb.dark, onCheckedChange = { CoglasWeb.setDark(ctx, it) })
+            }
+        }
+
+        // ---- вид списков сайта ----
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text("Вид списков", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Как выглядят строки-позиции на сайте. Применяется сразу.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                listOf(
+                    0 to "Обычный (как на сайте)",
+                    1 to "1. Компактная карточка — всё в 2–3 строки, маленькое фото",
+                    2 to "2. Одна строка — номер и название, остальное по нажатию"
+                ).forEach { (v, label) ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { CoglasWeb.setListView(ctx, v) },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = CoglasWeb.listView == v, onClick = { CoglasWeb.setListView(ctx, v) })
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Text(
+                    "3. Свой список в приложении — будет добавлен позже.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 

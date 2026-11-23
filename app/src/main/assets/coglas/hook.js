@@ -599,6 +599,110 @@
     } catch (e) { return 'err:' + e; }
   };
 
+  // ---------- вид списка позиций (Настройки → «Вид списков») ----------
+  // 0 — как на сайте; 1 — компактная карточка (чекбокс, стрелка, номер и корзина в одну строку, маленькое фото, счётчики в строку);
+  // 2 — одна строка на позицию (чекбокс + номер и название), остальное раскрывается нажатием на строку.
+  // Строки списка ищутся по признакам, а не по названиям классов сайта: рядом одинаковые блоки, внутри чекбокс и картинка/ссылка/«Stck».
+  (function(){
+    var ID = '__cgListCss';
+    var CSS =
+      'html[data-cglv] [data-cgrow]{display:flex!important;flex-wrap:wrap!important;align-items:center!important;gap:2px 6px!important;padding:4px 6px!important;min-height:0!important;height:auto!important;}' +
+      'html[data-cglv] [data-cgrow]>*{width:auto!important;max-width:100%!important;flex:0 1 auto!important;min-height:0!important;height:auto!important;margin:0!important;padding:0 2px!important;float:none!important;position:static!important;}' +
+      'html[data-cglv] [data-cgrow] input[type=checkbox]{margin:0!important;}' +
+      'html[data-cglv] [data-cgrow] img{max-height:44px!important;max-width:60px!important;width:auto!important;height:auto!important;}' +
+      'html[data-cglv] [data-cgrow] [data-cgname]{flex:1 1 55%!important;}' +
+      'html[data-cglv] [data-cgrow] [data-cgcnt],html[data-cglv] [data-cgrow] [data-cgcnt] *{display:inline!important;font-size:12px!important;line-height:1.3!important;margin:0 6px 0 0!important;padding:0!important;}' +
+      'html[data-cglv] [data-cgrow] br{display:none!important;}' +
+      'html[data-cglv="2"] [data-cgrow]:not([data-cgopen]) *:not([data-cgk]){display:none!important;}' +
+      'html[data-cglv="2"] [data-cgrow]:not([data-cgopen]) [data-cgmain],html[data-cglv="2"] [data-cgrow]:not([data-cgopen]) [data-cgmain] *{font-size:15px!important;line-height:1.25!important;}' +
+      'html[data-cglv="2"] [data-cgrow]{border-bottom:1px solid rgba(128,128,128,.35)!important;}';
+    var mode = 0, timer = 0, obs = null;
+    function css(on){
+      var old = document.getElementById(ID);
+      if (!on) { if (old) old.remove(); return; }
+      if (old) return;
+      var st = document.createElement('style'); st.id = ID; st.textContent = CSS;
+      (document.head || document.documentElement).appendChild(st);
+    }
+    function mark(){
+      try {
+        var cbs = document.querySelectorAll('input[type=checkbox]');
+        for (var i = 0; i < cbs.length; i++) {
+          var cb = cbs[i];
+          if (cb.closest('[data-cgrow]') || cb.closest('.navbar,.topbar,.modal,.datepicker')) continue;
+          var p = cb.parentElement;
+          for (var k = 0; k < 8 && p && p !== document.body; k++) {
+            var par = p.parentElement; if (!par) break;
+            var sibs = [].filter.call(par.children, function(c){ return c.tagName === p.tagName && c.className === p.className; });
+            if (sibs.length >= 2 && /Stck|№|MHD/.test(p.textContent || '') && p.querySelector('img,a,button')) {
+              sibs.forEach(prep);
+              break;
+            }
+            p = par;
+          }
+        }
+      } catch (x) {}
+    }
+    function chain(e, row, set){ while (e && e !== row) { e.setAttribute('data-cgk', '1'); e = e.parentElement; } }
+    function prep(row){
+      if (row.getAttribute('data-cgrow') === '2') return;
+      row.setAttribute('data-cgrow', '1');
+      try {
+        var cb = row.querySelector('input[type=checkbox]');
+        if (cb) { cb.setAttribute('data-cgk', '1'); chain(cb.parentElement, row); }
+        // главная ссылка: номер + название товара (самая длинная ссылка со словами)
+        var main = null, best = 0;
+        [].forEach.call(row.querySelectorAll('a'), function(a){
+          var t = (a.textContent || '').trim();
+          if (t.length > best && /[A-Za-zА-Яа-я]{3}/.test(t)) { best = t.length; main = a; }
+        });
+        if (main) {
+          main.setAttribute('data-cgmain', '1'); main.setAttribute('data-cgk', '1');
+          [].forEach.call(main.querySelectorAll('*'), function(d){ d.setAttribute('data-cgk', '1'); });
+          chain(main.parentElement, row);
+          var cell = main; while (cell.parentElement && cell.parentElement !== row) cell = cell.parentElement;
+          cell.setAttribute('data-cgname', '1');
+        }
+        // ячейка со счётчиками «N Stck в заказе…»
+        [].forEach.call(row.children, function(c){ if (/Stck\s+в|Stck\s+in|в заказе/i.test(c.textContent || '') && !c.querySelector('a,input')) c.setAttribute('data-cgcnt', '1'); });
+        row.setAttribute('data-cgrow', '2');
+        row.addEventListener('click', function(e){
+          if (mode !== 2) return;
+          if (e.target.closest('input,a,button,label,select')) return;
+          if (row.hasAttribute('data-cgopen')) row.removeAttribute('data-cgopen'); else row.setAttribute('data-cgopen', '1');
+        });
+      } catch (x) {}
+    }
+    function dump(){
+      try {
+        var row = document.querySelector('[data-cgrow]');
+        if (!row) { WmsBridge.log('rowdump: строка списка не найдена'); return; }
+        var out = [];
+        (function walk(e, d){
+          if (d > 5 || out.length > 60) return;
+          var t = ''; for (var i = 0; i < e.childNodes.length; i++) if (e.childNodes[i].nodeType === 3) t += e.childNodes[i].nodeValue;
+          out.push(new Array(d + 1).join('  ') + e.tagName.toLowerCase() + (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\s+/).join('.') : '') + (t.trim() ? ' "' + t.trim().slice(0, 24) + '"' : ''));
+          for (var j = 0; j < e.children.length; j++) walk(e.children[j], d + 1);
+        })(row, 0);
+        WmsBridge.log('rowdump:\n' + out.join('\n'));
+      } catch (x) {}
+    }
+    function schedule(){ clearTimeout(timer); timer = setTimeout(function(){ if (mode) mark(); }, 250); }
+    window.__cgSetListView = function(m){
+      mode = +m || 0;
+      window.__cgListMode = mode;
+      if (!mode) { document.documentElement.removeAttribute('data-cglv'); css(false); if (obs) { try { obs.disconnect(); } catch (x) {} obs = null; } return; }
+      css(true);
+      document.documentElement.setAttribute('data-cglv', String(mode));
+      mark();
+      if (!obs) { try { obs = new MutationObserver(schedule); obs.observe(document.body || document.documentElement, { childList: true, subtree: true }); } catch (x) {} }
+      setTimeout(dump, 600);
+    };
+    var m0 = 0;
+    try { m0 = +(window.WmsBridge && WmsBridge.listViewMode && WmsBridge.listViewMode()) || 0; } catch (e) {}
+    if (m0) { if (document.body) window.__cgSetListView(m0); else document.addEventListener('DOMContentLoaded', function(){ window.__cgSetListView(m0); }); }
+  })();
+
   // ---------- тёмная тема сайта ----------
   // Вся страница переворачивается по яркости (белое -> тёмное, чёрный текст -> светлый) с сохранением оттенков (hue-rotate 180),
   // затем сразу же «возвращается» всё, что переворачивать нельзя: картинки, фото, видео, штрихкоды (canvas), фоны-картинки.

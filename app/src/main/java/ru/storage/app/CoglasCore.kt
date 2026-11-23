@@ -70,6 +70,7 @@ class CgBridge {
     @Volatile var scanNative = true
     @Volatile var desktopMode = false
     @Volatile var darkMode = false
+    @Volatile var listMode = 0
 
     @JavascriptInterface
     fun log(line: String) {
@@ -111,6 +112,10 @@ class CgBridge {
     /** Включена тёмная тема сайта: страница читает это при загрузке и сразу красится тёмной. */
     @JavascriptInterface
     fun darkOn(): Boolean = darkMode
+
+    /** Вид списка позиций: 0 — как на сайте, 1 — компактная карточка, 2 — одна строка. */
+    @JavascriptInterface
+    fun listViewMode(): Int = listMode
 
     /** Итог открытия пункта меню System: "ok" или текст ошибки. */
     @JavascriptInterface
@@ -194,6 +199,15 @@ object CoglasWeb {
     var dark by mutableStateOf(false)
 
     private fun darkBg(on: Boolean): Int = if (on) Color.rgb(14, 14, 14) else Color.WHITE
+
+    var listView by mutableStateOf(0)
+
+    fun setListView(ctx: Context, v: Int) {
+        CoglasTr.setListView(ctx, v)
+        listView = v
+        bridge.listMode = v
+        web?.evaluateJavascript("window.__cgSetListView && window.__cgSetListView(" + v + ")", null)
+    }
 
     fun setDark(ctx: Context, on: Boolean) {
         CoglasTr.setDark(ctx, on)
@@ -358,6 +372,8 @@ object CoglasWeb {
         bridge.desktopMode = desktop
         dark = CoglasTr.dark(app)
         bridge.darkMode = dark
+        listView = CoglasTr.listView(app)
+        bridge.listMode = listView
         CoglasPages.init(app)
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
@@ -748,6 +764,8 @@ object CoglasTr {
     fun setDesktop(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("desktop", on).apply() }
     fun dark(ctx: Context): Boolean = sp(ctx).getBoolean("dark", false)
     fun setDark(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("dark", on).apply() }
+    fun listView(ctx: Context): Int = sp(ctx).getInt("listview", 0)
+    fun setListView(ctx: Context, v: Int) { sp(ctx).edit().putInt("listview", v).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
     /** Масштаб сайта, на котором человек оставил окно (отдельно для вида ПК и мобильного). */
