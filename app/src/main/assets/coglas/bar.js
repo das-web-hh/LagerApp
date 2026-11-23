@@ -277,6 +277,97 @@
     } catch (x) {}
   }
 
+  // ---- ландшафт: при прокрутке вниз обе шапки (синяя шапка сайта и белая полоса окна с «Назад», названием и логотипом)
+  // полностью убираются с экрана, рабочая область занимает весь экран. Возвращаются, когда список прокручен в самое начало.
+  var hid = false, hidSc = null, hidFill = null, lastTop = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
+  function ensureHideCss(){
+    if (document.getElementById('__cgHideCss')) return;
+    var st = document.createElement('style');
+    st.id = '__cgHideCss';
+    st.textContent = 'html[data-cghid] [data-cghd],html[data-cghid] [data-cgbar],html[data-cghid] [data-cghh]{display:none!important;}' +
+      'html[data-cghid] #page-wrapper{padding-top:0!important;}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+  function findHead(){
+    try {
+      var b = document.querySelector('.btn-back');
+      if (!b) {
+        [].slice.call(document.querySelectorAll('a,button')).forEach(function(e){
+          if (b) return;
+          var t = (e.textContent || '').replace(/\s+/g, ' ').trim();
+          if (/^(назад|zurück|zurueck|back)$/i.test(t) && vis(e) && !(bar && bar.contains(e))) b = e;
+        });
+      }
+      if (!b) return null;
+      var W = window.innerWidth || document.documentElement.clientWidth, best = null, p = b.parentElement;
+      for (var i = 0; i < 10 && p && p !== document.body && p !== document.documentElement; i++) {
+        if (bar && (p === bar || p.contains(bar) || bar.contains(p))) break;
+        var r = p.getBoundingClientRect();
+        if (r.height > 260) break;
+        if (p.querySelector('input,select,textarea,table')) break;
+        if (r.width >= W * 0.8) best = p;
+        p = p.parentElement;
+      }
+      return best;
+    } catch (x) { return null; }
+  }
+  function hideBars(sc, isDoc){
+    if (hid) return;
+    hid = true; hidSc = sc;
+    ensureHideCss();
+    var head = findHead();
+    if (head) head.setAttribute('data-cghd', '1');
+    try { var hh = bar && bar.closest('header'); if (hh) hh.setAttribute('data-cghh', '1'); } catch (x) {}
+    var before = document.documentElement.scrollHeight;
+    document.documentElement.setAttribute('data-cghid', '1');
+    requestAnimationFrame(function(){
+      try {
+        if (isDoc) {
+          // страница стала короче на высоту шапок — возвращаем прежнее место на экране
+          var d = before - document.documentElement.scrollHeight;
+          if (d > 0) window.scrollTo(window.scrollX || 0, Math.max(0, (window.scrollY || 0) - d));
+        } else {
+          // внутренний список прокручивается сам: растягиваем его до низа экрана
+          var r = sc.getBoundingClientRect();
+          var need = Math.round((window.innerHeight || document.documentElement.clientHeight) - r.top);
+          if (need > r.height + 4) {
+            sc.style.setProperty('height', need + 'px', 'important');
+            sc.style.setProperty('max-height', 'none', 'important');
+            hidFill = sc;
+          }
+        }
+      } catch (x) {}
+    });
+    try { window.WmsBridge.log('bars:hidden head=' + (head ? 'yes' : 'no') + ' scroller=' + (isDoc ? 'page' : (sc.id || sc.className))); } catch (x) {}
+  }
+  function showBars(){
+    if (!hid) return;
+    hid = false; hidSc = null;
+    document.documentElement.removeAttribute('data-cghid');
+    [].slice.call(document.querySelectorAll('[data-cghd],[data-cghh]')).forEach(function(e){ e.removeAttribute('data-cghd'); e.removeAttribute('data-cghh'); });
+    if (hidFill) { try { hidFill.style.removeProperty('height'); hidFill.style.removeProperty('max-height'); } catch (x) {} hidFill = null; }
+    try { lastK = 0; place(); } catch (x) {}
+  }
+  function onAnyScroll(t){
+    var L = false;
+    try { L = !!window.WmsBridge.isLand(); } catch (x) {}
+    if (!L) { if (hid) showBars(); return; }
+    var root = document.scrollingElement || document.documentElement;
+    var isDoc = (t === document || t === document.documentElement || t === document.body || t === root);
+    var el = isDoc ? root : t;
+    if (!el || el.nodeType !== 1) return;
+    if (bar && bar.contains(el)) return;
+    var top = isDoc ? (window.scrollY || root.scrollTop || 0) : el.scrollTop;
+    var ch = isDoc ? (window.innerHeight || root.clientHeight) : el.clientHeight;
+    if (ch < 150 || el.scrollHeight - ch < 60) return;
+    var prev = lastTop ? lastTop.get(el) : null;
+    if (lastTop) lastTop.set(el, top);
+    if (prev == null) return;
+    if (!hid && top > 90 && top > prev) hideBars(el, isDoc);
+    else if (hid && el === hidSc && top <= 4) showBars();
+  }
+  try { window.addEventListener('scroll', function(e){ try { onAnyScroll(e.target); } catch (x) {} }, true); } catch (x) {}
+
   function tick(){
     if (busy) return;
     busy = true;
@@ -293,8 +384,9 @@
         layoutBtn(lastK || 1);
       }
       bigBack();
+      if (hid && (!hidSc || !hidSc.isConnected)) showBars();
       place();
-      unstick();
+      if (!hid) unstick();
     } catch (x) {
     } finally {
       busy = false;
