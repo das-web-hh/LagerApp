@@ -68,7 +68,7 @@ class CgBridge {
     var onShowKb: (() -> Unit)? = null
     @Volatile var translateOn = true
     @Volatile var scanNative = true
-    @Volatile var gtinNative = false
+    @Volatile var gtinNative = true
     @Volatile var desktopMode = false
     @Volatile var darkMode = false
     @Volatile var listMode = 0
@@ -315,7 +315,7 @@ object CoglasWeb {
     /** Сканер штрихкодов приложения (с ИИ) вместо камеры сайта. */
     var nativeScan by mutableStateOf(true)
     /** Сканер в заказе: код вставляется в фильтр «Артикул GTIN», найденная позиция отмечается галочкой. */
-    var gtinMode by mutableStateOf(false)
+    var gtinMode by mutableStateOf(true)
     /** Плавающие кнопки «Назад» и «Скан» приложения (перетаскиваются). */
     var fabs by mutableStateOf(true)
     var fabResetTick by mutableIntStateOf(0)
@@ -831,7 +831,7 @@ object CoglasTr {
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
     fun fabs(ctx: Context): Boolean = sp(ctx).getBoolean("fabs", true)
     fun setFabs(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("fabs", on).apply() }
-    fun gtin(ctx: Context): Boolean = sp(ctx).getBoolean("gtin", false)
+    fun gtin(ctx: Context): Boolean = sp(ctx).getBoolean("gtin", true)
     fun setGtin(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("gtin", on).apply() }
     /** Масштаб сайта, на котором человек оставил окно (отдельно для вида ПК и мобильного). */
     fun zoom(ctx: Context, desktop: Boolean): Float = sp(ctx).getFloat(if (desktop) "zoom_d" else "zoom_m", 0f)

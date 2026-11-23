@@ -338,9 +338,11 @@
 
     // окно заказа с позициями: есть расширенный поиск, «Выбрать все на текущей странице» и заголовок заказа
     window.__cgIsOrder = function(){
+      // на странице уже есть строка «Артикул: GTIN» — код идёт именно в неё
+      try { if (gtinInput()) return true; } catch (x) {}
       var t = (document.body && document.body.innerText) || '';
       return /Расширенный поиск|Erweiterte Suche|Advanced search/i.test(t) &&
-        /Выбрать все на текущей странице|Alle auf der aktuellen Seite|Select all on (the )?current page/i.test(t) &&
+        /(Выбрать все|Снять выбор со всех)[^\n]{0,40}страниц|Alle auf der aktuellen|Auswahl[^\n]{0,30}aufheben|Select all|Deselect all/i.test(t) &&
         /Заголовок|Kopf|Header/i.test(t);
     };
 
