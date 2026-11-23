@@ -1,6 +1,9 @@
 package ru.storage.app
 
 import android.Manifest
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.input.pointer.pointerInput
@@ -414,7 +417,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                     Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
                         navBar(
                             Modifier.pointerInput(Unit) {
-                                androidx.compose.foundation.gestures.detectVerticalDragGestures { _, dy -> if (dy > 8f) navShown = false }
+                                detectVerticalDragGestures { _, dy -> if (dy > 8f) navShown = false }
                             }
                         )
                     }
@@ -424,7 +427,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                     Box(
                         Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(24.dp)
                             .pointerInput(Unit) {
-                                androidx.compose.foundation.gestures.detectVerticalDragGestures(
+                                detectVerticalDragGestures(
                                     onDragStart = { acc = 0f },
                                     onVerticalDrag = { _, dy ->
                                         acc += dy
@@ -1302,10 +1305,10 @@ private fun DragFab(
             .offset { androidx.compose.ui.unit.IntOffset((fx.coerceIn(0f, 1f) * maxX).toInt(), (fy.coerceIn(0f, 1f) * maxY).toInt()) }
             .size(48.dp)
             .pointerInput(key, tick) {
-                androidx.compose.foundation.gestures.detectTapGestures(onTap = { onClick() })
+                detectTapGestures(onTap = { onClick() })
             }
             .pointerInput(key, tick, maxX, maxY) {
-                androidx.compose.foundation.gestures.detectDragGestures(
+                detectDragGestures(
                     onDragEnd = { sp.edit().putFloat(key + "_x", fx).putFloat(key + "_y", fy).apply() }
                 ) { change, drag ->
                     change.consume()
