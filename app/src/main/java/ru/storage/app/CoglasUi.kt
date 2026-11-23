@@ -194,6 +194,11 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     val st = CoglasState
     val ctx = LocalContext.current
     val isAdmin = Session.isAdmin
+    // ландшафт: больше места под работу — нижние кнопки уходят, шапка приложения сжимается до «Назад» и «Скан»,
+    // шапка сайта прокручивается вместе со страницей
+    val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    LaunchedEffect(landscape) { CoglasWeb.setLandscape(landscape) }
     // кто просит сканер: "" никто, "info" — Infoscan в App, "site" — сайт (вместо своей камеры)
     var scanFor by remember { mutableStateOf("") }
 
@@ -206,6 +211,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         st.active = true
         onDispose {
             st.active = false
+            CoglasWeb.landscape = false
             CoglasAuto.close()
             CoglasWeb.onSiteScan = null
             CoglasWeb.scanClosed()
@@ -290,6 +296,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             onHome = { st.tab = 1; CoglasWeb.home() },
             onScan = { if (tab == 1) CoglasWeb.requestScan() else scanFor = "info" },
             receive = tab == 0 && st.receiveOpen,
+            compact = landscape,
             onSearch = { st.receiveSearchTick++ },
             receiveScan = if (tab == 0 && st.receiveOpen && st.receiveStep == 0) ({ st.receiveScanTick++ }) else null
         )
@@ -321,7 +328,20 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 )
             }
 
-            if (tab == 1 && CoglasWeb.loadError.isEmpty() && !CoglasWeb.siteBar) {
+            if (tab == 1 && landscape && CoglasWeb.loadError.isEmpty()) {
+                // ландшафт: шапка сайта уезжает вверх, поэтому «Назад» и «Скан» всегда под рукой
+                Row(
+                    Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    androidx.compose.material3.SmallFloatingActionButton(onClick = stepBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                    androidx.compose.material3.SmallFloatingActionButton(onClick = { CoglasWeb.requestScan() }) { Text("Скан") }
+                }
+            }
+
+            if (tab == 1 && !landscape && CoglasWeb.loadError.isEmpty() && !CoglasWeb.siteBar) {
                 // запасная кнопка: только когда шапки сайта нет на странице (например, экран входа)
                 // сканер приложения: код подставится в поле, которого вы коснулись последним (или в пустое поле «Артикул / GTIN»)
                 androidx.compose.material3.SmallFloatingActionButton(
@@ -356,7 +376,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             }
         }
 
-        NavigationBar {
+        if (!landscape) NavigationBar {
             NavigationBarItem(
                 selected = tab == 0,
                 onClick = {
@@ -381,7 +401,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
 }
 
 @Composable
-private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit, onScan: () -> Unit, receive: Boolean = false, onSearch: () -> Unit = {}, receiveScan: (() -> Unit)? = null) {
+private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: () -> Unit, onBack: () -> Unit, onRefresh: () -> Unit, onHome: () -> Unit, onScan: () -> Unit, receive: Boolean = false, onSearch: () -> Unit = {}, receiveScan: (() -> Unit)? = null, compact: Boolean = false) {
     // название открытого окна — по центру шапки
     val title = when (tab) {
         0 -> if (receive) "Прием товаров" else when (appPage) {
@@ -393,7 +413,7 @@ private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: 
         else -> "Настройки"
     }
     Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
-        Box(Modifier.fillMaxWidth().height(56.dp)) {
+        Box(Modifier.fillMaxWidth().height(if (compact) 44.dp else 56.dp)) {
             Text(
                 title,
                 modifier = Modifier.align(Alignment.Center).padding(horizontal = 96.dp),
@@ -418,13 +438,13 @@ private fun CgTopBar(tab: Int, appPage: String, desktop: Boolean, onToggleView: 
             }
             // справа: сканер (и обновление/вид, если нужно)
             Row(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (tab == 1) {
+                if (tab == 1 && !compact) {
                     TextButton(onClick = onToggleView) { Text(if (desktop) "ПК" else "Моб.") }
                 }
-                if (tab == 1 || (tab == 0 && appPage.isNotEmpty() && !receive)) {
+                if (!compact && (tab == 1 || (tab == 0 && appPage.isNotEmpty() && !receive))) {
                     IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Обновить") }
                 }
-                if (tab == 1) {
+                if (tab == 1 && !compact) {
                     IconButton(onClick = onHome) { Icon(Icons.Default.Home, contentDescription = "Главная Coglas") }
                 }
                 if (receive && receiveScan != null) {

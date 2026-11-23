@@ -84,6 +84,10 @@ class CgBridge {
     @JavascriptInterface
     fun scanOn(): Boolean = scanNative
 
+    /** Телефон в ландшафте: шапка сайта не прижата к верху, а прокручивается вместе со страницей. */
+    @JavascriptInterface
+    fun isLand(): Boolean = CoglasWeb.landscape
+
     @JavascriptInterface
     fun scan() {
         main.post { onScan?.invoke() }
@@ -605,6 +609,13 @@ object CoglasWeb {
         "if(!c.length)return 'none';" +
         "var b=c.filter(function(e){return e.classList&&e.classList.contains('btn-back');})[0]||c[0];" +
         "try{b.click();}catch(x){return 'none';}return 'clicked';})()"
+
+    /** Ландшафт: сайт читает это через мост (isLand) и перестаёт прижимать свою шапку к верху экрана. */
+    @Volatile var landscape = false
+    fun setLandscape(on: Boolean) {
+        landscape = on
+        main.post { web?.evaluateJavascript("try{window.__cgBarPlace&&window.__cgBarPlace()}catch(e){}", null) }
+    }
 
     fun reload() { web?.reload() }
     fun home() { web?.loadUrl(START_URL) }

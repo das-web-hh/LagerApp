@@ -75,6 +75,9 @@
       // меню гамбургера раскрывается под шапкой на весь видимый экран (шапка с transform — fixed внутри неё не годится)
       S + ' .topbar-menu-item .profile{position:absolute!important;top:100%!important;right:0!important;left:auto!important;' +
       'width:var(--cgW,100%)!important;height:var(--cgVH,80vh)!important;overflow:auto!important;}' +
+      // ландшафт: шапка обычная (уезжает вверх при прокрутке), а «Назад» и «Скан» остаются плавающими кнопками приложения
+      'html[data-cgland] ' + S + '{position:absolute!important;transform:none!important;}' +
+      'html[data-cgland] #__cgScanBtn{display:none!important;}' +
       '#__cgScanBtn{position:absolute;top:50%;margin-top:-' + Math.round(H * 0.4) + 'px;width:' + SCAN_W + 'px;height:' + Math.round(H * 0.8) + 'px;border:0;border-radius:8px;' +
       'background:rgba(255,255,255,.25);color:#fff;display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;z-index:5;}' +
       '#__cgScanBtn svg{width:34px;height:34px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;}' +
@@ -130,12 +133,19 @@
   // шапка прижата к видимой части экрана: позиция и размер пересчитываются под текущий масштаб страницы
   function place(){
     if (!bar || !bar.isConnected) return;
+    var L = false;
+    try { L = !!window.WmsBridge.isLand(); } catch (x) {}
+    try {
+      if (L) document.documentElement.setAttribute('data-cgland', '1');
+      else document.documentElement.removeAttribute('data-cgland');
+    } catch (x) {}
     var vv = window.visualViewport;
     var lw = document.documentElement.clientWidth || window.innerWidth;
     var vw = vv ? vv.width : lw, vh = vv ? vv.height : window.innerHeight;
     var ox = vv ? vv.offsetLeft : 0, oy = vv ? vv.offsetTop : 0;
     var k = vw / lw;
-    bar.style.setProperty('transform', 'translate(' + ox + 'px,' + oy + 'px) scale(' + k + ')', 'important');
+    if (L) bar.style.removeProperty('transform');
+    else bar.style.setProperty('transform', 'translate(' + ox + 'px,' + oy + 'px) scale(' + k + ')', 'important');
     bar.style.setProperty('--cgW', lw + 'px');
     bar.style.setProperty('--cgTabMax', Math.round(lw * 0.5 / Z) + 'px');
     bar.style.setProperty('--cgVH', Math.max(120, vh / k - H) + 'px');
@@ -251,11 +261,13 @@
         layoutBtn(lastK || 1);
       }
       bigBack();
+      place();
     } catch (x) {
     } finally {
       busy = false;
     }
   }
+  window.__cgBarPlace = function(){ try { place(); } catch (x) {} };
 
   setInterval(tick, 700);
   document.addEventListener('DOMContentLoaded', tick);

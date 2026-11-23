@@ -303,24 +303,31 @@
         } catch (x) { return ''; }
       }
       function attrs(e){ return (e.name || '') + ' ' + (e.id || '') + ' ' + (e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || ''); }
-      var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){ return okInput(e) && visible(e); });
+      // строка поиска ВНУТРИ выпадающего списка (select2: «Артикул GTIN ▲» → «Совпадений не найдено») — не поле для кода
+      function inDropdown(e){
+        try { return !!e.closest('.select2-container,.select2-dropdown,.select2-search,[class*=select2],[class*=chosen],[role=listbox],.dropdown-menu'); } catch (x) { return false; }
+      }
+      function good(e){ return e && okInput(e) && visible(e) && !inDropdown(e); }
+      var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(good);
       var el = null;
-      // 1) поле «Артикул: GTIN» (пустое — раньше, иначе любое)
-      var art = all.filter(function(e){ return /артикул|gtin|artikel|article/i.test(labelOf(e)) || /gtin|artikel|article/i.test(attrs(e)); });
-      el = art.filter(function(e){ return !e.value; })[0] || art[0] || null;
-      // 2) нет такой строки в окне — строка поиска
+      // 1) поле, в котором стоит курсор (нажали на строку), или куда коснулись последним — код ставится туда
+      var cur = document.activeElement;
+      if (good(cur)) el = cur;
+      else {
+        var last = window.__wmsLast;
+        if (good(last) && Date.now() - (window.__wmsLastAt || 0) < 90000) el = last;
+      }
+      // 2) иначе поле в строке «Артикул: GTIN | содержит | [поле]» (пустое — раньше, иначе любое)
+      if (!el) {
+        var art = all.filter(function(e){ return /артикул|gtin|artikel|article/i.test(labelOf(e)) || /gtin|artikel|article/i.test(attrs(e)); });
+        var row = art.filter(function(e){ return /gtin/i.test(labelOf(e)); });
+        if (row.length) art = row;
+        el = art.filter(function(e){ return !e.value; })[0] || art[0] || null;
+      }
+      // 3) нет такой строки в окне — строка поиска
       if (!el) {
         var srch = all.filter(function(e){ return e.type === 'search' || /поиск|search|suche/i.test(attrs(e)) || /^\s*(поиск|search|suche)\s*$/i.test(labelOf(e)); });
         el = srch[0] || null;
-      }
-      // 3) совсем ничего — поле, в котором стоит курсор / которого коснулись последним
-      if (!el) {
-        var cur = document.activeElement;
-        if (okInput(cur)) el = cur;
-        else {
-          var last = window.__wmsLast;
-          if (last && okInput(last) && visible(last) && Date.now() - (window.__wmsLastAt || 0) < 180000) el = last;
-        }
       }
       if (!el) el = all[0];
       if (!el) return 'noinput';
