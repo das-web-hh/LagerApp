@@ -310,12 +310,27 @@
       function good(e){ return e && okInput(e) && visible(e) && !inDropdown(e); }
       var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(good);
       var el = null;
+      // 0) открыто окно «Infoscan» сайта: код сразу встаёт в строку этого окна (нажимать на поле не нужно)
+      function isInfoscan(){
+        try {
+          var t = [].slice.call(document.querySelectorAll('.navbar-tab-item.active,h1,h2,h3,.page-header,.page-title,.panel-title,.navbar-mobile-title'))
+            .filter(visible).map(function(e){ return e.innerText || ''; }).join(' ');
+          return /infoscan|инфоскан/i.test(t);
+        } catch (x) { return false; }
+      }
+      if (isInfoscan()) {
+        var inPage = all.filter(function(e){ try { return !e.closest('header,.topbar,nav,.navbar'); } catch (x) { return true; } });
+        var act0 = document.activeElement;
+        el = (inPage.indexOf(act0) >= 0 ? act0 : null) || inPage.filter(function(e){ return !e.value; })[0] || inPage[0] || null;
+      }
       // 1) поле, в котором стоит курсор (нажали на строку), или куда коснулись последним — код ставится туда
       var cur = document.activeElement;
-      if (good(cur)) el = cur;
-      else {
-        var last = window.__wmsLast;
-        if (good(last) && Date.now() - (window.__wmsLastAt || 0) < 90000) el = last;
+      if (!el) {
+        if (good(cur)) el = cur;
+        else {
+          var last = window.__wmsLast;
+          if (good(last) && Date.now() - (window.__wmsLastAt || 0) < 90000) el = last;
+        }
       }
       // 2) иначе поле в строке «Артикул: GTIN | содержит | [поле]» (пустое — раньше, иначе любое)
       if (!el) {

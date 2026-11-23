@@ -612,7 +612,7 @@ object CoglasWeb {
 
     /** Ландшафт: сайт читает это через мост (isLand) и перестаёт прижимать свою шапку к верху экрана. */
     @Volatile var landscape = false
-    fun setLandscape(on: Boolean) {
+    fun applyLandscape(on: Boolean) {
         landscape = on
         main.post { web?.evaluateJavascript("try{window.__cgBarPlace&&window.__cgBarPlace()}catch(e){}", null) }
     }

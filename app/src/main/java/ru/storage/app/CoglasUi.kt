@@ -198,7 +198,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     // шапка сайта прокручивается вместе со страницей
     val landscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    LaunchedEffect(landscape) { CoglasWeb.setLandscape(landscape) }
+    LaunchedEffect(landscape) { CoglasWeb.applyLandscape(landscape) }
     // кто просит сканер: "" никто, "info" — Infoscan в App, "site" — сайт (вместо своей камеры)
     var scanFor by remember { mutableStateOf("") }
 
