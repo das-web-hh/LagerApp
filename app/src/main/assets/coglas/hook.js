@@ -280,7 +280,191 @@
     }
   } catch (e) {}
 
+  // ---------- сканер в заказе: код -> фильтр «Артикул GTIN» -> галочка у найденной позиции ----------
+  (function(){
+    var q = [], busy = false;
+    function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+    function vis(e){ try { return !!e && e.isConnected && e.getClientRects().length > 0; } catch (x) { return false; } }
+    function txt(e){ return ((e && (e.innerText || e.textContent)) || '').replace(/\s+/g, ' ').trim(); }
+    function toast(m){ try { window.WmsBridge.toast(m); } catch (x) {} }
+    function waitFor(fn, ms, step){
+      var t0 = Date.now();
+      return new Promise(function(res){
+        (function tick(){
+          var v = null;
+          try { v = fn(); } catch (x) {}
+          if (v) return res(v);
+          if (Date.now() - t0 >= ms) return res(null);
+          setTimeout(tick, step || 100);
+        })();
+      });
+    }
+    function fire(el, types){
+      types.forEach(function(t){
+        try {
+          var ev = /^pointer/.test(t)
+            ? new PointerEvent(t, { bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: true, view: window })
+            : new MouseEvent(t, { bubbles: true, cancelable: true, view: window, button: 0 });
+          el.dispatchEvent(ev);
+        } catch (x) {}
+      });
+    }
+    function tap(el){ fire(el, ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']); }
+    function inDrop(e){ try { return !!e.closest('.select2-container,.select2-dropdown,.select2-search,[class*=select2],[class*=chosen],[role=listbox],.dropdown-menu,.mat-select-panel,.cdk-overlay-pane'); } catch (x) { return false; } }
+    function labelOf(e){
+      var p = e, t = '';
+      for (var i = 0; i < 4; i++) {
+        p = p.parentElement;
+        if (!p || p === document.body) break;
+        var s = txt(p);
+        if (s.length > 100) break;
+        t = s;
+      }
+      return t;
+    }
+    function setVal(el, v){
+      var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      try { el.dispatchEvent(new KeyboardEvent('keyup', { key: v ? v.slice(-1) : 'Backspace', bubbles: true })); } catch (x) {}
+    }
+    function pressEnter(el){
+      ['keydown', 'keypress', 'keyup'].forEach(function(t){
+        try { el.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true })); } catch (x) {}
+      });
+    }
+
+    // окно заказа с позициями: есть расширенный поиск, «Выбрать все на текущей странице» и заголовок заказа
+    window.__cgIsOrder = function(){
+      var t = (document.body && document.body.innerText) || '';
+      return /Расширенный поиск|Erweiterte Suche|Advanced search/i.test(t) &&
+        /Выбрать все на текущей странице|Alle auf der aktuellen Seite|Select all on (the )?current page/i.test(t) &&
+        /Заголовок|Kopf|Header/i.test(t);
+    };
+
+    function gtinInput(){
+      var list = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){
+        return !e.disabled && vis(e) && !inDrop(e) && /^(text|search|tel|number|)$/i.test(e.type || '') && /gtin/i.test(labelOf(e));
+      });
+      return list.filter(function(e){ return !e.readOnly; })[0] || list[0] || null;
+    }
+    function total(){
+      var t = (document.body && document.body.innerText) || '';
+      var m = t.match(/(\d+)\s*(?:von|из|of)\s*(\d+)\s*(?:Ergebnis|результат|result)/i);
+      if (m) return parseInt(m[2], 10);
+      if (/(Ergebnisse|результат\S*|results?)\s*:?\s*0\b|нет\s+результат|keine\s+ergebnis/i.test(t)) return 0;
+      return null;
+    }
+
+    // открыть фильтр «Артикул GTIN» (выпадающий список рядом с кнопками +, карандаш, корзина) как человек
+    async function openFilter(){
+      var boxes = [].slice.call(document.querySelectorAll('.select2-container,[class*=select2-container],mat-select,.mat-select'))
+        .filter(function(c){ return vis(c); });
+      var cand = boxes.filter(function(c){ return /gtin/i.test(txt(c)); })[0] || boxes[0];
+      if (!cand) return false;
+      var trg = cand.querySelector('.select2-selection,.select2-choice,.select2-selection--single,.mat-select-trigger') || cand;
+      tap(trg);
+      var opt = await waitFor(function(){
+        var o = [].slice.call(document.querySelectorAll('.select2-results__option,.select2-result,.select2-result-label,[role=option],mat-option,.dropdown-menu li'))
+          .filter(function(e){ return vis(e) && txt(e).length < 60 && /gtin/i.test(txt(e)); });
+        return o[0] || null;
+      }, 2500, 100);
+      if (!opt) return false;
+      tap(opt);
+      try { opt.click(); } catch (x) {}
+      return true;
+    }
+
+    function rowCheck(){
+      var anchorY = 0;
+      var els = [].slice.call(document.querySelectorAll('button,[role=button],a,div,span'));
+      for (var i = 0; i < els.length; i++) {
+        var e = els[i];
+        if (!vis(e)) continue;
+        var s = txt(e);
+        if (s.length < 60 && /^(Выбрать все на текущей странице|Alle auf der aktuellen Seite.*|Select all on (the )?current page)$/i.test(s)) {
+          anchorY = Math.max(anchorY, e.getBoundingClientRect().bottom + window.scrollY);
+        }
+      }
+      var cbs = [].slice.call(document.querySelectorAll('input[type=checkbox],[role=checkbox],mat-checkbox'));
+      var ok = cbs.filter(function(c){
+        var host = vis(c) ? c : (c.closest('label') || c.parentElement);
+        if (!vis(host)) return false;
+        if (/всегда выбирать|immer.*(auswählen|wählen)|always select|деактивирован|deaktiviert|требуется проверка|prüfung/i.test(labelOf(c) + ' ' + txt(host))) return false;
+        return host.getBoundingClientRect().top + window.scrollY > anchorY;
+      });
+      ok.sort(function(a, b){
+        var ha = vis(a) ? a : (a.closest('label') || a.parentElement), hb = vis(b) ? b : (b.closest('label') || b.parentElement);
+        return ha.getBoundingClientRect().top - hb.getBoundingClientRect().top;
+      });
+      return ok[0] || null;
+    }
+    function isChecked(c){
+      if (c.tagName === 'MAT-CHECKBOX') { var i = c.querySelector('input'); return !!(i && i.checked); }
+      return c.checked === true || c.getAttribute('aria-checked') === 'true';
+    }
+
+    async function run(code){
+      window.__wmsAllowFocus = false;
+      var inp = gtinInput();
+      if (!inp) {
+        await openFilter();
+        inp = await waitFor(gtinInput, 3000, 100);
+      }
+      if (!inp) { toast('Не удалось открыть фильтр «Артикул GTIN». Выберите его вручную.'); return false; }
+
+      // очистить прошлый код: сайт покажет весь список (с отмеченными и неотмеченными)
+      if (inp.value) {
+        var before = total();
+        setVal(inp, '');
+        pressEnter(inp);
+        await waitFor(function(){ var t = total(); return t !== null && t !== before; }, 2500, 100);
+        await sleep(300);
+      }
+      var base = total();
+      setVal(inp, String(code));
+      pressEnter(inp);
+      // сайт ищет сам: ждём, когда число результатов изменится
+      var done = await waitFor(function(){ var t = total(); return t !== null && t !== base; }, 6000, 120);
+      await sleep(500);
+      var n = total();
+      if (!done && n === base && base !== 1) { toast('Сайт не ответил на код ' + code); return false; }
+      if (n === 0) { toast('Товар с кодом ' + code + ' не найден'); return false; }
+      if (n !== null && n > 1) { toast('По коду ' + code + ' найдено позиций: ' + n + '. Галочка не поставлена.'); return false; }
+
+      var cb = await waitFor(rowCheck, 3000, 120);
+      if (!cb) { toast('Не нашёл галочку у позиции для кода ' + code); return false; }
+      try { (vis(cb) ? cb : (cb.closest('label') || cb)).scrollIntoView({ block: 'nearest' }); } catch (x) {}
+      if (!isChecked(cb)) {
+        var host = vis(cb) ? cb : (cb.closest('label') || cb.parentElement);
+        try { host.click(); } catch (x) { tap(host); }
+        await sleep(350);
+        if (!isChecked(cb)) { tap(host); await sleep(350); }
+      }
+      return true;
+    }
+
+    async function pump(){
+      if (busy) return;
+      busy = true;
+      try {
+        while (q.length) {
+          var c = q.shift();
+          try { await run(c); } catch (e) { toast('Ошибка сканера GTIN: ' + e); }
+        }
+      } finally { busy = false; }
+    }
+    window.__cgGtinFlow = function(code){ q.push(code); pump(); };
+  })();
+
   window.__cgScanResult = function(code){
+    try {
+      if (window.WmsBridge && window.WmsBridge.gtinOn && window.WmsBridge.gtinOn() && window.__cgIsOrder && window.__cgIsOrder()) {
+        window.__cgGtinFlow(code);
+        return 'ok';
+      }
+    } catch (e) {}
     try {
       function okInput(e){
         if (!e || e.disabled || e.readOnly) return false;

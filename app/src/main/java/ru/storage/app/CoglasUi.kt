@@ -1072,6 +1072,24 @@ private fun SettingsTab(goSite: () -> Unit) {
             }
         }
 
+        // ---- сканер в заказе: GTIN-фильтр ----
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Сканер в заказе: поиск по GTIN", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "В окне заказа (позиции) код сам вставляется в фильтр «Артикул GTIN» (фильтр открывается автоматически), сайт находит товар, и приложение ставит галочку. Перед каждым новым кодом поле очищается. Выключено — код вставляется как раньше.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = CoglasWeb.gtinMode, onCheckedChange = { CoglasWeb.setGtinMode(ctx, it) })
+            }
+        }
+
         // ---- страницы сайта для развития App ----
         Card(
             Modifier.fillMaxWidth(),

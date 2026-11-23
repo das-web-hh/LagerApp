@@ -68,6 +68,7 @@ class CgBridge {
     var onShowKb: (() -> Unit)? = null
     @Volatile var translateOn = true
     @Volatile var scanNative = true
+    @Volatile var gtinNative = false
     @Volatile var desktopMode = false
     @Volatile var darkMode = false
     @Volatile var listMode = 0
@@ -84,6 +85,16 @@ class CgBridge {
     /** Сайт открывает свой сканер (getUserMedia) — вместо камеры сайта открываем сканер приложения. */
     @JavascriptInterface
     fun scanOn(): Boolean = scanNative
+
+    /** Режим «Заказ: код в фильтр GTIN и отметка позиции» включён в настройках. */
+    @JavascriptInterface
+    fun gtinOn(): Boolean = gtinNative
+
+    /** Короткое сообщение от страницы (например, «товар не найден»). */
+    @JavascriptInterface
+    fun toast(msg: String) {
+        main.post { CoglasWeb.siteToast(msg) }
+    }
 
     /** Приложение показывает свой календарь вместо календаря сайта (обработчик задаёт экран Coglas). */
     var onPickDate: ((String, String) -> Unit)? = null
@@ -297,6 +308,8 @@ object CoglasWeb {
 
     /** Сканер штрихкодов приложения (с ИИ) вместо камеры сайта. */
     var nativeScan by mutableStateOf(true)
+    /** Сканер в заказе: код вставляется в фильтр «Артикул GTIN», найденная позиция отмечается галочкой. */
+    var gtinMode by mutableStateOf(false)
     var onSiteScan: (() -> Unit)? = null
     private var scanOpen = false
     private var snapToken = 0
@@ -311,6 +324,17 @@ object CoglasWeb {
     }
 
     fun scanClosed() { scanOpen = false }
+
+    fun setGtinMode(ctx: Context, on: Boolean) {
+        CoglasTr.setGtin(ctx, on)
+        gtinMode = on
+        bridge.gtinNative = on
+    }
+
+    fun siteToast(msg: String) {
+        val c = appCtx ?: return
+        android.widget.Toast.makeText(c, msg, android.widget.Toast.LENGTH_LONG).show()
+    }
 
     fun setNativeScan(ctx: Context, on: Boolean) {
         CoglasTr.setScan(ctx, on)
@@ -368,6 +392,8 @@ object CoglasWeb {
         bridge.translateOn = trOn
         nativeScan = CoglasTr.scan(app)
         bridge.scanNative = nativeScan
+        gtinMode = CoglasTr.gtin(app)
+        bridge.gtinNative = gtinMode
         desktop = CoglasTr.desktop(app)
         bridge.desktopMode = desktop
         dark = CoglasTr.dark(app)
@@ -768,6 +794,8 @@ object CoglasTr {
     fun setListView(ctx: Context, v: Int) { sp(ctx).edit().putInt("listview", v).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
+    fun gtin(ctx: Context): Boolean = sp(ctx).getBoolean("gtin", false)
+    fun setGtin(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("gtin", on).apply() }
     /** Масштаб сайта, на котором человек оставил окно (отдельно для вида ПК и мобильного). */
     fun zoom(ctx: Context, desktop: Boolean): Float = sp(ctx).getFloat(if (desktop) "zoom_d" else "zoom_m", 0f)
     fun setZoom(ctx: Context, desktop: Boolean, v: Float) { sp(ctx).edit().putFloat(if (desktop) "zoom_d" else "zoom_m", v).apply() }
