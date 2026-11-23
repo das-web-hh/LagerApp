@@ -449,28 +449,149 @@
     document.addEventListener('click', dateTap, true);
   } catch (e) {}
 
-  // выбранная в приложении дата → в поле, на которое нажали
+  // выбранная в приложении дата → в поле, на которое нажали.
+  // Главный способ: приложение само «нажимает» в календаре сайта, как человек: открывает его, нажимает на заголовок
+  // (дни → месяцы → годы), выбирает год, потом месяц (после месяца сайт сам открывает дни), потом день.
+  // Тогда календарь сайта сам записывает дату в поле и в свою память (событие changeDate), и «Сохранить» её принимает.
+  // Если нажатия не получились (другой вид календаря, день недоступен) — запасной путь: setDate календаря + значение «дд.мм.гггг» с событиями.
   window.__cgDateResult = function(v){
     try {
       var el = window.__cgDateEl;
       if (!el || !el.isConnected) return 'noinput';
-      var val = String(v);
-      var tm = /\s\d{1,2}:\d{2}.*$/.exec(el.value || '');   // у поля «дата + время» время остаётся прежним
-      if (tm) val += tm[0];
-      if (el.type === 'date') { var p = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(v)); if (p) val = p[3] + '-' + p[2] + '-' + p[1]; }
-      var proto = HTMLInputElement.prototype;
-      var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-      setter.call(el, val);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      try {
-        if (window.jQuery) {
-          var $e = window.jQuery(el);
-          if ($e.datepicker) { try { $e.datepicker('update', val); } catch (x) {} }
-          $e.trigger('change');
+      var s = String(v == null ? '' : v).trim();
+      var m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s);
+      var D = m ? +m[1] : 0, MO = m ? +m[2] : 0, Y = m ? +m[3] : 0;
+      var $ = window.jQuery;
+      var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      var fire = function(){
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (x) {}
+        try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (x) {}
+        try { if ($) $(el).trigger('change'); } catch (x) {}
+      };
+      var done = function(res){ try { window.WmsBridge && WmsBridge.log && WmsBridge.log('date:' + res + ':' + s + '=>' + el.value); } catch (x) {} };
+      var allow = function(on){ window.__wmsAllowFocus = !!on; };
+      var vis = function(e){
+        try { var r = e.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return false;
+          var cs = getComputedStyle(e); return cs.display !== 'none' && cs.visibility !== 'hidden'; } catch (x) { return false; }
+      };
+      var tap = function(e){
+        try { e.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (x) { return false; }
+      };
+      var hideCal = function(){
+        try { var h = ($(el).data('datepicker') ? $(el) : $(el).closest('.date,.input-group,[data-provide=datepicker]')); h.datepicker('hide'); } catch (x) {}
+        try { el.blur(); } catch (x) {}
+      };
+
+      // пустая строка («Очистить»)
+      if (!m) {
+        setter.call(el, '');
+        try { if ($ && $.fn.datepicker) $(el).datepicker('clearDates'); } catch (x) {}
+        fire();
+        try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (x) {}
+        done('clear');
+        return 'ok';
+      }
+
+      // значение в том виде, как его хранит поле: дата + прежнее время (если оно было), у type=date — гггг-мм-дд
+      var tm = /\s\d{1,2}:\d{2}.*$/.exec(el.value || '');
+      var strict = s + (tm ? tm[0] : '');
+      if (el.type === 'date') strict = Y + '-' + s.slice(3, 5) + '-' + s.slice(0, 2);
+      var has = function(){
+        var n = ((el.value || '').match(/\d+/g) || []).map(Number);
+        return n.indexOf(D) >= 0 && n.indexOf(MO) >= 0 && n.indexOf(Y) >= 0;
+      };
+
+      // запасной путь
+      var fallback = function(){
+        try {
+          if ($ && $.fn.datepicker) {
+            var h = ($(el).data('datepicker') ? $(el) : $(el).closest('.date,.input-group,[data-provide=datepicker]'));
+            try { h.datepicker('setDate', new Date(Y, MO - 1, D)); } catch (x) {}
+          }
+        } catch (x) {}
+        if (!has() || (el.type !== 'date' && !tm && el.value !== s)) setter.call(el, strict);
+        fire();
+        try { if ($ && $.fn.datepicker) { var h2 = ($(el).data('datepicker') ? $(el) : $(el).closest('.date,.input-group,[data-provide=datepicker]')); h2.datepicker('update', strict); } } catch (x) {}
+        fire();
+        hideCal();
+        try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (x) {}
+        allow(false);
+        done('fallback');
+      };
+
+      // нажатия в календаре сайта работают только для календаря bootstrap-datepicker (обычное поле даты, без времени)
+      if (!$ || !$.fn || !$.fn.datepicker || el.type === 'date' || tm) { fallback(); return 'ok'; }
+
+      var findCal = function(){
+        var c = [].slice.call(document.querySelectorAll('.datepicker-dropdown,.datepicker.datepicker-inline,div.datepicker')).filter(vis);
+        return c.length ? c[c.length - 1] : null;
+      };
+      var viewOf = function(dp){
+        var n = ['days', 'months', 'years', 'decades', 'centuries'];
+        for (var i = 0; i < n.length; i++) { var t = dp.querySelector('.datepicker-' + n[i]); if (t && vis(t)) return n[i]; }
+        return '';
+      };
+      var open = function(){
+        try {
+          var h = ($(el).data('datepicker') ? $(el) : $(el).closest('.date,.input-group,[data-provide=datepicker]'));
+          h.datepicker('show');
+        } catch (x) {}
+      };
+
+      allow(true);
+      var stage = 'up', tries = 0, guard = 0, lastYearFirst = null;
+      var tick = function(){
+        tries++;
+        if (tries > 60) { fallback(); return; }
+        var dp = findCal();
+        if (!dp) { if (tries === 1 || tries % 8 === 0) open(); setTimeout(tick, 80); return; }
+        var vw = viewOf(dp);
+        if (stage === 'up') {
+          if (vw === 'years') stage = 'year';
+          else if (vw === 'days' || vw === 'months') { var sw = dp.querySelector('.datepicker-' + vw + ' .datepicker-switch'); if (sw) tap(sw); else { fallback(); return; } setTimeout(tick, 90); return; }
+          else { fallback(); return; }
         }
-      } catch (x) {}
-      try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (x) {}
+        if (stage === 'year') {
+          if (vw !== 'years') { setTimeout(tick, 80); return; }
+          var ys = [].slice.call(dp.querySelectorAll('.datepicker-years span.year'));
+          var hit = ys.filter(function(e){ return (e.textContent || '').trim() === String(Y); })[0];
+          if (hit) {
+            if (/disabled/.test(hit.className)) { fallback(); return; }
+            tap(hit); stage = 'month'; setTimeout(tick, 90); return;
+          }
+          var first = parseInt((ys[0] && ys[0].textContent) || '0', 10);
+          if (!first || ++guard > 14 || first === lastYearFirst) { fallback(); return; }
+          lastYearFirst = first;
+          var nav = dp.querySelector('.datepicker-years ' + (Y < first ? '.prev' : '.next'));
+          if (!nav) { fallback(); return; }
+          tap(nav); setTimeout(tick, 90); return;
+        }
+        if (stage === 'month') {
+          if (vw !== 'months') { setTimeout(tick, 80); return; }
+          var ms = dp.querySelectorAll('.datepicker-months span.month');
+          var mm = ms[MO - 1];
+          if (!mm || /disabled/.test(mm.className)) { fallback(); return; }
+          tap(mm); stage = 'day'; setTimeout(tick, 90); return;
+        }
+        if (stage === 'day') {
+          if (vw !== 'days') { setTimeout(tick, 80); return; }
+          var ds = [].slice.call(dp.querySelectorAll('.datepicker-days td.day')).filter(function(e){
+            return !/\b(old|new)\b/.test(e.className) && (e.textContent || '').trim() === String(D);
+          });
+          var dd = ds[0];
+          if (!dd || /disabled/.test(dd.className)) { fallback(); return; }
+          tap(dd); stage = 'check'; setTimeout(tick, 150); return;
+        }
+        if (stage === 'check') {
+          if (has()) {
+            hideCal();
+            try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (x) {}
+            allow(false);
+            done('clicks');
+          } else fallback();
+        }
+      };
+      tick();
       return 'ok';
     } catch (e) { return 'err:' + e; }
   };

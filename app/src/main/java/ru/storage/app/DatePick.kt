@@ -56,6 +56,10 @@ object DateCfg {
     private fun sp(ctx: Context) = ctx.applicationContext.getSharedPreferences("date_cfg", Context.MODE_PRIVATE)
 
     fun load(ctx: Context) {
+        // 2.36.2: один раз сбрасываем на «01 Январь, 02 Февраль…» одним столбцом (раньше могли стоять только цифры)
+        if (!sp(ctx).getBoolean("reset2362", false)) {
+            sp(ctx).edit().putBoolean("simple", false).putBoolean("monthNumbersOnly", false).putBoolean("reset2362", true).apply()
+        }
         simple = sp(ctx).getBoolean("simple", false)
         monthNumbersOnly = sp(ctx).getBoolean("monthNumbersOnly", false)
     }
@@ -66,7 +70,8 @@ object DateCfg {
     }
 
     fun applyCloudMonths(ctx: Context, on: Boolean?) {
-        if (on != null) setMonthNumbersOnly(ctx, on)
+        // облако не должно возвращать «только цифры»; включается только вручную в Настройках
+        if (on != null && !on) setMonthNumbersOnly(ctx, false)
     }
 
     fun set(ctx: Context, on: Boolean) {
@@ -75,7 +80,7 @@ object DateCfg {
     }
 
     fun applyCloud(ctx: Context, on: Boolean?) {
-        if (on != null) set(ctx, on)
+        if (on != null && !on) set(ctx, false)
     }
 }
 
