@@ -406,6 +406,55 @@
       return c.checked === true || c.getAttribute('aria-checked') === 'true';
     }
 
+    // одно нажатие на строку, как пальцем: сайт делает поле активным (без этого в него нельзя писать)
+    async function tapField(el){
+      window.__wmsAllowFocus = true;
+      try { el.scrollIntoView({ block: 'nearest' }); } catch (x) {}
+      fire(el, ['pointerdown', 'mousedown']);
+      try { el.focus(); } catch (x) {}
+      fire(el, ['pointerup', 'mouseup', 'click']);
+      await sleep(200);
+    }
+    // кнопка «очистить» (ластик) в строке поля: появляется, только когда в поле что-то написано
+    function clearBtn(el){
+      try {
+        var er = el.getBoundingClientRect(), cy = er.top + er.height / 2;
+        var p = el.parentElement;
+        for (var i = 0; i < 5 && p && p !== document.body; i++, p = p.parentElement) {
+          var bs = [].slice.call(p.querySelectorAll('button,[role=button],a,.btn')).filter(function(b){
+            if (!vis(b) || b === el || b.contains(el)) return false;
+            var r = b.getBoundingClientRect();
+            return r.left >= er.right - 4 && Math.abs((r.top + r.height / 2) - cy) < Math.max(er.height, 40);
+          });
+          if (!bs.length) continue;
+          var named = bs.filter(function(b){
+            var sg = (b.className && b.className.baseVal !== undefined ? b.className.baseVal : (b.className || '')) + ' ' + (b.innerHTML || '').slice(0, 400) + ' ' + (b.getAttribute('title') || '') + ' ' + (b.getAttribute('aria-label') || '');
+            return /eraser|clear|reset|trash-?can|löschen|loeschen|очист|сброс/i.test(sg);
+          });
+          if (named.length) return named[named.length - 1];
+          if (bs.length >= 2) { bs.sort(function(a, b){ return b.getBoundingClientRect().left - a.getBoundingClientRect().left; }); return bs[0]; }
+        }
+      } catch (x) {}
+      return null;
+    }
+    // набор кода как с клавиатуры: каждая цифра — свои события, сайт видит живой ввод
+    async function typeInto(el, code){
+      var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      var set = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      var cur = '';
+      set.call(el, '');
+      for (var i = 0; i < code.length; i++) {
+        var ch = code.charAt(i), kc = ch.charCodeAt(0);
+        var kd = { key: ch, keyCode: kc, which: kc, bubbles: true, cancelable: true };
+        try { el.dispatchEvent(new KeyboardEvent('keydown', kd)); el.dispatchEvent(new KeyboardEvent('keypress', kd)); } catch (x) {}
+        cur += ch;
+        set.call(el, cur);
+        try { el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' })); } catch (x) { el.dispatchEvent(new Event('input', { bubbles: true })); }
+        try { el.dispatchEvent(new KeyboardEvent('keyup', kd)); } catch (x) {}
+      }
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
     async function run(code){
       window.__wmsAllowFocus = false;
       var inp = gtinInput();
@@ -415,17 +464,24 @@
       }
       if (!inp) { toast('Не удалось открыть фильтр «Артикул GTIN». Выберите его вручную.'); return false; }
 
-      // очистить прошлый код: сайт покажет весь список (с отмеченными и неотмеченными)
+      // очистить прошлый код: нажимаем кнопку «очистить» рядом со строкой (она есть, только когда в поле что-то написано);
+      // сайт покажет весь список (с отмеченными и неотмеченными)
       if (inp.value) {
         var before = total();
-        setVal(inp, '');
-        pressEnter(inp);
+        var cb0 = clearBtn(inp);
+        if (cb0) { try { cb0.click(); } catch (x) { tap(cb0); } await sleep(250); }
+        if (inp.value) { setVal(inp, ''); pressEnter(inp); }
         await waitFor(function(){ var t = total(); return t !== null && t !== before; }, 2500, 100);
         await sleep(300);
+        inp = gtinInput() || inp;
       }
       var base = total();
-      setVal(inp, String(code));
+      // одно нажатие на строку, потом набор кода
+      await tapField(inp);
+      await typeInto(inp, String(code));
       pressEnter(inp);
+      try { inp.blur(); } catch (x) {}
+      window.__wmsAllowFocus = false;
       // сайт ищет сам: ждём, когда число результатов изменится
       var done = await waitFor(function(){ var t = total(); return t !== null && t !== base; }, 6000, 120);
       await sleep(500);
