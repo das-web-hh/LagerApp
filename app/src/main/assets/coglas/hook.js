@@ -513,6 +513,7 @@
         fire();
         try { if ($ && $.fn.datepicker) { var h2 = ($(el).data('datepicker') ? $(el) : $(el).closest('.date,.input-group,[data-provide=datepicker]')); h2.datepicker('update', strict); } } catch (x) {}
         fire();
+        if (el.value !== strict) { setter.call(el, strict); fire(); }
         hideCal();
         try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (x) {}
         allow(false);
@@ -584,6 +585,8 @@
         }
         if (stage === 'check') {
           if (has()) {
+            // строго дд.мм.гггг с точками: если сайт записал в другом виде — переписываем
+            if (el.value !== strict) { setter.call(el, strict); fire(); }
             hideCal();
             try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (x) {}
             allow(false);
