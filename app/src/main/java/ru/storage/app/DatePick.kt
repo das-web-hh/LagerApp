@@ -45,7 +45,7 @@ import kotlin.math.abs
 /**
  * Настройка «Выбор срока годности»: false — обычный календарь (месяцы названиями, дни по реальным неделям);
  * true — упрощённый: год по умолчанию 2027, месяцы цифрами в два столбца (01–06 и 07–12), дни 1–31 всегда с понедельника
- * и не сдвигаются при смене месяца/года; выбрали только месяц и год — день ставится первым.
+ * и не сдвигаются при смене месяца/года; выбрали только месяц и год — день ставится последним днём месяца.
  */
 object DateCfg {
     var simple by mutableStateOf(false)
@@ -113,8 +113,8 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
     val numbersOnly = DateCfg.monthNumbersOnly
     val startYear = parsed?.groupValues?.get(3)?.toInt() ?: if (simple) DateCfg.DEFAULT_YEAR else today.get(Calendar.YEAR)
     val startMonth = (parsed?.groupValues?.get(2)?.toInt() ?: (today.get(Calendar.MONTH) + 1)).coerceIn(1, 12)
-    // упрощённый вид: если день не выбирали, дата — первое число месяца
-    val startDay = parsed?.groupValues?.get(1)?.toInt() ?: if (simple) 1 else 0
+    // если день не выбирали, дата — последнее число выбранного месяца
+    val startDay = parsed?.groupValues?.get(1)?.toInt() ?: 0
 
     var year by remember { mutableIntStateOf(startYear) }
     var month by remember { mutableIntStateOf(startMonth) }
@@ -130,7 +130,7 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
     val first = Calendar.getInstance().apply { clear(); set(year, month - 1, 1) }
     val offset = (first.get(Calendar.DAY_OF_WEEK) + 5) % 7 // неделя с понедельника
     val dim = first.getActualMaximum(Calendar.DAY_OF_MONTH)
-    val selDay = if (day > dim) dim else day
+    val selDay = if (day <= 0 || day > dim) dim else day
 
     // выбрали год/месяц/день — через 3 секунды без изменений дата сохраняется сама (каждое новое нажатие начинает отсчёт заново)
     val initialSel = remember { Triple(startYear, startMonth, startDay) }

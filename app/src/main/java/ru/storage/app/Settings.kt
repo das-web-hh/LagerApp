@@ -819,7 +819,7 @@ private fun ScreenSettings(prefs: Prefs, onBack: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("Упрощённый выбор срока годности", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    if (DateCfg.simple) "Включено: по умолчанию 2027 год, месяцы цифрами в два столбца (01–06 и 07–12), дни 1–31 всегда с понедельника. Выбрали только месяц и год — дата будет первым числом."
+                    if (DateCfg.simple) "Включено: по умолчанию 2027 год, месяцы цифрами в два столбца (01–06 и 07–12), дни 1–31 всегда с понедельника. Выбрали только месяц и год — дата будет последним числом месяца."
                     else "Выключено: обычный календарь с названиями месяцев.",
                     style = MaterialTheme.typography.bodySmall
                 )
