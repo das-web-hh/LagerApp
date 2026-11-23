@@ -310,18 +310,33 @@
       function good(e){ return e && okInput(e) && visible(e) && !inDropdown(e); }
       var all = [].slice.call(document.querySelectorAll('input,textarea')).filter(good);
       var el = null;
+      var scanField = false;
+      // 00) поле для сканера на сайте («Готово к сканированию» / «Bereit zum Scannen»): код сразу встаёт в него.
+      // Такое поле часто только для чтения или с выключенной клавиатурой, поэтому ищем его отдельно от обычных полей.
+      var RX_READY = /готов\S*\s+к\s+сканир|bereit\s+(zum|zur|für|fuer)\s+scan|ready\s+(to|for)\s+scan/i;
+      var ready = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){
+        try {
+          return !e.disabled && visible(e) && !inDropdown(e) && /^(text|search|tel|number|)$/i.test(e.type || '') &&
+            (RX_READY.test(e.placeholder || '') || RX_READY.test(e.getAttribute('aria-label') || '') || RX_READY.test(e.value || ''));
+        } catch (x) { return false; }
+      });
+      if (ready.length) { el = ready[0]; scanField = true; }
       // 0) открыто окно «Infoscan» сайта: код сразу встаёт в строку этого окна (нажимать на поле не нужно)
       function isInfoscan(){
         try {
-          var t = [].slice.call(document.querySelectorAll('.navbar-tab-item.active,h1,h2,h3,.page-header,.page-title,.panel-title,.navbar-mobile-title'))
+          var t = [].slice.call(document.querySelectorAll('.navbar-tab-item.active,h1,h2,h3,.page-header,.page-title,.page-heading-title,.panel-title,.navbar-mobile-title'))
             .filter(visible).map(function(e){ return e.innerText || ''; }).join(' ');
           return /infoscan|инфоскан/i.test(t);
         } catch (x) { return false; }
       }
-      if (isInfoscan()) {
-        var inPage = all.filter(function(e){ try { return !e.closest('header,.topbar,nav,.navbar'); } catch (x) { return true; } });
+      if (!el && isInfoscan()) {
+        // в окне Infoscan подходит и поле только для чтения
+        var inPage = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){
+          try { return !e.disabled && visible(e) && !inDropdown(e) && /^(text|search|tel|number|)$/i.test(e.type || '') && !e.closest('header,.topbar,nav,.navbar'); } catch (x) { return false; }
+        });
         var act0 = document.activeElement;
         el = (inPage.indexOf(act0) >= 0 ? act0 : null) || inPage.filter(function(e){ return !e.value; })[0] || inPage[0] || null;
+        if (el) scanField = true;
       }
       // 1) поле, в котором стоит курсор (нажали на строку), или куда коснулись последним — код ставится туда
       var cur = document.activeElement;
@@ -348,7 +363,20 @@
       if (!el) return 'noinput';
       var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-      setter.call(el, String(code));
+      var codeS = String(code);
+      if (scanField) {
+        // поле сканера: сначала как будто «набрали» код клавишами сканера, потом значение и Enter —
+        // так принимает и поле, которое читает нажатия клавиш, и поле, которое читает значение
+        window.__wmsAllowFocus = true;
+        try { el.focus(); } catch (x) {}
+        codeS.split('').forEach(function(ch){
+          ['keydown', 'keypress', 'keyup'].forEach(function(t){
+            try { el.dispatchEvent(new KeyboardEvent(t, { key: ch, keyCode: ch.charCodeAt(0), which: ch.charCodeAt(0), bubbles: true, cancelable: true })); } catch (x) {}
+          });
+        });
+        setTimeout(function(){ window.__wmsAllowFocus = false; }, 700);
+      }
+      setter.call(el, codeS);
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       ['keydown', 'keypress', 'keyup'].forEach(function(t){

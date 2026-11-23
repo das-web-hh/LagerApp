@@ -245,6 +245,38 @@
     }
   }
 
+  // ландшафт: белая полоса окна (кнопка «Назад», заголовок «Артикул/Заказ», логотип) тоже не залипает сверху,
+  // а уезжает вместе со страницей. Ищем «залипший» (sticky/fixed) блок над кнопкой «Назад» и снимаем с него залипание.
+  function unstick(){
+    try {
+      var L = false;
+      try { L = !!window.WmsBridge.isLand(); } catch (x) {}
+      if (!L) return;
+      if (!document.getElementById('__cgUnstickCss')) {
+        var st = document.createElement('style');
+        st.id = '__cgUnstickCss';
+        st.textContent = 'html[data-cgland] [data-cgun]{position:static!important;top:auto!important;bottom:auto!important;transform:none!important;}';
+        (document.head || document.documentElement).appendChild(st);
+      }
+      var backs = [].slice.call(document.querySelectorAll('.btn-back'));
+      [].slice.call(document.querySelectorAll('a,button')).forEach(function(e){
+        if (e.classList.contains('btn-back') || (bar && bar.contains(e))) return;
+        var t = (e.textContent || '').replace(/\s+/g, ' ').trim();
+        if (/^(назад|zurück|zurueck|back)$/i.test(t) && vis(e)) backs.push(e);
+      });
+      backs.forEach(function(b){
+        var p = b;
+        for (var i = 0; i < 8 && p && p !== document.body && p !== document.documentElement; i++) {
+          if (!(bar && (p === bar || p.contains(bar) || bar.contains(p)))) {
+            var pos = getComputedStyle(p).position;
+            if (pos === 'sticky' || pos === 'fixed') p.setAttribute('data-cgun', '1');
+          }
+          p = p.parentElement;
+        }
+      });
+    } catch (x) {}
+  }
+
   function tick(){
     if (busy) return;
     busy = true;
@@ -262,12 +294,13 @@
       }
       bigBack();
       place();
+      unstick();
     } catch (x) {
     } finally {
       busy = false;
     }
   }
-  window.__cgBarPlace = function(){ try { place(); } catch (x) {} };
+  window.__cgBarPlace = function(){ try { place(); } catch (x) {} try { unstick(); } catch (x) {} };
 
   setInterval(tick, 700);
   document.addEventListener('DOMContentLoaded', tick);
