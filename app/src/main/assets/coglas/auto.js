@@ -508,7 +508,11 @@
           if (r.unit && j.part) { var uo = pickOption(r.unit, null, j.part); if (uo) setSelect(r.unit, uo); }
           if (r.type && j.typeRx) {
             var to = pickOption(r.type, j.typeRx, null);
-            if (to) setSelect(r.type, to); else warn.push('«' + it.name + '»: тип «' + j.pack + '» не найден в списке — проверьте.');
+            if (to) setSelect(r.type, to);
+            else {
+              var have = [].slice.call(r.type.options || []).map(function(o){ return (o.text || '').replace(/\s+/g, ' ').trim(); }).filter(function(t){ return t && !/^выберите/i.test(t); });
+              warn.push('«' + it.name + '»: тип «' + j.pack + '» не найден в списке. На сайте есть: ' + (have.slice(0, 20).join(', ') || 'пусто') + '.');
+            }
           }
         }
         if (ex.length > jr.length) warn.push('«' + it.name + '»: на сайте лишних строк: ' + (ex.length - jr.length) + ' — проверьте.');

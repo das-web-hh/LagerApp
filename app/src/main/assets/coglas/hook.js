@@ -358,6 +358,95 @@
     } catch (e) { return 'err:' + e; }
   };
 
+  // ---------- календарь приложения вместо календаря сайта ----------
+  // Нажали на поле даты (или на значок календаря рядом) — сайт свой календарь не показывает, открывается календарь приложения.
+  // Выбранная дата сама подставляется в это поле (в фоне), с событиями input/change, чтобы сайт её принял.
+  try {
+    var RX_DL = /дата|срок годности|datum|mhd|haltbar|ablauf|date/i;
+    var dtLast = 0, dtx = 0, dty = 0, dtMoved = false;
+    var ctxText = function(e){
+      try {
+        var p = e, t = '';
+        for (var i = 0; i < 4; i++) {
+          p = p.parentElement;
+          if (!p || p === document.body) break;
+          var s = (p.innerText || '').replace(/\s+/g, ' ').trim();
+          if (s.length > 100) break;
+          t = s;
+        }
+        return t;
+      } catch (x) { return ''; }
+    };
+    var dateInputOf = function(t){
+      try {
+        if (!t || !t.closest) return null;
+        var inp = null;
+        if (t.tagName === 'INPUT') inp = t;
+        else {
+          var g = t.closest('.input-group,.date,[class*=datepicker],[class*=datetimepicker],[class*=date-picker],[class*=calendar]');
+          if (g) { var c = g.querySelectorAll('input'); if (c.length === 1) inp = c[0]; }
+        }
+        if (!inp || inp.disabled || !/^(text|date|datetime-local|)$/i.test(inp.type || '')) return null;
+        if (inp.type === 'date' || inp.type === 'datetime-local') return inp;
+        var ig = inp.closest('.input-group');
+        var cls = (inp.className || '') + ' ' + ((inp.parentElement && inp.parentElement.className) || '') + ' ' + (inp.id || '') + ' ' + (inp.name || '');
+        if (/date|datum|picker|calendar/i.test(cls)) return inp;
+        if (ig && ig.querySelector('.fa-calendar,.fa-calendar-alt,.fa-calendar-days,.glyphicon-calendar,[class*=calendar]')) return inp;
+        if (/^\d{2}\.\d{2}\.\d{4}/.test(inp.value || '')) return inp;
+        return RX_DL.test(ctxText(inp)) ? inp : null;
+      } catch (x) { return null; }
+    };
+    var dateTap = function(e){
+      try {
+        if (!e.isTrusted) return;           // нажатия самого скрипта (автоприём) не трогаем
+        var inp = dateInputOf(e.target);
+        if (!inp) return;
+        var now = Date.now();
+        var m = /\d{2}\.\d{2}\.\d{4}/.exec(inp.value || '');
+        var ok = false;
+        if (now - dtLast > 400) {
+          try { ok = !!window.WmsBridge.pickDate(m ? m[0] : '', ctxText(inp).slice(0, 40)); } catch (x) {}
+        } else ok = true;
+        dtLast = now;
+        if (!ok) return;                    // приложение не может показать календарь — работает календарь сайта
+        window.__cgDateEl = inp;
+        try { e.preventDefault(); e.stopImmediatePropagation(); } catch (x) {}
+        try { inp.blur(); } catch (x) {}
+      } catch (x) {}
+    };
+    document.addEventListener('touchstart', function(e){ var t = e.touches && e.touches[0]; if (t) { dtx = t.clientX; dty = t.clientY; dtMoved = false; } }, true);
+    document.addEventListener('touchmove', function(e){ var t = e.touches && e.touches[0]; if (t && (Math.abs(t.clientX - dtx) > 10 || Math.abs(t.clientY - dty) > 10)) dtMoved = true; }, true);
+    document.addEventListener('touchend', function(e){ if (!dtMoved) dateTap(e); }, true);
+    document.addEventListener('mousedown', dateTap, true);
+    document.addEventListener('click', dateTap, true);
+  } catch (e) {}
+
+  // выбранная в приложении дата → в поле, на которое нажали
+  window.__cgDateResult = function(v){
+    try {
+      var el = window.__cgDateEl;
+      if (!el || !el.isConnected) return 'noinput';
+      var val = String(v);
+      var tm = /\s\d{1,2}:\d{2}.*$/.exec(el.value || '');   // у поля «дата + время» время остаётся прежним
+      if (tm) val += tm[0];
+      if (el.type === 'date') { var p = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(v)); if (p) val = p[3] + '-' + p[2] + '-' + p[1]; }
+      var proto = HTMLInputElement.prototype;
+      var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      setter.call(el, val);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      try {
+        if (window.jQuery) {
+          var $e = window.jQuery(el);
+          if ($e.datepicker) { try { $e.datepicker('update', val); } catch (x) {} }
+          $e.trigger('change');
+        }
+      } catch (x) {}
+      try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (x) {}
+      return 'ok';
+    } catch (e) { return 'err:' + e; }
+  };
+
   // ---------- тёмная тема сайта ----------
   // Вся страница переворачивается по яркости (белое -> тёмное, чёрный текст -> светлый) с сохранением оттенков (hue-rotate 180),
   // затем сразу же «возвращается» всё, что переворачивать нельзя: картинки, фото, видео, штрихкоды (canvas), фоны-картинки.

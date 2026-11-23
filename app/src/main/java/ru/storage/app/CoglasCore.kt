@@ -84,6 +84,17 @@ class CgBridge {
     @JavascriptInterface
     fun scanOn(): Boolean = scanNative
 
+    /** Приложение показывает свой календарь вместо календаря сайта (обработчик задаёт экран Coglas). */
+    var onPickDate: ((String, String) -> Unit)? = null
+
+    /** Нажали на поле даты на сайте: true — календарь покажет приложение, календарь сайта подавляется. */
+    @JavascriptInterface
+    fun pickDate(initial: String, label: String): Boolean {
+        val cb = onPickDate ?: return false
+        main.post { cb(initial, label) }
+        return true
+    }
+
     /** Телефон в ландшафте: шапка сайта не прижата к верху, а прокручивается вместе со страницей. */
     @JavascriptInterface
     fun isLand(): Boolean = CoglasWeb.landscape
@@ -615,6 +626,11 @@ object CoglasWeb {
     fun applyLandscape(on: Boolean) {
         landscape = on
         main.post { web?.evaluateJavascript("try{window.__cgBarPlace&&window.__cgBarPlace()}catch(e){}", null) }
+    }
+
+    /** Дата из календаря приложения → в поле даты, на которое нажали на сайте (в фоне). */
+    fun deliverDate(value: String) {
+        main.post { runJs("window.__cgDateResult ? window.__cgDateResult(" + JSONObject.quote(value) + ") : 'nohook'") { } }
     }
 
     fun reload() { web?.reload() }

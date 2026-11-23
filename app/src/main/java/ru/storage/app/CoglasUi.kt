@@ -201,6 +201,8 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     LaunchedEffect(landscape) { CoglasWeb.applyLandscape(landscape) }
     // кто просит сканер: "" никто, "info" — Infoscan в App, "site" — сайт (вместо своей камеры)
     var scanFor by remember { mutableStateOf("") }
+    // нажали на поле даты на сайте: показываем календарь приложения (initial — дата в поле, label — подпись поля)
+    var datePick by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val camLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         CoglasWeb.camResult(it)
@@ -208,12 +210,14 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
     DisposableEffect(Unit) {
         CoglasWeb.camLauncher = { camLauncher.launch(Manifest.permission.CAMERA) }
         CoglasWeb.onSiteScan = { scanFor = "site" }
+        CoglasWeb.bridge.onPickDate = { initial, label -> datePick = initial to label }
         st.active = true
         onDispose {
             st.active = false
             CoglasWeb.landscape = false
             CoglasAuto.close()
             CoglasWeb.onSiteScan = null
+            CoglasWeb.bridge.onPickDate = null
             CoglasWeb.scanClosed()
             CoglasWeb.camLauncher = null
             CoglasWeb.detach()
@@ -234,6 +238,14 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         }
     }
     BackHandler(onBack = stepBack)
+
+    datePick?.let { (initial, _) ->
+        ExpiryPickerDialog(
+            initial = initial,
+            onPick = { d -> datePick = null; CoglasWeb.deliverDate(d) },
+            onDismiss = { datePick = null }
+        )
+    }
 
     if (scanFor.isNotEmpty()) {
         val target = scanFor

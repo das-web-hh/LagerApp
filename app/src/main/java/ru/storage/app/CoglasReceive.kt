@@ -80,6 +80,11 @@ internal fun packColor(p: String): androidx.compose.ui.graphics.Color = when (p)
     "Картон" -> androidx.compose.ui.graphics.Color(0xFFFFA726)
     "Коробка" -> androidx.compose.ui.graphics.Color(0xFF66BB6A)
     "Мешок" -> androidx.compose.ui.graphics.Color(0xFFAB47BC)
+    "Ящик" -> androidx.compose.ui.graphics.Color(0xFF8D6E63)
+    "Гитербокс" -> androidx.compose.ui.graphics.Color(0xFF26A69A)
+    "Бигбэг" -> androidx.compose.ui.graphics.Color(0xFFEC407A)
+    "Бочка" -> androidx.compose.ui.graphics.Color(0xFF5C6BC0)
+    "Ведро" -> androidx.compose.ui.graphics.Color(0xFFFFCA28)
     "Другое" -> androidx.compose.ui.graphics.Color(0xFF9E9E9E)
     else -> androidx.compose.ui.graphics.Color.hsv((p.hashCode().toLong().let { if (it < 0) -it else it } % 360).toFloat(), 0.6f, 0.9f)
 }
@@ -95,6 +100,11 @@ internal fun packKey(r: ItemRow): String = r.part + "|" + r.pack
 internal fun packLabel(p: String): String = when (p) {
     "Паллет" -> "Euro Pallet"
     "Картон" -> "Karton"
+    "Ящик" -> "Kiste"
+    "Гитербокс" -> "Gitterbox"
+    "Бигбэг" -> "Big Bag"
+    "Бочка" -> "Fass"
+    "Ведро" -> "Eimer"
     else -> p
 }
 
@@ -455,6 +465,12 @@ fun ReceiveScreen(job: RecvJob) {
                         }
                     }
                     OutlinedTextField(
+                        value = if (pack in SPLIT_PACKS) "" else pack,
+                        onValueChange = { v -> pack = if (v.isBlank()) "Другое" else v },
+                        singleLine = true,
+                        label = { Text("Свой тип (как в списке «Тип» на сайте)") }, modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
                         value = nm, onValueChange = { nm = it }, singleLine = true,
                         label = { Text("Имя упаковки (код)") }, modifier = Modifier.fillMaxWidth()
                     )
@@ -463,8 +479,9 @@ fun ReceiveScreen(job: RecvJob) {
             },
             confirmButton = {
                 Button(onClick = {
-                    val newKey = "$part|$pack"
-                    job.rows.filter { it.part == part && it.pack == pack0 }.forEach { it.pack = pack }
+                    val pk = pack.trim().ifEmpty { "Другое" }
+                    val newKey = "$part|$pk"
+                    job.rows.filter { it.part == part && it.pack == pack0 }.forEach { it.pack = pk }
                     job.packNames.remove(key)
                     if (nm.isNotBlank()) job.packNames[newKey] = nm.trim()
                     ReceiveStore.save(ctx)
@@ -661,7 +678,8 @@ private fun ReceivePreview(job: RecvJob) {
 }
 
 private val SPLIT_PARTS = listOf("A", "B", "C", "D", "E", "F", "G", "H")
-private val SPLIT_PACKS = listOf("Паллет", "Картон", "Коробка", "Мешок", "Другое")
+// виды упаковки; любой другой можно вписать в поле «Свой тип» — он ищется в списке «Тип» на сайте по названию
+private val SPLIT_PACKS = listOf("Паллет", "Картон", "Коробка", "Мешок", "Ящик", "Гитербокс", "Бигбэг", "Бочка", "Ведро", "Другое")
 
 /** Тот же товар, что и строка r (по штрих-коду, артикулу или названию). */
 private fun sameProduct(a: ItemRow, b: ItemRow): Boolean =
@@ -709,6 +727,12 @@ private fun SplitDialog(job: RecvJob, row: ItemRow, onClose: () -> Unit) {
                     }
                 }
                 OutlinedTextField(
+                    value = if (pack in SPLIT_PACKS) "" else pack,
+                    onValueChange = { v -> pack = if (v.isBlank()) "Другое" else v },
+                    singleLine = true,
+                    label = { Text("Свой тип (как в списке «Тип» на сайте)") }, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
                     value = packName, onValueChange = { packName = it }, singleLine = true,
                     label = { Text("Имя упаковки (код)") }, modifier = Modifier.fillMaxWidth()
                 )
@@ -716,6 +740,7 @@ private fun SplitDialog(job: RecvJob, row: ItemRow, onClose: () -> Unit) {
         },
         confirmButton = {
             Button(onClick = {
+                val pack = pack.trim().ifEmpty { "Другое" }
                 if (job.rows.any { sameProduct(it, row) && it.part == part && it.pack == pack }) {
                     Toast.makeText(ctx, "Часть $part · $pack уже есть", Toast.LENGTH_SHORT).show()
                 } else {
