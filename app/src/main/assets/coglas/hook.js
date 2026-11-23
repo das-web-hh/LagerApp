@@ -347,9 +347,37 @@
     };
 
     function gtinInput(){
-      var list = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){
-        return !e.disabled && vis(e) && !inDrop(e) && /^(text|search|tel|number|)$/i.test(e.type || '') && /gtin/i.test(labelOf(e));
-      });
+      function textInput(e){
+        try { return !e.disabled && vis(e) && !inDrop(e) && /^(text|search|tel|number|)$/i.test(e.type || ''); } catch (x) { return false; }
+      }
+      var inputs = [].slice.call(document.querySelectorAll('input,textarea')).filter(textInput);
+      if (!inputs.length) return null;
+      // 1) по подписи строки: надпись «Артикул: GTIN» (короткий текст), поле — в той же строке справа от неё
+      var found = [];
+      try {
+        var tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null), tn;
+        while ((tn = tw.nextNode())) {
+          var tv = (tn.nodeValue || '').replace(/\s+/g, ' ').trim();
+          if (!tv || tv.length > 40 || !/gtin/i.test(tv)) continue;
+          var pe = tn.parentElement;
+          if (!pe || !vis(pe) || inDrop(pe) || pe.closest('select,option,button')) continue;
+          var lr = pe.getBoundingClientRect();
+          var lc = lr.top + lr.height / 2;
+          var best = null, bd = 1e9;
+          inputs.forEach(function(e){
+            var r = e.getBoundingClientRect();
+            var ec = r.top + r.height / 2;
+            if (Math.abs(ec - lc) > Math.max(r.height, lr.height) * 0.9) return;
+            if (r.left < lr.right - 6) return;
+            var d = r.left - lr.right;
+            if (d < bd) { bd = d; best = e; }
+          });
+          if (best) found.push(best);
+        }
+      } catch (x) {}
+      if (found.length) return found.filter(function(e){ return !e.readOnly; })[0] || found[0];
+      // 2) запасной путь: подпись в ближайших родителях
+      var list = inputs.filter(function(e){ return /gtin/i.test(labelOf(e)); });
       return list.filter(function(e){ return !e.readOnly; })[0] || list[0] || null;
     }
     function total(){
