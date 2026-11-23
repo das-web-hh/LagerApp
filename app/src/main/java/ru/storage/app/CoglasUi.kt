@@ -1,6 +1,9 @@
 package ru.storage.app
 
 import android.Manifest
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.pointer.pointerInput
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -284,6 +287,40 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
+    // нижние кнопки (App / Сайт / Настройки): на сайте по умолчанию скрыты; свайп снизу вверх показывает их на несколько секунд
+    var navShown by remember { mutableStateOf(false) }
+    LaunchedEffect(navShown) {
+        if (navShown) {
+            kotlinx.coroutines.delay(6000)
+            navShown = false
+        }
+    }
+    val navBar: @Composable (Modifier) -> Unit = { m ->
+        NavigationBar(modifier = m) {
+            NavigationBarItem(
+                selected = tab == 0,
+                onClick = {
+                    // повторное нажатие на «App» возвращает в главное меню App
+                    if (st.tab == 0) { st.closeOrder(); st.appPage = "" }
+                    st.tab = 0
+                    navShown = false
+                },
+                icon = { Icon(Icons.Default.Menu, contentDescription = "App") }, label = { Text("App") }
+            )
+            NavigationBarItem(
+                selected = tab == 1, onClick = { st.tab = 1; navShown = false },
+                icon = { Icon(Icons.Default.Home, contentDescription = "Сайт") }, label = { Text("Сайт") }
+            )
+            if (isAdmin) {
+                NavigationBarItem(
+                    selected = tab == 2, onClick = { st.tab = 2; navShown = false },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "Настройки") }, label = { Text("Настройки") }
+                )
+            }
+        }
+    }
+    // где можно прятать нижние кнопки: на сайте (в любом положении) и в ландшафте на любой вкладке
+    val navHideable = tab == 1 || landscape
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // на вкладке «Сайт» своей шапки у приложения нет: наверху шапка самого сайта (домик, окна, гамбургер, скан)
         if (tab != 1) CgTopBar(
@@ -307,7 +344,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 }
             },
             onHome = { st.tab = 1; CoglasWeb.home() },
-            onScan = { if (tab == 1) CoglasWeb.requestScan() else scanFor = "info" },
+            onScan = { if (tab == 1) CoglasWeb.requestScanSmart() else scanFor = "info" },
             receive = tab == 0 && st.receiveOpen,
             compact = landscape,
             onSearch = { st.receiveSearchTick++ },
@@ -341,24 +378,16 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 )
             }
 
-            if (tab == 1 && landscape && CoglasWeb.loadError.isEmpty()) {
-                // ландшафт: шапка сайта уезжает вверх, поэтому «Назад» и «Скан» всегда под рукой
-                Row(
-                    Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    androidx.compose.material3.SmallFloatingActionButton(onClick = stepBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                    }
-                    androidx.compose.material3.SmallFloatingActionButton(onClick = { CoglasWeb.requestScan() }) { Text("Скан") }
-                }
+            if (tab == 1 && CoglasWeb.fabs && CoglasWeb.loadError.isEmpty()) {
+                // плавающие кнопки «Назад» и «Скан» приложения: включаются в настройках, перетаскиваются пальцем куда угодно
+                FloatingButtons(onBack = stepBack, onScan = { CoglasWeb.requestScanSmart() })
             }
 
-            if (tab == 1 && !landscape && CoglasWeb.loadError.isEmpty() && !CoglasWeb.siteBar) {
+            if (tab == 1 && !landscape && !CoglasWeb.fabs && CoglasWeb.loadError.isEmpty() && !CoglasWeb.siteBar) {
                 // запасная кнопка: только когда шапки сайта нет на странице (например, экран входа)
                 // сканер приложения: код подставится в поле, которого вы коснулись последним (или в пустое поле «Артикул / GTIN»)
                 androidx.compose.material3.SmallFloatingActionButton(
-                    onClick = { CoglasWeb.requestScan() },
+                    onClick = { CoglasWeb.requestScanSmart() },
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 16.dp)
                 ) { Text("Скан") }
             }
@@ -379,6 +408,40 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 CoglasAutoBanner(Modifier.align(Alignment.BottomCenter))
             }
 
+            if (navHideable) {
+                if (navShown) {
+                    // нижние кнопки поверх сайта; свайп вниз по ним прячет их
+                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                        navBar(
+                            Modifier.pointerInput(Unit) {
+                                androidx.compose.foundation.gestures.detectVerticalDragGestures { _, dy -> if (dy > 8f) navShown = false }
+                            }
+                        )
+                    }
+                } else {
+                    // узкая полоса у нижнего края: свайп снизу вверх показывает нижние кнопки
+                    var acc by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+                    Box(
+                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(24.dp)
+                            .pointerInput(Unit) {
+                                androidx.compose.foundation.gestures.detectVerticalDragGestures(
+                                    onDragStart = { acc = 0f },
+                                    onVerticalDrag = { _, dy ->
+                                        acc += dy
+                                        if (acc < -36f) { acc = 0f; navShown = true }
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        Box(
+                            Modifier.padding(bottom = 5.dp).width(44.dp).height(4.dp)
+                                .background(Color.Gray.copy(alpha = 0.45f), androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                        )
+                    }
+                }
+            }
+
             if (tab != 1) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     when (tab) {
@@ -389,27 +452,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             }
         }
 
-        if (!landscape) NavigationBar {
-            NavigationBarItem(
-                selected = tab == 0,
-                onClick = {
-                    // повторное нажатие на «App» возвращает в главное меню App
-                    if (st.tab == 0) { st.closeOrder(); st.appPage = "" }
-                    st.tab = 0
-                },
-                icon = { Icon(Icons.Default.Menu, contentDescription = "App") }, label = { Text("App") }
-            )
-            NavigationBarItem(
-                selected = tab == 1, onClick = { st.tab = 1 },
-                icon = { Icon(Icons.Default.Home, contentDescription = "Сайт") }, label = { Text("Сайт") }
-            )
-            if (isAdmin) {
-                NavigationBarItem(
-                    selected = tab == 2, onClick = { st.tab = 2 },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "Настройки") }, label = { Text("Настройки") }
-                )
-            }
-        }
+        if (!navHideable) navBar(Modifier)
     }
 }
 
@@ -1072,6 +1115,29 @@ private fun SettingsTab(goSite: () -> Unit) {
             }
         }
 
+        // ---- плавающие кнопки ----
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Плавающие кнопки «Назад» и «Скан»", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Включено: кнопки приложения лежат поверх сайта, их можно перетащить пальцем в любое место. Выключено: кнопок на экране нет.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = CoglasWeb.fabs, onCheckedChange = { CoglasWeb.setFabs(ctx, it) })
+                }
+                if (CoglasWeb.fabs) {
+                    TextButton(onClick = { CoglasWeb.resetFabs(ctx) }) { Text("Вернуть кнопки на место") }
+                }
+            }
+        }
+
         // ---- сканер в заказе: GTIN-фильтр ----
         Card(
             Modifier.fillMaxWidth(),
@@ -1201,5 +1267,56 @@ private fun SettingsTab(goSite: () -> Unit) {
             },
             dismissButton = { TextButton(onClick = { clickDialog = false }) { Text("Отмена") } }
         )
+    }
+}
+
+
+/** Плавающие кнопки «Назад» и «Скан»: положение хранится в долях экрана, перетаскиваются пальцем. */
+@Composable
+private fun FloatingButtons(onBack: () -> Unit, onScan: () -> Unit) {
+    val ctx = LocalContext.current
+    val sp = remember { ctx.applicationContext.getSharedPreferences("coglas_tr", Context.MODE_PRIVATE) }
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        val w = constraints.maxWidth.toFloat()
+        val h = constraints.maxHeight.toFloat()
+        DragFab(sp, "fab_back", 0.78f, 0.90f, w, h, onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+        }
+        DragFab(sp, "fab_scan", 0.92f, 0.90f, w, h, onScan) { Text("Скан") }
+    }
+}
+
+@Composable
+private fun DragFab(
+    sp: android.content.SharedPreferences, key: String, defX: Float, defY: Float,
+    w: Float, h: Float, onClick: () -> Unit, content: @Composable () -> Unit
+) {
+    val tick = CoglasWeb.fabResetTick
+    var fx by remember(key, tick) { androidx.compose.runtime.mutableFloatStateOf(sp.getFloat(key + "_x", defX)) }
+    var fy by remember(key, tick) { androidx.compose.runtime.mutableFloatStateOf(sp.getFloat(key + "_y", defY)) }
+    val sizePx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx() }
+    val maxX = (w - sizePx).coerceAtLeast(1f)
+    val maxY = (h - sizePx).coerceAtLeast(1f)
+    Surface(
+        modifier = Modifier
+            .offset { androidx.compose.ui.unit.IntOffset((fx.coerceIn(0f, 1f) * maxX).toInt(), (fy.coerceIn(0f, 1f) * maxY).toInt()) }
+            .size(48.dp)
+            .pointerInput(key, tick) {
+                androidx.compose.foundation.gestures.detectTapGestures(onTap = { onClick() })
+            }
+            .pointerInput(key, tick, maxX, maxY) {
+                androidx.compose.foundation.gestures.detectDragGestures(
+                    onDragEnd = { sp.edit().putFloat(key + "_x", fx).putFloat(key + "_y", fy).apply() }
+                ) { change, drag ->
+                    change.consume()
+                    fx = (fx + drag.x / maxX).coerceIn(0f, 1f)
+                    fy = (fy + drag.y / maxY).coerceIn(0f, 1f)
+                }
+            },
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shadowElevation = 6.dp
+    ) {
+        Box(contentAlignment = Alignment.Center) { content() }
     }
 }

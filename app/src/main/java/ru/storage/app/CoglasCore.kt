@@ -116,6 +116,12 @@ class CgBridge {
         main.post { onScan?.invoke() }
     }
 
+    /** Кнопка сканера приложения: сначала нажимается значок сканера на странице сайта, если он есть. */
+    @JavascriptInterface
+    fun scanBtn() {
+        main.post { CoglasWeb.requestScanSmart() }
+    }
+
     /** Включён вид «ПК»: страница читает это при загрузке и ставит ширину окна как у монитора. */
     @JavascriptInterface
     fun desktopOn(): Boolean = desktopMode
@@ -310,6 +316,9 @@ object CoglasWeb {
     var nativeScan by mutableStateOf(true)
     /** Сканер в заказе: код вставляется в фильтр «Артикул GTIN», найденная позиция отмечается галочкой. */
     var gtinMode by mutableStateOf(false)
+    /** Плавающие кнопки «Назад» и «Скан» приложения (перетаскиваются). */
+    var fabs by mutableStateOf(true)
+    var fabResetTick by mutableIntStateOf(0)
     var onSiteScan: (() -> Unit)? = null
     private var scanOpen = false
     private var snapToken = 0
@@ -324,6 +333,31 @@ object CoglasWeb {
     }
 
     fun scanClosed() { scanOpen = false }
+
+    /** Кнопка сканера приложения: имитируем нажатие на значок сканера страницы (сайт сам вызовет сканер приложения). Нет значка или сайт промолчал — открываем сканер сразу. */
+    fun requestScanSmart() {
+        main.post {
+            if (scanOpen) return@post
+            runJs("window.__cgClickSiteScan ? window.__cgClickSiteScan() : 'nohook'") { r ->
+                if (r == "clicked") {
+                    main.postDelayed({ if (!scanOpen) requestScan() }, 1500)
+                } else {
+                    requestScan()
+                }
+            }
+        }
+    }
+
+    fun setFabs(ctx: Context, on: Boolean) {
+        CoglasTr.setFabs(ctx, on)
+        fabs = on
+    }
+
+    fun resetFabs(ctx: Context) {
+        ctx.applicationContext.getSharedPreferences("coglas_tr", Context.MODE_PRIVATE).edit()
+            .remove("fab_back_x").remove("fab_back_y").remove("fab_scan_x").remove("fab_scan_y").apply()
+        fabResetTick++
+    }
 
     fun setGtinMode(ctx: Context, on: Boolean) {
         CoglasTr.setGtin(ctx, on)
@@ -393,6 +427,7 @@ object CoglasWeb {
         nativeScan = CoglasTr.scan(app)
         bridge.scanNative = nativeScan
         gtinMode = CoglasTr.gtin(app)
+        fabs = CoglasTr.fabs(app)
         bridge.gtinNative = gtinMode
         desktop = CoglasTr.desktop(app)
         bridge.desktopMode = desktop
@@ -794,6 +829,8 @@ object CoglasTr {
     fun setListView(ctx: Context, v: Int) { sp(ctx).edit().putInt("listview", v).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
+    fun fabs(ctx: Context): Boolean = sp(ctx).getBoolean("fabs", true)
+    fun setFabs(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("fabs", on).apply() }
     fun gtin(ctx: Context): Boolean = sp(ctx).getBoolean("gtin", false)
     fun setGtin(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("gtin", on).apply() }
     /** Масштаб сайта, на котором человек оставил окно (отдельно для вида ПК и мобильного). */

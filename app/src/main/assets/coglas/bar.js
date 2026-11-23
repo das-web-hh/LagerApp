@@ -11,7 +11,7 @@
   var Z = 1.5;       // во сколько раз крупнее высота шапки и иконки
   var BACK_Z = 1.5;  // и кнопка «Назад» самого сайта
   var HAM_W = 52 * Z; // ширина кнопки-гамбургера после увеличения
-  var GAP = 22;      // промежуток между кнопкой сканера и гамбургером
+  var GAP = 18;      // одинаковый промежуток: между «Назад», окнами, кнопкой сканера и гамбургером
   var SCAN_W = 66;
   var bar = null, btn = null, busy = false, H = 60, lastK = 0, lastTM = null, lastAct = null;
 
@@ -25,7 +25,7 @@
     s.id = '__cgBarCss';
     var Zs = String(Z);
     var S = '.topbar [data-cgbar]';
-    var X = Math.round(HAM_W + GAP + SCAN_W);
+    var X = Math.round(HAM_W + GAP + SCAN_W + GAP);
     s.textContent =
       // сама шапка: прижата к видимой части экрана (позицию задаёт скрипт), без анимации
       S + '{position:fixed!important;top:0!important;left:0!important;right:0!important;margin:0!important;' +
@@ -64,6 +64,17 @@
       S + ' .navbar-tab-item.active .navbar-tab-link-close{color:rgb(0,153,208)!important;}' +
       S + ' .navbar-tab-item:first-child .navbar-tab-link,' + S + ' .navbar-tab-item.active + .navbar-tab-item .navbar-tab-link{border-color:transparent!important;}' +
       S + ' .navbar-tab-empty,' + S + ' .navbar-tabs-amount{display:none!important;}' +
+      // окна сайта рисует приложение: полоса из вкладок (название + закрыть), листается вбок; родная полоса сайта («1 Ещё ▾») скрыта
+      S + '[data-cgwin=\"1\"] .navbar-tabs-container,' + S + '[data-cgwin=\"1\"] .navbar-tabs-unfit,' + S + '[data-cgwin=\"1\"] .navbar-mobile-heading{display:none!important;}' +
+      '#__cgWin{display:flex!important;flex:1 1 auto!important;min-width:0!important;align-items:center!important;gap:' + Math.round(GAP / 2) + 'px!important;height:100%!important;' +
+      'margin:0 0 0 ' + GAP + 'px!important;overflow-x:auto!important;overflow-y:hidden!important;scrollbar-width:none!important;-webkit-overflow-scrolling:touch;}' +
+      '#__cgWin.cgw-bar{margin-right:' + (SCAN_W + GAP) + 'px!important;}' +
+      '#__cgWin::-webkit-scrollbar{display:none!important;}' +
+      '#__cgWin .cgw{display:flex;align-items:center;flex:0 0 auto;box-sizing:border-box;height:' + Math.round(H * 0.74) + 'px;max-width:calc(var(--cgW,100vw) * 0.5);' +
+      'border-radius:8px;background:rgba(255,255,255,.2);color:#fff;font:600 17px/1.1 sans-serif;padding:0 4px 0 14px;cursor:pointer;}' +
+      '#__cgWin .cgw.act{background:#fff;color:rgb(0,153,208);}' +
+      '#__cgWin .cgw-t{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '#__cgWin .cgw-x{flex:0 0 auto;width:34px;height:100%;display:flex;align-items:center;justify-content:center;font-size:15px;opacity:.85;}' +
       // гамбургер: справа, в той же строке
       S + ' .topbar-menu{float:none!important;flex:0 0 auto!important;margin:0 0 0 auto!important;display:block!important;}' +
       // заголовок окна: показывается, только если вкладок нет (иначе название уже на вкладке, как на ПК); не переносится на вторую строку
@@ -198,7 +209,7 @@
     btn.type = 'button';
     btn.setAttribute('aria-label', 'Скан');
     btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M7 8v8M11 8v8M15 8v8M18 8v8"/></svg>';
-    var go = function(e){ try { e.preventDefault(); e.stopPropagation(); } catch (x) {} try { window.WmsBridge.scan(); } catch (x) {} };
+    var go = function(e){ try { e.preventDefault(); e.stopPropagation(); } catch (x) {} try { if (window.WmsBridge.scanBtn) window.WmsBridge.scanBtn(); else window.WmsBridge.scan(); } catch (x) {} };
     btn.addEventListener('click', go, true);
     btn.addEventListener('touchend', function(e){ go(e); }, true);
     bar.appendChild(btn);
@@ -225,6 +236,7 @@
   // Если сайт на телефоне вкладок не рисует — показывается его заголовок окна, чтобы название не пропадало.
   function syncTabs(){
     if (!bar) return;
+    if (bar.getAttribute('data-cgwin') === '1') { lastTM = true; return; }
     var has = false;
     var q = bar.querySelectorAll('.navbar-tabs-container .navbar-tab-item');
     for (var i = 0; i < q.length; i++) {
@@ -243,6 +255,85 @@
         try { act.scrollIntoView({ inline: 'nearest', block: 'nearest' }); } catch (x) {}
       }
     }
+  }
+
+
+  // ---- окна сайта: своя полоса вкладок в шапке (имя окна видно сразу, окон может быть несколько)
+  var winSig = '', winEl = null;
+  function readWins(){
+    var out = [], seen = {};
+    function nameOf(it){
+      var t = it.querySelector('.navbar-tab-link-text');
+      var n = ((t ? t.textContent : it.textContent) || '').replace(/\s+/g, ' ').trim();
+      return n;
+    }
+    function add(it){
+      var n = nameOf(it);
+      if (!n) return;
+      var a = it.querySelector('a.navbar-tab-link,a') || it;
+      var key = (a.getAttribute && a.getAttribute('href') || '') + '|' + n;
+      if (seen[key]) return;
+      seen[key] = 1;
+      var act = it.classList.contains('active') || !!it.querySelector('.active') || (a.classList && a.classList.contains('active')) || it.getAttribute('aria-current') === 'page';
+      out.push({ it: it, a: a, name: n, act: act, x: it.querySelector('.navbar-tab-link-close') });
+    }
+    [].slice.call(bar.querySelectorAll('.navbar-tabs-container .navbar-tab-item')).forEach(add);
+    var prim = out.length;
+    [].slice.call(bar.querySelectorAll('.navbar-tab-unfit')).forEach(function(it){
+      var n = nameOf(it);
+      if (!n) return;
+      for (var i = 0; i < prim; i++) if (out[i].name === n) return;
+      add(it);
+    });
+    return out;
+  }
+  function syncWin(){
+    if (!bar) return;
+    var list = [];
+    try { list = readWins(); } catch (x) {}
+    if (!list.length) {
+      if (bar.getAttribute('data-cgwin') === '1') {
+        bar.removeAttribute('data-cgwin'); bar.removeAttribute('data-cgtabs'); lastTM = null; lastK = 0;
+      }
+      if (winEl && winEl.parentNode) winEl.parentNode.removeChild(winEl);
+      winSig = '';
+      return;
+    }
+    if (bar.getAttribute('data-cgwin') !== '1') { bar.setAttribute('data-cgwin', '1'); bar.setAttribute('data-cgtabs', '1'); lastTM = true; lastK = 0; }
+    var wrap = bar.querySelector('.navbar-tabs-wrapper');
+    var parent = wrap || bar;
+    if (!winEl) { winEl = document.createElement('div'); winEl.id = '__cgWin'; }
+    var anchor = null;
+    if (wrap) anchor = wrap.querySelector('.navbar-tabs-container');
+    else anchor = bar.querySelector('.topbar-menu');
+    if (winEl.parentNode !== parent) {
+      if (anchor && anchor.parentNode === parent) parent.insertBefore(winEl, anchor); else parent.appendChild(winEl);
+    }
+    winEl.className = wrap ? '' : 'cgw-bar';
+    var sig = list.map(function(w){ return (w.act ? '*' : '') + w.name; }).join('\u0001');
+    if (sig === winSig && winEl.firstChild) return;
+    winSig = sig;
+    winEl.innerHTML = '';
+    var actNode = null;
+    list.forEach(function(w){
+      var c = document.createElement('div');
+      c.className = 'cgw' + (w.act ? ' act' : '');
+      var t = document.createElement('span'); t.className = 'cgw-t'; t.textContent = w.name; c.appendChild(t);
+      var x = document.createElement('span'); x.className = 'cgw-x'; x.textContent = '✕'; c.appendChild(x);
+      x.addEventListener('click', function(e){
+        try { e.preventDefault(); e.stopPropagation(); } catch (z) {}
+        try { (w.x || w.it.querySelector('.navbar-tab-link-close')).click(); } catch (z) {}
+        winSig = '';
+      }, true);
+      c.addEventListener('click', function(e){
+        try { e.preventDefault(); e.stopPropagation(); } catch (z) {}
+        try { w.a.click(); } catch (z) { try { w.it.click(); } catch (y) {} }
+        winSig = '';
+      }, true);
+      winEl.appendChild(c);
+      if (w.act) actNode = c;
+    });
+    if (actNode) { try { actNode.scrollIntoView({ inline: 'nearest', block: 'nearest' }); } catch (x) {} }
   }
 
   // ландшафт: белая полоса окна (кнопка «Назад», заголовок «Артикул/Заказ», логотип) тоже не залипает сверху,
@@ -380,6 +471,7 @@
       }
       if (bar) {
         syncTabs();
+        syncWin();
         ensureBtn();
         layoutBtn(lastK || 1);
       }

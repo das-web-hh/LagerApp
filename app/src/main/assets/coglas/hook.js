@@ -274,6 +274,7 @@
         // открываем сканер только по нажатию человека, а не при фоновой проверке камеры
         var act = true;
         try { if (navigator.userActivation) act = navigator.userActivation.isActive; } catch (e) {}
+        if (window.__cgSimScan) act = true; // нажатие имитировало приложение по кнопке сканера
         if (act) { try { window.WmsBridge.scan(); } catch (e) {} }
         return Promise.resolve(st);
       };
@@ -458,6 +459,73 @@
     window.__cgGtinFlow = function(code){ q.push(code); pump(); };
   })();
 
+
+  // ---------- кнопка сканера приложения: нажать значок сканера на странице сайта, как человек ----------
+  // Возвращает 'clicked', если на странице нашёлся значок сканера (рядом с надписью «Готово к сканированию» и т.п.) и он нажат.
+  window.__cgClickSiteScan = function(){
+    try {
+      function vis(e){ try { return !!e && e.isConnected && e.getClientRects().length > 0; } catch (x) { return false; } }
+      function txt(e){ return ((e && (e.innerText || e.textContent)) || '').replace(/\s+/g, ' ').trim(); }
+      var RX = /готов\S*\s+к\s+сканир|bereit\s+(zum|zur|für|fuer)\s+scan|ready\s+(to|for)\s+scan|отсканируйте\s+штрих|штрих-?код\S*\s+отсканир|barcode\s+(bitte\s+)?scann|bitte\S*\s.{0,25}scann|please\s+scan|можете\s+сканир|sie\s+können\s+scann|you\s+can\s+scan/i;
+      var RX_KB = /keyboard|tastatur|клавиатур|keypad/i;
+      var RX_SC = /scan|barcode|camera|kamera|qr|штрих|скан|камер/i;
+      var CLICKABLE = 'button,[role=button],a,mat-icon,i,svg,img,span[class*=icon],div[class*=icon],[class*=btn],[class*=button]';
+      function sig(e){
+        try { return (e.id || '') + ' ' + (typeof e.className === 'string' ? e.className : (e.className && e.className.baseVal) || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' + (e.getAttribute('title') || '') + ' ' + (e.getAttribute('alt') || '') + ' ' + (e.getAttribute('data-icon') || '') + ' ' + (e.tagName === 'MAT-ICON' ? txt(e) : ''); } catch (x) { return ''; }
+      }
+      function inBar(e){ try { return !!e.closest('#__cgScanBtn,header,nav,.navbar,.topbar,.navbar-mobile'); } catch (x) { return false; } }
+      function target(e){
+        var t = e.closest ? (e.closest('button,[role=button],a') || e) : e;
+        return t;
+      }
+      // 1) контейнер рядом с надписью о сканировании
+      var anchors = [];
+      [].slice.call(document.querySelectorAll('input,textarea')).forEach(function(e){
+        try { if (vis(e) && RX.test((e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' + (e.value || ''))) anchors.push(e); } catch (x) {}
+      });
+      var tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null), tn;
+      while ((tn = tw.nextNode())) {
+        var tv = tn.nodeValue || '';
+        if (tv.length < 120 && RX.test(tv) && tn.parentElement && vis(tn.parentElement)) anchors.push(tn.parentElement);
+      }
+      var pick = null;
+      for (var ai = 0; ai < anchors.length && !pick; ai++) {
+        var p = anchors[ai];
+        for (var i = 0; i < 5 && p && p !== document.body && !pick; i++) {
+          var c = [].slice.call(p.querySelectorAll(CLICKABLE)).filter(function(e){ return vis(e) && !inBar(e) && !RX_KB.test(sig(e)); });
+          if (c.length) {
+            // значок сканера: по имени, иначе самый правый (клавиатура слева, сканер справа)
+            var named = c.filter(function(e){ return RX_SC.test(sig(e)); });
+            if (named.length) pick = named[named.length - 1];
+            else {
+              c.sort(function(a, b){ return b.getBoundingClientRect().left - a.getBoundingClientRect().left; });
+              pick = c[0];
+            }
+          }
+          p = p.parentElement;
+        }
+      }
+      // 2) без надписи: значок/кнопка сканера в самой странице (не в верхней панели)
+      if (!pick) {
+        var all = [].slice.call(document.querySelectorAll(CLICKABLE)).filter(function(e){ return vis(e) && !inBar(e) && RX_SC.test(sig(e)) && !RX_KB.test(sig(e)); });
+        if (all.length === 1) pick = all[0];
+      }
+      if (!pick) return 'none';
+      var el = target(pick);
+      window.__cgSimScan = true;
+      setTimeout(function(){ window.__cgSimScan = false; }, 2500);
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup'].forEach(function(t){
+        try {
+          el.dispatchEvent(/^pointer/.test(t)
+            ? new PointerEvent(t, { bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: true, view: window })
+            : new MouseEvent(t, { bubbles: true, cancelable: true, view: window, button: 0 }));
+        } catch (x) {}
+      });
+      try { el.click(); } catch (x) { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); }
+      return 'clicked';
+    } catch (e) { return 'err:' + e; }
+  };
+
   window.__cgScanResult = function(code){
     try {
       if (window.WmsBridge && window.WmsBridge.gtinOn && window.WmsBridge.gtinOn() && window.__cgIsOrder && window.__cgIsOrder()) {
@@ -472,6 +540,7 @@
         return e.tagName === 'INPUT' && /^(text|search|number|tel|)$/i.test(e.type || '');
       }
       function visible(e){ try { return e && e.isConnected && e.getClientRects().length > 0; } catch (x) { return false; } }
+      function txt(e){ return ((e && (e.innerText || e.textContent)) || '').replace(/\s+/g, ' ').trim(); }
       // подпись поля: текст ближайших родителей, пока он короткий (строка «Артикул: GTIN | содержит | [поле]»)
       function labelOf(e){
         try {
@@ -497,14 +566,44 @@
       var scanField = false;
       // 00) поле для сканера на сайте («Готово к сканированию» / «Bereit zum Scannen»): код сразу встаёт в него.
       // Такое поле часто только для чтения или с выключенной клавиатурой, поэтому ищем его отдельно от обычных полей.
-      var RX_READY = /готов\S*\s+к\s+сканир|bereit\s+(zum|zur|für|fuer)\s+scan|ready\s+(to|for)\s+scan/i;
-      var ready = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){
+      var RX_READY = /готов\S*\s+к\s+сканир|bereit\s+(zum|zur|für|fuer)\s+scan|ready\s+(to|for)\s+scan|отсканируйте\s+штрих|штрих-?код\S*\s+отсканир|barcode\s+(bitte\s+)?scann|bitte\S*\s.{0,25}scann|please\s+scan|можете\s+сканир|sie\s+können\s+scann|you\s+can\s+scan/i;
+      var wedge = false;
+      function textOk(e){ try { return !!e && RX_READY.test(txt0(e)); } catch (x) { return false; } }
+      function txt0(e){ return ((e.placeholder || '') + ' ' + (e.getAttribute && (e.getAttribute('aria-label') || e.getAttribute('title') || '')) + ' ' + (e.value || '')); }
+      function fieldOk(e){
         try {
-          return !e.disabled && visible(e) && !inDropdown(e) && /^(text|search|tel|number|)$/i.test(e.type || '') &&
-            (RX_READY.test(e.placeholder || '') || RX_READY.test(e.getAttribute('aria-label') || '') || RX_READY.test(e.value || ''));
+          if (!e || e.disabled || inDropdown(e)) return false;
+          if (e.isContentEditable && e.tagName !== 'INPUT') return true;
+          return (e.tagName === 'TEXTAREA') || (e.tagName === 'INPUT' && /^(text|search|tel|number|)$/i.test(e.type || ''));
         } catch (x) { return false; }
-      });
-      if (ready.length) { el = ready[0]; scanField = true; }
+      }
+      // поле ищем рядом с надписью: поднимаемся вверх по родителям; поле может быть скрыто или «только чтение» — это нормально для сканера-«клавиатуры»
+      function fieldNear(node){
+        var p = node;
+        for (var i = 0; i < 6 && p && p !== document.body; i++) {
+          var c = [].slice.call(p.querySelectorAll('input,textarea,[contenteditable=""],[contenteditable=true]')).filter(fieldOk);
+          if (c.length) return c.filter(visible)[0] || c[0];
+          p = p.parentElement;
+        }
+        return null;
+      }
+      var anchors = [];
+      try {
+        [].slice.call(document.querySelectorAll('input,textarea')).forEach(function(e){ if (visible(e) && textOk(e)) anchors.push(e); });
+        var tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+        var tn;
+        while ((tn = tw.nextNode())) {
+          var tv = tn.nodeValue || '';
+          if (tv.length < 120 && RX_READY.test(tv) && tn.parentElement && visible(tn.parentElement)) anchors.push(tn.parentElement);
+        }
+      } catch (x) {}
+      for (var ai = 0; ai < anchors.length && !el; ai++) {
+        var an = anchors[ai];
+        var f = fieldOk(an) ? an : fieldNear(an);
+        if (f) { el = f; scanField = true; }
+      }
+      // надпись про сканирование есть, а поля нет: отдаём код «нажатиями клавиш» активному элементу страницы
+      if (!el && anchors.length) wedge = true;
       // 0) открыто окно «Infoscan» сайта: код сразу встаёт в строку этого окна (нажимать на поле не нужно)
       function isInfoscan(){
         try {
@@ -543,10 +642,26 @@
         var srch = all.filter(function(e){ return e.type === 'search' || /поиск|search|suche/i.test(attrs(e)) || /^\s*(поиск|search|suche)\s*$/i.test(labelOf(e)); });
         el = srch[0] || null;
       }
+      if (!el && wedge) {
+        var tgt = document.activeElement && document.activeElement !== document.body ? document.activeElement : document.body;
+        window.__wmsAllowFocus = true;
+        String(code).split('').concat(['Enter']).forEach(function(ch){
+          var en = ch === 'Enter';
+          var kc = en ? 13 : ch.charCodeAt(0);
+          [tgt, document].forEach(function(t){
+            ['keydown', 'keypress', 'keyup'].forEach(function(ty){
+              try { t.dispatchEvent(new KeyboardEvent(ty, { key: ch, code: en ? 'Enter' : '', keyCode: kc, which: kc, bubbles: true, cancelable: true })); } catch (x) {}
+            });
+          });
+        });
+        setTimeout(function(){ window.__wmsAllowFocus = false; }, 700);
+        return 'ok';
+      }
       if (!el) el = all[0];
       if (!el) return 'noinput';
+      var isEd = el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA';
       var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      var setter = isEd ? function(v){ this.textContent = v; } : Object.getOwnPropertyDescriptor(proto, 'value').set;
       var codeS = String(code);
       if (scanField) {
         // поле сканера: сначала как будто «набрали» код клавишами сканера, потом значение и Enter —

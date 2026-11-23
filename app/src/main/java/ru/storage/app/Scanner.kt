@@ -1,11 +1,13 @@
 package ru.storage.app
 
 import android.Manifest
+import kotlinx.coroutines.delay
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.view.MotionEvent
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
@@ -185,6 +187,26 @@ fun ScannerScreen(
     val scannerRef = remember { arrayOfNulls<com.google.mlkit.vision.barcode.BarcodeScanner>(1) }
     val captureRef = remember { arrayOfNulls<ImageCapture>(1) }
     var aiBusy by remember { mutableStateOf(false) }
+    // фонарик, 3 режима: 0 — выключен, 1 — включён сразу и постоянно, 2 — включится через 5 секунд (в темноте код не читается)
+    val torchPrefs = remember { context.getSharedPreferences("scanner_ui", android.content.Context.MODE_PRIVATE) }
+    var torchMode by remember { mutableIntStateOf(torchPrefs.getInt("torch_mode", 0).coerceIn(0, 2)) }
+    val cameraRef = remember { arrayOfNulls<Camera>(1) }
+    var cameraReady by remember { mutableStateOf(false) }
+    var torchAvailable by remember { mutableStateOf(false) }
+    LaunchedEffect(torchMode, cameraReady) {
+        if (!cameraReady) return@LaunchedEffect
+        val cam = cameraRef[0] ?: return@LaunchedEffect
+        fun torch(on: Boolean) { try { cam.cameraControl.enableTorch(on) } catch (e: Exception) { } }
+        when (torchMode) {
+            0 -> torch(false)
+            1 -> torch(true)
+            else -> {
+                torch(false)
+                delay(5000)
+                if (alive.get()) torch(true)
+            }
+        }
+    }
     val mainH = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     // Порядок важен: сначала отвязать камеру, потом гасить поток, иначе кадр уходит в закрытый executor и приложение падает.
     DisposableEffect(Unit) {
@@ -289,6 +311,9 @@ fun ScannerScreen(
                         provider.unbindAll()
                         provider.bindToLifecycle(owner, selector, preview, analysis)
                     }
+                    cameraRef[0] = camera
+                    torchAvailable = try { camera.cameraInfo.hasFlashUnit() } catch (e: Exception) { false }
+                    cameraReady = true
                     // тап по экрану — навести фокус на штрих-код
                     previewView.setOnTouchListener { v, ev ->
                         if (ev.action == MotionEvent.ACTION_UP) {
@@ -330,6 +355,21 @@ fun ScannerScreen(
             onClick = onClose,
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
         ) { Text(if (continuous) "Готово" else "Закрыть") }
+        if (torchAvailable) {
+            val tm = torchMode
+            Button(
+                onClick = {
+                    val next = (tm + 1) % 3
+                    torchMode = next
+                    torchPrefs.edit().putInt("torch_mode", next).apply()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (tm == 0) Color.DarkGray else Color(0xFFFFB300),
+                    contentColor = if (tm == 0) Color.White else Color.Black
+                ),
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = if (bottomContent != null) 118.dp else 32.dp)
+            ) { Text(when (tm) { 0 -> "Фонарик: выкл"; 1 -> "Фонарик: вкл"; else -> "Фонарик: через 5 с" }) }
+        }
         if (!onlyQr) {
             // «Снимок»: плохой штрих-код не читается — снимок уходит ИИ, он возвращает цифры кода
             Button(
