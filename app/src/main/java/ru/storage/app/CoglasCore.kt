@@ -97,6 +97,12 @@ class CgBridge {
         main.post { CoglasWeb.scanFound() }
     }
 
+    /** Уведомление сайта после «Провести» (Buchen): kind = ok | err. */
+    @JavascriptInterface
+    fun notice(kind: String, text: String) {
+        main.post { CoglasWeb.showNotice(kind, text) }
+    }
+
     @JavascriptInterface
     fun toast(msg: String) {
         main.post { CoglasWeb.siteToast(msg) }
@@ -327,6 +333,16 @@ object CoglasWeb {
     var fabResetTick by mutableIntStateOf(0)
     /** Счётчик «товар найден и отмечен»: по нему рисуется галочка на экране. */
     var foundTick by mutableIntStateOf(0)
+    /** Уведомление сайта после «Провести»: галочка и текст на 5 секунд. */
+    var noticeTick by mutableIntStateOf(0)
+    var noticeText by mutableStateOf("")
+    var noticeError by mutableStateOf(false)
+
+    fun showNotice(kind: String, text: String) {
+        noticeText = text
+        noticeError = kind == "err"
+        noticeTick++
+    }
     var onSiteScan: (() -> Unit)? = null
     private var scanOpen = false
     private var snapToken = 0

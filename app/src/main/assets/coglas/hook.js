@@ -1315,3 +1315,65 @@
     }, 1200);
   } catch (e) {}
 })();
+
+// ---------- «Провести» (Buchen): уведомление сайта показываем на 5 секунд — большая галочка и текст внизу ----------
+(function(){
+  if (window.__cgNotice) return;
+  window.__cgNotice = true;
+  var buchenAt = 0, lastText = '', lastAt = 0;
+  var WINDOW_MS = 30000;
+  var RX_BTN = /^\s*(Провести|Buchen|Verbuchen|Book|Post)\s*$/i;
+  var SEL = '.toast,.toastr,.toast-message,.snackbar,.snack-bar,.notification,.notify,.noty,.noty_body,.growl,.alert,[role=alert],[role=status],[aria-live=polite],[aria-live=assertive],' +
+    '.mat-snack-bar-container,.mat-mdc-snack-bar-container,.mat-mdc-snack-bar-label,.p-toast-message,.ui-growl-item,.swal2-toast,.ajs-message,.k-notification,.ui-notificationbar,[class*=toast],[class*=Toast],[class*=notification],[class*=snackbar],[class*=Snackbar]';
+  function vis(e){ try { return !!e && e.isConnected && e.getClientRects().length > 0; } catch (x) { return false; } }
+  function txt(e){ return ((e && (e.innerText || e.textContent)) || '').replace(/\s+/g, ' ').trim(); }
+
+  document.addEventListener('click', function(ev){
+    try {
+      var b = ev.target && ev.target.closest ? ev.target.closest('button,a,[role=button],.btn,input[type=button],input[type=submit]') : null;
+      if (!b) return;
+      var t = (b.innerText || b.textContent || b.value || '').replace(/\s+/g, ' ').trim();
+      if (RX_BTN.test(t)) buchenAt = Date.now();
+    } catch (x) {}
+  }, true);
+
+  function isErr(e){
+    var c = '';
+    try { c = (typeof e.className === 'string' ? e.className : '') + ' ' + (e.innerHTML || '').slice(0, 600); } catch (x) {}
+    return /danger|error|fail|invalid|exclamation|times-circle|ошиб|fehler/i.test(c + ' ' + txt(e));
+  }
+  function report(e){
+    if (!buchenAt || Date.now() - buchenAt > WINDOW_MS) return;
+    setTimeout(function(){
+      try {
+        var t = txt(e);
+        if (!t || t.length > 300) return;
+        if (t === lastText && Date.now() - lastAt < 3000) return;
+        lastText = t; lastAt = Date.now();
+        window.WmsBridge.notice(isErr(e) ? 'err' : 'ok', t);
+      } catch (x) {}
+    }, 600); // даём приложению время перевести текст
+  }
+  function check(n){
+    try {
+      if (n.nodeType !== 1) return;
+      if (n.id === '__cgBar' || n.id === '__cgWin' || n.id === '__cgScanBtn') return;
+      var hit = null;
+      if (n.matches && n.matches(SEL)) hit = n;
+      else if (n.querySelector) hit = n.querySelector(SEL);
+      if (!hit) return;
+      if (!vis(hit) && !vis(n)) return;
+      // уведомление — короткое сообщение, а не целая страница или диалог
+      if (txt(hit).length > 300 || (hit.closest && hit.closest('.modal,[role=dialog]') && /modal|dialog/i.test(hit.className || ''))) return;
+      report(hit);
+    } catch (x) {}
+  }
+  function start(){
+    if (!document.body) { setTimeout(start, 200); return; }
+    new MutationObserver(function(ms){
+      if (!buchenAt || Date.now() - buchenAt > WINDOW_MS) return;
+      ms.forEach(function(m){ [].slice.call(m.addedNodes || []).forEach(check); });
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+  start();
+})();

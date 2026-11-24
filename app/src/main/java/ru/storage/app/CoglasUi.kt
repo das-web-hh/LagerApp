@@ -41,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
@@ -383,6 +384,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             }
 
             if (tab == 1) FoundCheck()
+            if (tab == 1) NoticeOverlay()
 
             if (tab == 1 && CoglasWeb.fabs && CoglasWeb.loadError.isEmpty()) {
                 // плавающие кнопки «Назад» и «Скан» приложения: включаются в настройках, перетаскиваются пальцем куда угодно
@@ -1351,6 +1353,53 @@ private fun FoundCheck() {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(Icons.Default.Check, contentDescription = "Готово", tint = Color.White, modifier = Modifier.size(80.dp))
                 }
+            }
+        }
+    }
+}
+
+
+/** Уведомление сайта после «Провести»: галочка (синяя; красный крест при ошибке) и текст внизу, 5 секунд. */
+@Composable
+private fun NoticeOverlay() {
+    val tick = CoglasWeb.noticeTick
+    var show by remember { mutableStateOf(false) }
+    LaunchedEffect(tick) {
+        if (tick > 0) {
+            show = true
+            kotlinx.coroutines.delay(5000)
+            show = false
+        }
+    }
+    if (show) {
+        val err = CoglasWeb.noticeError
+        val col = if (err) Color(0xFFC62828) else Color(0xFF1E88E5)
+        Box(Modifier.fillMaxSize()) {
+            Surface(
+                shape = androidx.compose.foundation.shape.CircleShape,
+                color = col,
+                shadowElevation = 10.dp,
+                modifier = Modifier.align(Alignment.Center).size(120.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        if (err) Icons.Default.Close else Icons.Default.Check,
+                        contentDescription = null, tint = Color.White, modifier = Modifier.size(80.dp)
+                    )
+                }
+            }
+            Surface(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                color = col,
+                shadowElevation = 10.dp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 40.dp)
+            ) {
+                Text(
+                    CoglasWeb.noticeText,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                )
             }
         }
     }
