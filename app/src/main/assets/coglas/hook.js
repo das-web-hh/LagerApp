@@ -438,7 +438,7 @@
         var e = els[i];
         if (!vis(e)) continue;
         var s = txt(e);
-        if (s.length < 60 && /^(Выбрать все на текущей странице|Снять выбор со всех на текущей странице|Alle auf der aktuellen Seite.*|Auswahl.*aktuellen Seite.*|Select all on (the )?current page|Deselect all.*)$/i.test(s)) {
+        if (s.length < 70 && /(выбрать все|снять выбор со всех|alle\s+(ab|aus)wählen|auswahl.*aufheben|select all|deselect all)/i.test(s) && e.tagName !== 'LABEL') {
           anchorY = Math.max(anchorY, e.getBoundingClientRect().bottom + window.scrollY);
         }
       }
@@ -537,13 +537,12 @@
         await sleep(120);
         var n = total();
         var cbs = rowChecks();
-        var sig = n + '|' + cbs.length + '|' + (inp.value === String(code));
+        var sig = n + '|' + cbs.length;
         if (sig !== last) { last = sig; since = Date.now(); continue; }
         if (Date.now() - since < 900) continue;       // список ещё меняется
         if (n === null) continue;
-        if (inp.value !== String(code)) continue;      // сайт ещё не принял код
         if (n === base && base !== 1) continue;        // список так и не отфильтровался
-        if (n === 1 && cbs.length === 1) { cb = cbs[0]; verdict = 'one'; break; }
+        if (n === 1 && cbs.length >= 1) { cb = cbs[0]; verdict = 'one'; break; }
         if (n === 0) { verdict = 'zero'; break; }
         if (n > 1) { verdict = 'many'; break; }
       }
@@ -1324,7 +1323,7 @@
   window.__cgNotice = true;
   var buchenAt = 0, lastText = '', lastAt = 0;
   var WINDOW_MS = 30000;
-  var RX_BTN = /^\s*(Провести|Buchen|Verbuchen|Book|Post)\s*$/i;
+  var RX_OK = /Wareneingangsschein\s+gebucht|(приход\S*\s+)?накладн\S*\s+(проведен|оприходован)|goods\s+receipt\S*\s+(posted|booked)/i;
   var SEL = '.toast,.toastr,.toast-message,.snackbar,.snack-bar,.notification,.notify,.noty,.noty_body,.growl,.alert,[role=alert],[role=status],[aria-live=polite],[aria-live=assertive],' +
     '.mat-snack-bar-container,.mat-mdc-snack-bar-container,.mat-mdc-snack-bar-label,.p-toast-message,.ui-growl-item,.swal2-toast,.ajs-message,.k-notification,.ui-notificationbar,[class*=toast],[class*=Toast],[class*=notification],[class*=snackbar],[class*=Snackbar]';
   function vis(e){ try { return !!e && e.isConnected && e.getClientRects().length > 0; } catch (x) { return false; } }
@@ -1335,7 +1334,7 @@
       var b = ev.target && ev.target.closest ? ev.target.closest('button,a,[role=button],.btn,input[type=button],input[type=submit]') : null;
       if (!b) return;
       var t = (b.innerText || b.textContent || b.value || '').replace(/\s+/g, ' ').trim();
-      if (RX_BTN.test(t)) buchenAt = Date.now();
+      buchenAt = 0;
     } catch (x) {}
   }, true);
 
@@ -1345,14 +1344,13 @@
     return /danger|error|fail|invalid|exclamation|times-circle|ошиб|fehler/i.test(c + ' ' + txt(e));
   }
   function report(e){
-    if (!buchenAt || Date.now() - buchenAt > WINDOW_MS) return;
     setTimeout(function(){
       try {
-        var t = txt(e);
-        if (!t || t.length > 300) return;
+        var t = txt(e).replace(/^[\s×✕✖]+/, '').replace(/[\s×✕✖]+$/, '').trim();
+        if (!t || t.length > 200 || !RX_OK.test(t)) return;   // только сообщение «Накладная проведена»
         if (t === lastText && Date.now() - lastAt < 3000) return;
         lastText = t; lastAt = Date.now();
-        window.WmsBridge.notice(isErr(e) ? 'err' : 'ok', t);
+        window.WmsBridge.notice('ok', t);
       } catch (x) {}
     }, 600); // даём приложению время перевести текст
   }
@@ -1373,7 +1371,6 @@
   function start(){
     if (!document.body) { setTimeout(start, 200); return; }
     new MutationObserver(function(ms){
-      if (!buchenAt || Date.now() - buchenAt > WINDOW_MS) return;
       ms.forEach(function(m){ [].slice.call(m.addedNodes || []).forEach(check); });
     }).observe(document.body, { childList: true, subtree: true });
   }

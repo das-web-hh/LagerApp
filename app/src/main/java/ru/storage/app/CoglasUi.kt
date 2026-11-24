@@ -1374,7 +1374,7 @@ private fun NoticeOverlay() {
     }
     if (show) {
         val err = CoglasWeb.noticeError
-        val col = if (err) Color(0xFFC62828) else Color(0xFF1E88E5)
+        val col = if (err) Color(0xFFC62828) else Color(0xFF2E7D32)
         Box(Modifier.fillMaxSize()) {
             Surface(
                 shape = androidx.compose.foundation.shape.CircleShape,

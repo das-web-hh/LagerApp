@@ -352,8 +352,14 @@ object CoglasWeb {
 
     fun showNotice(kind: String, text: String) {
         noticeText = text
-        noticeError = kind == "err"
+        noticeError = false
         noticeTick++
+        // звуковой сигнал «всё успешно»
+        try {
+            val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100)
+            tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 300)
+            main.postDelayed({ try { tg.release() } catch (e: Exception) { } }, 600)
+        } catch (e: Exception) { }
     }
     var onSiteScan: (() -> Unit)? = null
     private var scanOpen = false
