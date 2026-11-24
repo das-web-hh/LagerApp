@@ -91,6 +91,12 @@ class CgBridge {
     fun gtinOn(): Boolean = gtinNative
 
     /** Короткое сообщение от страницы (например, «товар не найден»). */
+    /** Товар найден по коду и отмечен галочкой: вибрация и большая галочка на экране. */
+    @JavascriptInterface
+    fun found() {
+        main.post { CoglasWeb.scanFound() }
+    }
+
     @JavascriptInterface
     fun toast(msg: String) {
         main.post { CoglasWeb.siteToast(msg) }
@@ -319,6 +325,8 @@ object CoglasWeb {
     /** Плавающие кнопки «Назад» и «Скан» приложения (перетаскиваются). */
     var fabs by mutableStateOf(true)
     var fabResetTick by mutableIntStateOf(0)
+    /** Счётчик «товар найден и отмечен»: по нему рисуется галочка на экране. */
+    var foundTick by mutableIntStateOf(0)
     var onSiteScan: (() -> Unit)? = null
     private var scanOpen = false
     private var snapToken = 0
@@ -363,6 +371,22 @@ object CoglasWeb {
         CoglasTr.setGtin(ctx, on)
         gtinMode = on
         bridge.gtinNative = on
+    }
+
+    fun scanFound() {
+        foundTick++
+        val c = appCtx ?: return
+        try {
+            val v: android.os.Vibrator? = if (android.os.Build.VERSION.SDK_INT >= 31) {
+                (c.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                c.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            if (v == null || !v.hasVibrator()) return
+            // два коротких уверенных импульса: «готово»
+            v.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 70, 80, 70), -1))
+        } catch (e: Exception) { }
     }
 
     fun siteToast(msg: String) {

@@ -431,14 +431,14 @@
       return list[0] || null;
     }
 
-    function rowCheck(){
+    function rowChecks(){
       var anchorY = 0;
       var els = [].slice.call(document.querySelectorAll('button,[role=button],a,div,span'));
       for (var i = 0; i < els.length; i++) {
         var e = els[i];
         if (!vis(e)) continue;
         var s = txt(e);
-        if (s.length < 60 && /^(Выбрать все на текущей странице|Alle auf der aktuellen Seite.*|Select all on (the )?current page)$/i.test(s)) {
+        if (s.length < 60 && /^(Выбрать все на текущей странице|Снять выбор со всех на текущей странице|Alle auf der aktuellen Seite.*|Auswahl.*aktuellen Seite.*|Select all on (the )?current page|Deselect all.*)$/i.test(s)) {
           anchorY = Math.max(anchorY, e.getBoundingClientRect().bottom + window.scrollY);
         }
       }
@@ -453,8 +453,9 @@
         var ha = vis(a) ? a : (a.closest('label') || a.parentElement), hb = vis(b) ? b : (b.closest('label') || b.parentElement);
         return ha.getBoundingClientRect().top - hb.getBoundingClientRect().top;
       });
-      return ok[0] || null;
+      return ok;
     }
+    function rowCheck(){ return rowChecks()[0] || null; }
     function isChecked(c){
       if (c.tagName === 'MAT-CHECKBOX') { var i = c.querySelector('input'); return !!(i && i.checked); }
       return c.checked === true || c.getAttribute('aria-checked') === 'true';
@@ -491,21 +492,13 @@
       } catch (x) {}
       return null;
     }
-    // набор кода как с клавиатуры: каждая цифра — свои события, сайт видит живой ввод
+    // вставка кода одним действием, как вставка из буфера: сайт ищет один раз по полному коду, а не по каждой цифре
     async function typeInto(el, code){
       var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       var set = Object.getOwnPropertyDescriptor(proto, 'value').set;
-      var cur = '';
       set.call(el, '');
-      for (var i = 0; i < code.length; i++) {
-        var ch = code.charAt(i), kc = ch.charCodeAt(0);
-        var kd = { key: ch, keyCode: kc, which: kc, bubbles: true, cancelable: true };
-        try { el.dispatchEvent(new KeyboardEvent('keydown', kd)); el.dispatchEvent(new KeyboardEvent('keypress', kd)); } catch (x) {}
-        cur += ch;
-        set.call(el, cur);
-        try { el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' })); } catch (x) { el.dispatchEvent(new Event('input', { bubbles: true })); }
-        try { el.dispatchEvent(new KeyboardEvent('keyup', kd)); } catch (x) {}
-      }
+      set.call(el, code);
+      try { el.dispatchEvent(new InputEvent('input', { bubbles: true, data: code, inputType: 'insertFromPaste' })); } catch (x) { el.dispatchEvent(new Event('input', { bubbles: true })); }
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
@@ -538,16 +531,25 @@
       pressEnter(inp);
       try { inp.blur(); } catch (x) {}
       window.__wmsAllowFocus = false;
-      // сайт ищет сам: ждём, когда число результатов изменится
-      var done = await waitFor(function(){ var t = total(); return t !== null && t !== base; }, 6000, 120);
-      await sleep(500);
-      var n = total();
-      if (!done && n === base && base !== 1) { toast('Сайт не ответил на код ' + code); return false; }
-      if (n === 0) { toast('Товар с кодом ' + code + ' не найден'); return false; }
-      if (n !== null && n > 1) { toast('По коду ' + code + ' найдено позиций: ' + n + '. Галочка не поставлена.'); return false; }
-
-      var cb = await waitFor(rowCheck, 3000, 120);
-      if (!cb) { toast('Не нашёл галочку у позиции для кода ' + code); return false; }
+      // сайт ищет сам. Галочку ставим только когда список СТАЛ из одной позиции и так стоит без изменений (не раньше, чем сайт нашёл товар)
+      var t0 = Date.now(), last = '', since = Date.now(), cb = null, verdict = '';
+      while (Date.now() - t0 < 10000) {
+        await sleep(120);
+        var n = total();
+        var cbs = rowChecks();
+        var sig = n + '|' + cbs.length + '|' + (inp.value === String(code));
+        if (sig !== last) { last = sig; since = Date.now(); continue; }
+        if (Date.now() - since < 900) continue;       // список ещё меняется
+        if (n === null) continue;
+        if (inp.value !== String(code)) continue;      // сайт ещё не принял код
+        if (n === base && base !== 1) continue;        // список так и не отфильтровался
+        if (n === 1 && cbs.length === 1) { cb = cbs[0]; verdict = 'one'; break; }
+        if (n === 0) { verdict = 'zero'; break; }
+        if (n > 1) { verdict = 'many'; break; }
+      }
+      if (verdict === 'zero') { toast('Товар с кодом ' + code + ' не найден'); return false; }
+      if (verdict === 'many') { toast('По коду ' + code + ' найдено позиций: ' + total() + '. Галочка не поставлена.'); return false; }
+      if (!cb) { toast('Сайт не успел найти товар по коду ' + code + '. Галочка не поставлена.'); return false; }
       try { (vis(cb) ? cb : (cb.closest('label') || cb)).scrollIntoView({ block: 'nearest' }); } catch (x) {}
       if (!isChecked(cb)) {
         var host = vis(cb) ? cb : (cb.closest('label') || cb.parentElement);
@@ -555,6 +557,9 @@
         await sleep(350);
         if (!isChecked(cb)) { tap(host); await sleep(350); }
       }
+      // товар найден и отмечен: приложение вибрирует и показывает большую галочку
+      if (isChecked(cb)) { try { window.WmsBridge.found(); } catch (x) {} }
+      else toast('Не удалось поставить галочку у найденного товара (код ' + code + ').');
       return true;
     }
 

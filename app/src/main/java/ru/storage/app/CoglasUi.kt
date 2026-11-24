@@ -40,6 +40,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
@@ -380,6 +381,8 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                     }
                 )
             }
+
+            if (tab == 1) FoundCheck()
 
             if (tab == 1 && CoglasWeb.fabs && CoglasWeb.loadError.isEmpty()) {
                 // плавающие кнопки «Назад» и «Скан» приложения: включаются в настройках, перетаскиваются пальцем куда угодно
@@ -1321,5 +1324,34 @@ private fun DragFab(
         shadowElevation = 6.dp
     ) {
         Box(contentAlignment = Alignment.Center) { content() }
+    }
+}
+
+
+/** Большая зелёная галочка по центру экрана: товар найден по коду и отмечен. */
+@Composable
+private fun FoundCheck() {
+    val tick = CoglasWeb.foundTick
+    var show by remember { mutableStateOf(false) }
+    LaunchedEffect(tick) {
+        if (tick > 0) {
+            show = true
+            kotlinx.coroutines.delay(1100)
+            show = false
+        }
+    }
+    if (show) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Surface(
+                shape = androidx.compose.foundation.shape.CircleShape,
+                color = Color(0xFF2E7D32),
+                shadowElevation = 10.dp,
+                modifier = Modifier.size(120.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Check, contentDescription = "Готово", tint = Color.White, modifier = Modifier.size(80.dp))
+                }
+            }
+        }
     }
 }
