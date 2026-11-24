@@ -90,7 +90,7 @@
       'html[data-cgland] ' + S + '{position:absolute!important;transform:none!important;}' +
       'html[data-cgland] #__cgScanBtn{display:none!important;}' +
       '#__cgScanBtn{position:absolute;top:50%;margin-top:-' + Math.round(H * 0.4) + 'px;width:' + SCAN_W + 'px;height:' + Math.round(H * 0.8) + 'px;border:0;border-radius:8px;' +
-      'background:rgba(255,255,255,.25);color:#fff;display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;z-index:5;}' +
+      'background:#FF8F00;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;z-index:5;}' +
       '#__cgScanBtn svg{width:34px;height:34px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;}' +
       '.btn-back{zoom:' + BACK_Z + '!important;}';
     (document.head || document.documentElement).appendChild(s);
@@ -262,28 +262,38 @@
   var winSig = '', winEl = null;
   function readWins(){
     var out = [], seen = {};
-    function nameOf(it){
-      var t = it.querySelector('.navbar-tab-link-text');
-      var n = ((t ? t.textContent : it.textContent) || '').replace(/\s+/g, ' ').trim();
-      return n;
+    // «1 Ещё» — счётчик скрытых окон сайта, а не название окна: убираем его
+    function clean(n){
+      return (n || '').replace(/\s+/g, ' ').replace(/^\s*\d+\s*(Ещё|Еще|Mehr|More)\s+/i, '').replace(/^\s*(Ещё|Еще|Mehr|More)\s*\d*\s+/i, '').trim();
     }
-    function add(it){
-      var n = nameOf(it);
-      if (!n) return;
-      var a = it.querySelector('a.navbar-tab-link,a') || it;
+    function add(it, name){
+      var n = clean(name);
+      if (!n || /^(\d+\s*)?(Ещё|Еще|Mehr|More)$/i.test(n)) return;
+      var a = (it.matches && it.matches('a')) ? it : (it.querySelector('a.navbar-tab-link,a') || it);
       var key = (a.getAttribute && a.getAttribute('href') || '') + '|' + n;
       if (seen[key]) return;
       seen[key] = 1;
       var act = it.classList.contains('active') || !!it.querySelector('.active') || (a.classList && a.classList.contains('active')) || it.getAttribute('aria-current') === 'page';
       out.push({ it: it, a: a, name: n, act: act, x: it.querySelector('.navbar-tab-link-close') });
     }
-    [].slice.call(bar.querySelectorAll('.navbar-tabs-container .navbar-tab-item')).forEach(add);
+    function nameOf(it){
+      var t = it.querySelector('.navbar-tab-link-text');
+      return t ? t.textContent : it.textContent;
+    }
+    [].slice.call(bar.querySelectorAll('.navbar-tabs-container .navbar-tab-item')).forEach(function(it){ add(it, nameOf(it)); });
     var prim = out.length;
-    [].slice.call(bar.querySelectorAll('.navbar-tab-unfit')).forEach(function(it){
-      var n = nameOf(it);
-      if (!n) return;
-      for (var i = 0; i < prim; i++) if (out[i].name === n) return;
-      add(it);
+    function inPrim(n){ n = clean(n); for (var i = 0; i < prim; i++) if (out[i].name === n) return true; return false; }
+    [].slice.call(bar.querySelectorAll('.navbar-tab-unfit')).forEach(function(box){
+      // выпадающий список «N Ещё»: берём названия окон из пунктов, а не весь текст блока
+      var texts = [].slice.call(box.querySelectorAll('.navbar-tab-link-text'));
+      if (texts.length) {
+        texts.forEach(function(t){
+          if (inPrim(t.textContent)) return;
+          add(t.closest('.navbar-tab-item,li,a') || t, t.textContent);
+        });
+      } else if (!inPrim(box.textContent)) {
+        add(box, box.textContent);
+      }
     });
     return out;
   }

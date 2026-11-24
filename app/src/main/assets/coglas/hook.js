@@ -395,16 +395,40 @@
       var cand = boxes.filter(function(c){ return /gtin/i.test(txt(c)); })[0] || boxes[0];
       if (!cand) return false;
       var trg = cand.querySelector('.select2-selection,.select2-choice,.select2-selection--single,.mat-select-trigger') || cand;
+      var OPT = '.select2-results__option,.select2-result,.select2-result-label,[role=option],mat-option,.dropdown-menu li';
+      function gtinOpt(){
+        return [].slice.call(document.querySelectorAll(OPT)).filter(function(e){ return vis(e) && txt(e).length < 60 && /gtin/i.test(txt(e)); })[0] || null;
+      }
+      function anyList(){
+        return [].slice.call(document.querySelectorAll('.select2-results,.select2-drop,.select2-dropdown,[role=listbox],.mat-select-panel')).some(vis);
+      }
       tap(trg);
-      var opt = await waitFor(function(){
-        var o = [].slice.call(document.querySelectorAll('.select2-results__option,.select2-result,.select2-result-label,[role=option],mat-option,.dropdown-menu li'))
-          .filter(function(e){ return vis(e) && txt(e).length < 60 && /gtin/i.test(txt(e)); });
-        return o[0] || null;
-      }, 2500, 100);
-      if (!opt) return false;
+      // список открылся, а пункта GTIN в нём нет (например, в «Накладных»): закрываем и сдаёмся быстро
+      var opt = await waitFor(function(){ var o = gtinOpt(); if (o) return o; return null; }, 1200, 100);
+      if (!opt) {
+        try {
+          var act = document.activeElement || document;
+          ['keydown', 'keyup'].forEach(function(t){ try { act.dispatchEvent(new KeyboardEvent(t, { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true })); } catch (x) {} });
+          if (anyList()) fire(document.body, ['mousedown', 'mouseup']);
+        } catch (x) {}
+        await sleep(150);
+        return false;
+      }
       tap(opt);
       try { opt.click(); } catch (x) {}
       return true;
+    }
+
+    // строка поиска окна (если фильтра «Артикул GTIN» на странице нет)
+    function searchInput(){
+      var list = [].slice.call(document.querySelectorAll('input,textarea')).filter(function(e){
+        try {
+          if (e.disabled || !vis(e) || inDrop(e)) return false;
+          if (!/^(text|search|)$/i.test(e.type || '')) return false;
+          return /^(поиск|suche|search)/i.test((e.placeholder || '').trim()) || /^(поиск|suche|search)/i.test((e.getAttribute('aria-label') || '').trim());
+        } catch (x) { return false; }
+      });
+      return list[0] || null;
     }
 
     function rowCheck(){
@@ -489,10 +513,12 @@
       window.__wmsAllowFocus = false;
       var inp = gtinInput();
       if (!inp) {
-        await openFilter();
-        inp = await waitFor(gtinInput, 3000, 100);
+        var opened = await openFilter();
+        if (opened) inp = await waitFor(gtinInput, 3000, 100);
       }
-      if (!inp) { toast('Не удалось открыть фильтр «Артикул GTIN». Выберите его вручную.'); return false; }
+      // фильтра «Артикул GTIN» на странице нет (например, окно «Накладные»): работаем через строку поиска
+      if (!inp) inp = searchInput();
+      if (!inp) { toast('Не нашёл ни фильтр «Артикул GTIN», ни строку поиска.'); return false; }
 
       // очистить прошлый код: нажимаем кнопку «очистить» рядом со строкой (она есть, только когда в поле что-то написано);
       // сайт покажет весь список (с отмеченными и неотмеченными)
@@ -503,7 +529,7 @@
         if (inp.value) { setVal(inp, ''); pressEnter(inp); }
         await waitFor(function(){ var t = total(); return t !== null && t !== before; }, 2500, 100);
         await sleep(300);
-        inp = gtinInput() || inp;
+        inp = gtinInput() || searchInput() || inp;
       }
       var base = total();
       // одно нажатие на строку, потом набор кода
