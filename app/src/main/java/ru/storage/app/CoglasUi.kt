@@ -383,6 +383,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 )
             }
 
+            if (tab == 1) BusyOverlay()
             if (tab == 1) FoundCheck()
             if (tab == 1) NoticeOverlay()
 
@@ -1400,6 +1401,42 @@ private fun NoticeOverlay() {
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
                 )
+            }
+        }
+    }
+}
+
+
+/** Ожидание: экран слегка затемняется, по центру крутится круг. Касания не перехватывает. */
+@Composable
+private fun BusyOverlay() {
+    val busy = CoglasWeb.progress in 1..99 || CoglasWeb.busyNet || CoglasWeb.busyAuto || CoglasWeb.busyClick
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(busy) {
+        if (busy) {
+            kotlinx.coroutines.delay(250)   // короткие загрузки не мигают
+            shown = true
+            kotlinx.coroutines.delay(20000) // защита: значок не висит вечно
+            shown = false
+        } else {
+            shown = false
+        }
+    }
+    androidx.compose.animation.AnimatedVisibility(
+        visible = shown,
+        enter = androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.fadeOut()
+    ) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
+            Surface(
+                shape = androidx.compose.foundation.shape.CircleShape,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                shadowElevation = 8.dp,
+                modifier = Modifier.size(84.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(52.dp), strokeWidth = 5.dp)
+                }
             }
         }
     }

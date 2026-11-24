@@ -103,6 +103,14 @@ class CgBridge {
         main.post { CoglasWeb.showNotice(kind, text) }
     }
 
+    /** Ожидание: src = net (сайт грузит данные) | auto (приложение само нажимает и вставляет). */
+    @JavascriptInterface
+    fun busy(src: String, on: Boolean) {
+        main.post {
+            if (src == "net") CoglasWeb.busyNet = on else if (src == "auto") CoglasWeb.busyAuto = on
+        }
+    }
+
     @JavascriptInterface
     fun toast(msg: String) {
         main.post { CoglasWeb.siteToast(msg) }
@@ -333,6 +341,10 @@ object CoglasWeb {
     var fabResetTick by mutableIntStateOf(0)
     /** Счётчик «товар найден и отмечен»: по нему рисуется галочка на экране. */
     var foundTick by mutableIntStateOf(0)
+    /** Значок ожидания по центру экрана: сайт что-то грузит / приложение само нажимает и вставляет. */
+    var busyNet by mutableStateOf(false)
+    var busyAuto by mutableStateOf(false)
+    var busyClick by mutableStateOf(false)
     /** Уведомление сайта после «Провести»: галочка и текст на 5 секунд. */
     var noticeTick by mutableIntStateOf(0)
     var noticeText by mutableStateOf("")
@@ -362,10 +374,12 @@ object CoglasWeb {
     fun requestScanSmart() {
         main.post {
             if (scanOpen) return@post
+            busyClick = true
             runJs("window.__cgClickSiteScan ? window.__cgClickSiteScan() : 'nohook'") { r ->
                 if (r == "clicked") {
-                    main.postDelayed({ if (!scanOpen) requestScan() }, 1500)
+                    main.postDelayed({ busyClick = false; if (!scanOpen) requestScan() }, 1500)
                 } else {
+                    busyClick = false
                     requestScan()
                 }
             }
@@ -575,6 +589,7 @@ object CoglasWeb {
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 loadError = ""
+                busyNet = false; busyAuto = false
                 // запасной вариант, если DOCUMENT_START_SCRIPT не поддерживается
                 if (!docStart && hostOk(url)) view.evaluateJavascript(script, null)
             }

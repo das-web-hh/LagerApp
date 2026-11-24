@@ -563,15 +563,17 @@
       return true;
     }
 
+    function autoBusy(on){ try { window.WmsBridge.busy('auto', on); } catch (x) {} }
     async function pump(){
       if (busy) return;
       busy = true;
+      autoBusy(true);
       try {
         while (q.length) {
           var c = q.shift();
           try { await run(c); } catch (e) { toast('Ошибка сканера GTIN: ' + e); }
         }
-      } finally { busy = false; }
+      } finally { busy = false; autoBusy(false); }
     }
     window.__cgGtinFlow = function(code){ q.push(code); pump(); };
   })();
@@ -1376,4 +1378,62 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
   start();
+})();
+
+// ---------- ожидание: считаем запросы сайта; если сайт что-то грузит дольше 0,6 с — приложение показывает значок ожидания ----------
+(function(){
+  if (window.__cgNet) return;
+  window.__cgNet = true;
+  var pend = 0, netOn = false, onT = null, offT = null, maxT = null;
+  var SKIP = /poll|heartbeat|ping|keepalive|signalr|websocket|notification\/count|session\/touch/i;
+  function send(on){ try { window.WmsBridge.busy('net', on); } catch (x) {} }
+  function upd(){
+    if (pend > 0) {
+      if (offT) { clearTimeout(offT); offT = null; }
+      if (!netOn && !onT) {
+        onT = setTimeout(function(){
+          onT = null;
+          if (pend > 0) {
+            netOn = true; send(true);
+            // защита: если запрос завис, значок не висит вечно
+            maxT = setTimeout(function(){ if (netOn) { netOn = false; send(false); } }, 15000);
+          }
+        }, 600);
+      }
+    } else {
+      if (onT) { clearTimeout(onT); onT = null; }
+      if (netOn && !offT) {
+        offT = setTimeout(function(){
+          offT = null;
+          if (pend === 0 && netOn) { netOn = false; if (maxT) clearTimeout(maxT); send(false); }
+        }, 250);
+      }
+    }
+  }
+  try {
+    var XO = XMLHttpRequest.prototype.open, XS = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(m, u){ try { this.__cgSkip = SKIP.test(String(u)); } catch (x) {} return XO.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function(){
+      if (!this.__cgSkip) {
+        pend++; upd();
+        var done = false, self = this;
+        function fin(){ if (done) return; done = true; pend = Math.max(0, pend - 1); upd(); }
+        this.addEventListener('loadend', fin);
+      }
+      return XS.apply(this, arguments);
+    };
+  } catch (x) {}
+  try {
+    var F = window.fetch;
+    if (F) window.fetch = function(inp){
+      var skip = false;
+      try { skip = SKIP.test(String(inp && inp.url ? inp.url : inp)); } catch (x) {}
+      if (skip) return F.apply(this, arguments);
+      pend++; upd();
+      var p = F.apply(this, arguments);
+      var fin = function(){ pend = Math.max(0, pend - 1); upd(); };
+      p.then(fin, fin);
+      return p;
+    };
+  } catch (x) {}
 })();
