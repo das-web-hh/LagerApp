@@ -70,6 +70,10 @@ object CgList {
         var err by mutableStateOf("")
         /** Не 0: показан сохранённый список от этого времени, потому что сайт сейчас недоступен. */
         var offlineAt by mutableStateOf(0L)
+        /** Текст, по которому сайт уже нашёл показанные записи ("" — показан обычный список). */
+        var siteQuery by mutableStateOf("")
+        var siteBusy by mutableStateOf(false)
+        var siteErr by mutableStateOf("")
     }
 
     private fun cacheFile(key: String): java.io.File? = CoglasSchema.dir?.let { java.io.File(it, "coglas_cache_$key.json") }
@@ -112,6 +116,29 @@ object CgList {
 
     /** Запрос поиска списка раздела (если у раздела на сайте есть обычный список). */
     fun searchAction(e: CgMenuEntry): String? = e.apis.firstOrNull { LIST_ACTION.matches(it) }
+
+    /** Поиск через строку поиска сайта: результат сайта показывается строками приложения. */
+    fun siteSearch(e: CgMenuEntry, text: String) {
+        val st = state(e.key)
+        st.siteBusy = true
+        st.siteErr = ""
+        CoglasWeb.siteSearch(e.key, e.de, e.ru, text) { ok, resp, err ->
+            st.siteBusy = false
+            if (!ok) { st.siteErr = err; return@siteSearch }
+            try {
+                val pr = JSONObject(resp).optJSONObject("PageResult")
+                val arr = pr?.optJSONArray("Items")
+                val got = ArrayList<JSONObject>()
+                if (arr != null) for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { got.add(it) }
+                st.items = got
+                st.total = pr?.optInt("Total") ?: got.size
+                st.offlineAt = 0L
+                st.siteQuery = text
+            } catch (x: Exception) {
+                st.siteErr = "Не удалось разобрать ответ сайта"
+            }
+        }
+    }
 
     fun load(key: String, more: Boolean = false) {
         val entry = CoglasSchema.find(key) ?: return
@@ -421,29 +448,52 @@ fun MenuWorkScreen(key: String) {
 @Composable
 private fun CgListScreen(e: CgMenuEntry) {
     val st = CgList.state(e.key)
-    var q by remember(e.key) { mutableStateOf("") }
+    val q = CoglasState.listQ[e.key] ?: ""
     var sel by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
-    var rec by remember(e.key) { mutableStateOf<Pair<String, Long>?>(null) }
     val recCfg = RECORD_CFG[e.form]
+    val lr = CoglasState.listRec
     LaunchedEffect(e.key) { if (st.items.isEmpty() && !st.busy) CgList.load(e.key) }
     val needle = q.trim().lowercase()
+    val siteMode = st.siteQuery.isNotEmpty() && st.siteQuery == q.trim()
     val rows = st.items.map { CgList.flat(it) to it.optLong("Id") }
-        .filter { needle.isEmpty() || it.first.joinToString(" ") { p -> p.second }.lowercase().contains(needle) }
-
-    rec?.let { (title, id) ->
-        if (recCfg != null) {
-            RecordView(title, recCfg, id) { rec = null }
-            androidx.activity.compose.BackHandler { rec = null }
-            return
+        .filter { siteMode || needle.isEmpty() || it.first.joinToString(" ") { p -> p.second }.lowercase().contains(needle) }
+    // поиск делает сам сайт: текст вводится в строку поиска сайта, ответ сайта рисуется строками
+    LaunchedEffect(q) {
+        val t = q.trim()
+        if (t.isEmpty()) {
+            if (st.siteQuery.isNotEmpty()) { st.siteQuery = ""; CgList.load(e.key) }
+            return@LaunchedEffect
         }
+        if (t == st.siteQuery) return@LaunchedEffect
+        kotlinx.coroutines.delay(900)
+        CgList.siteSearch(e, t)
+    }
+
+    if (lr != null && lr.first == e.key && recCfg != null) {
+        RecordView(lr.second, recCfg, lr.third) { CoglasState.listRec = null }
+        androidx.activity.compose.BackHandler { CoglasState.listRec = null }
+        return
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(
-            value = q, onValueChange = { q = it }, singleLine = true,
-            placeholder = { Text("Поиск в загруженных") }, modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large
+            value = q, onValueChange = { CoglasState.listQ[e.key] = it }, singleLine = true,
+            placeholder = { Text("Поиск") }, modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large,
+            trailingIcon = {
+                IconButton(onClick = { CoglasState.requestAppScan() }) { CgBarcodeIcon(MaterialTheme.colorScheme.primary) }
+            }
         )
+        if (st.siteBusy) {
+            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text("  Поиск на сайте…", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else if (st.siteErr.isNotEmpty()) {
+            Text(st.siteErr + ". Показаны загруженные записи.", fontSize = 13.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+        } else if (siteMode) {
+            Text("Результат поиска на сайте: ${st.total}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        }
         if (st.offlineAt > 0L) {
             val at = SimpleDateFormat("dd.MM HH:mm", Locale.GERMANY).format(java.util.Date(st.offlineAt))
             Text(
@@ -459,7 +509,7 @@ private fun CgListScreen(e: CgMenuEntry) {
             items(rows) { (r, rid) ->
                 Column(
                     Modifier.fillMaxWidth()
-                        .clickable { if (recCfg != null && rid > 0L) rec = CgList.titleOf(r) to rid else sel = r }
+                        .clickable { if (recCfg != null && rid > 0L) CoglasState.listRec = Triple(e.key, CgList.titleOf(r), rid) else sel = r }
                         .padding(vertical = 12.dp)
                 ) {
                     Text(CgList.titleOf(r), fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -472,7 +522,7 @@ private fun CgListScreen(e: CgMenuEntry) {
                 Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
                     when {
                         st.busy -> CircularProgressIndicator(Modifier.size(28.dp))
-                        st.items.isNotEmpty() && st.items.size < st.total ->
+                        !siteMode && st.items.isNotEmpty() && st.items.size < st.total ->
                             OutlinedButton(onClick = { CgList.load(e.key, more = true) }) { Text("Показать ещё (${st.items.size} из ${st.total})") }
                         st.items.isNotEmpty() -> Text("Всего: ${st.total}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         st.err.isEmpty() -> Text("Список пуст", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -497,5 +547,20 @@ private fun CgListScreen(e: CgMenuEntry) {
                 }
             }
         )
+    }
+}
+
+
+/** Значок штрих-кода (рисуется линиями): кнопка сканера в строках поиска. */
+@Composable
+fun CgBarcodeIcon(tint: androidx.compose.ui.graphics.Color, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier.size(26.dp)) {
+        val widths = listOf(2, 1, 1, 1, 3, 1, 1, 2, 1, 3, 1, 2)
+        val unit = size.width / widths.sum()
+        var x = 0f
+        widths.forEachIndexed { i, w ->
+            if (i % 2 == 0) drawRect(tint, androidx.compose.ui.geometry.Offset(x, size.height * 0.1f), androidx.compose.ui.geometry.Size(w * unit, size.height * 0.8f))
+            x += w * unit
+        }
     }
 }

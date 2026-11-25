@@ -562,6 +562,60 @@
       return true;
     }
 
+    // ---- поиск по просьбе приложения (вкладка App): текст вводится в строку поиска сайта, ответ сайта возвращается приложению
+    var siteSearching = false;
+    window.__cgOnPage = function(de, ru){
+      try {
+        function low(x){ return (x || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+        var names = [];
+        [].slice.call(document.querySelectorAll('.navbar-tab-item.active .navbar-tab-link-text,.navbar-tab-item.active,.page-heading-title,.navbar-mobile-title')).forEach(function(e){ names.push(low(e.textContent)); });
+        de = low(de); ru = low(ru);
+        var hit = names.some(function(n){ return n && ((de && n.indexOf(de) >= 0) || (ru && n.indexOf(ru) >= 0)); });
+        return hit && !!searchInput() ? 'yes' : 'no';
+      } catch (x) { return 'no'; }
+    };
+    window.__cgSiteSearch = function(id, text){
+      if (siteSearching) return 'busy';
+      siteSearching = true;
+      (async function(){
+        function done(ok, resp, body, err){
+          siteSearching = false; window.__cgCap = null; autoBusy(false);
+          try { window.WmsBridge.searchDone(id, !!ok, resp || '', body || '', err || ''); } catch (x) {}
+        }
+        autoBusy(true);
+        try {
+          var inp = searchInput();
+          if (!inp) return done(false, '', '', 'На странице сайта нет строки поиска');
+          text = String(text || '');
+          if (!text) window.__cgCap = { since: Date.now(), res: null };
+          if (inp.value) {
+            var cb0 = clearBtn(inp);
+            if (cb0) { try { cb0.click(); } catch (x) { tap(cb0); } await sleep(300); }
+            if (inp.value) { setVal(inp, ''); pressEnter(inp); }
+            await sleep(text ? 900 : 200);
+          }
+          if (text) {
+            window.__cgCap = { since: Date.now(), res: null };
+            await tapField(inp);
+            await typeInto(inp, text);
+            pressEnter(inp);
+            try { inp.blur(); } catch (x) {}
+            window.__wmsAllowFocus = false;
+          }
+          // ждём ответ сайта на поиск; берём последний, когда новых ответов больше нет
+          var t0 = Date.now(), got = null;
+          while (Date.now() - t0 < 14000) {
+            await sleep(150);
+            var c = window.__cgCap && window.__cgCap.res;
+            if (c && Date.now() - c.t > 600) { got = c; break; }
+          }
+          if (!got) return done(false, '', '', 'Сайт не прислал результат поиска');
+          return done(true, got.resp, got.body, '');
+        } catch (e) { return done(false, '', '', 'Ошибка поиска: ' + e); }
+      })();
+      return 'started';
+    };
+
     function autoBusy(on){ try { window.WmsBridge.busy('auto', on); } catch (x) {} }
     async function pump(){
       if (busy) return;
@@ -1323,7 +1377,7 @@
   window.__cgNotice = true;
   var buchenAt = 0, lastText = '', lastAt = 0;
   var WINDOW_MS = 30000;
-  var RX_OK = /Wareneingangsschein\s+gebucht|(приход\S*\s+)?накладн\S*\s+(проведен|оприходован)|goods\s+receipt\S*\s+(posted|booked)/i;
+  var RX_OK = /Wareneingangsschein\s+gebucht|(накладн|приход|поступлен|ордер|документ|товар|Wareneingang)[^.]{0,70}(проведен|оприходован|забронирован|учтен|учтён|занесен|занесён|gebucht|posted|booked)|(проведен|оприходован|забронирован)[а-я]*\s+(накладн|приход|поступлен)/i;
   var SEL = '.toast,.toastr,.toast-message,.snackbar,.snack-bar,.notification,.notify,.noty,.noty_body,.growl,.alert,[role=alert],[role=status],[aria-live=polite],[aria-live=assertive],' +
     '.mat-snack-bar-container,.mat-mdc-snack-bar-container,.mat-mdc-snack-bar-label,.p-toast-message,.ui-growl-item,.swal2-toast,.ajs-message,.k-notification,.ui-notificationbar,[class*=toast],[class*=Toast],[class*=notification],[class*=snackbar],[class*=Snackbar]';
   function vis(e){ try { return !!e && e.isConnected && e.getClientRects().length > 0; } catch (x) { return false; } }
@@ -1338,21 +1392,62 @@
     } catch (x) {}
   }, true);
 
-  function isErr(e){
-    var c = '';
-    try { c = (typeof e.className === 'string' ? e.className : '') + ' ' + (e.innerHTML || '').slice(0, 600); } catch (x) {}
-    return /danger|error|fail|invalid|exclamation|times-circle|ошиб|fehler/i.test(c + ' ' + txt(e));
+  function rgbOf(el){
+    try {
+      var c = getComputedStyle(el).backgroundColor || '';
+      var m = c.match(/rgba?\(\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)(?:[ ,\/]+([\d.]+))?/);
+      if (!m) return null;
+      if (m[4] !== undefined && parseFloat(m[4]) < 0.3) return null;
+      return [+m[1], +m[2], +m[3]];
+    } catch (x) { return null; }
+  }
+  // цвет уведомления: зелёный — успех, красный — ошибка; остальные (синие, жёлтые) приложение не трогает
+  function kindOf(e){
+    var p = e;
+    for (var i = 0; i < 4 && p && p.nodeType === 1; i++, p = p.parentElement) {
+      var c = rgbOf(p);
+      if (c) {
+        if (c[1] > c[0] + 20 && c[1] > c[2] + 10) return 'ok';
+        if (c[0] > 150 && c[1] < 110 && c[2] < 110) return 'err';
+        return '';
+      }
+    }
+    var cl = '';
+    try { cl = (typeof e.className === 'string' ? e.className : '') + ' ' + ((e.parentElement && typeof e.parentElement.className === 'string') ? e.parentElement.className : ''); } catch (x) {}
+    if (/success|green/i.test(cl)) return 'ok';
+    if (/danger|error|red/i.test(cl)) return 'err';
+    return '';
   }
   function report(e){
-    setTimeout(function(){
-      try {
-        var t = txt(e).replace(/^[\s×✕✖]+/, '').replace(/[\s×✕✖]+$/, '').trim();
-        if (!t || t.length > 200 || !RX_OK.test(t)) return;   // только сообщение «Накладная проведена»
-        if (t === lastText && Date.now() - lastAt < 3000) return;
-        lastText = t; lastAt = Date.now();
-        window.WmsBridge.notice('ok', t);
-      } catch (x) {}
-    }, 600); // даём приложению время перевести текст
+    var tries = 0;
+    (function attempt(){
+      setTimeout(function(){
+        try {
+          var t = txt(e).replace(/^[\s×✕✖]+/, '').replace(/[\s×✕✖]+$/, '').trim();
+          var k = kindOf(e);
+          if (t && t.length <= 200 && k) {
+            if (t === lastText && Date.now() - lastAt < 3000) return;
+            lastText = t; lastAt = Date.now();
+            // вид «накладная проведена» — отдельный сигнал (звук)
+            var kind = (k === 'ok' && RX_OK.test(t)) ? 'post' : k;
+            window.WmsBridge.notice(kind, t);
+            // уведомление сайта показывает приложение в центре экрана, свою полосу сайта прячем
+            try { e.style.setProperty('visibility', 'hidden', 'important'); } catch (x) {}
+            if (k === 'err') {
+              // красное исчезает так же, как у сайта: следим, когда оно пропадёт
+              var iv = setInterval(function(){
+                var gone = !e.isConnected || e.getClientRects().length === 0;
+                if (gone) { clearInterval(iv); try { window.WmsBridge.noticeEnd(); } catch (x) {} }
+              }, 300);
+              setTimeout(function(){ clearInterval(iv); }, 20000);
+            }
+            return;
+          }
+        } catch (x) {}
+        // текст мог быть ещё не переведён на русский: пробуем ещё раз, пока уведомление на экране
+        if (++tries < 5 && e.isConnected) attempt();
+      }, tries === 0 ? 500 : 900);
+    })();
   }
   function check(n){
     try {
@@ -1430,6 +1525,46 @@
       var p = F.apply(this, arguments);
       var fin = function(){ pend = Math.max(0, pend - 1); upd(); };
       p.then(fin, fin);
+      return p;
+    };
+  } catch (x) {}
+})();
+
+// ---------- захват ответов поиска сайта (только пока приложение само ищет через строку поиска сайта) ----------
+(function(){
+  if (window.__cgCapHook) return;
+  window.__cgCapHook = true;
+  var RX = /\.Actions\.Search\b/;
+  try {
+    var XO = XMLHttpRequest.prototype.open, XS = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(m, u){ try { this.__cgU = String(u); } catch (x) {} return XO.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function(b){
+      try {
+        if (window.__cgCap && this.__cgU && RX.test(this.__cgU)) {
+          var self = this, body = typeof b === 'string' ? b : '';
+          this.addEventListener('loadend', function(){
+            try {
+              if (!window.__cgCap) return;
+              var r = (self.responseType === '' || self.responseType === 'text') ? self.responseText : JSON.stringify(self.response);
+              window.__cgCap.res = { url: self.__cgU, body: body, resp: r, t: Date.now() };
+            } catch (x) {}
+          });
+        }
+      } catch (x) {}
+      return XS.apply(this, arguments);
+    };
+  } catch (x) {}
+  try {
+    var F = window.fetch;
+    if (F) window.fetch = function(inp, init){
+      var p = F.apply(this, arguments);
+      try {
+        var u = String(inp && inp.url ? inp.url : inp);
+        if (window.__cgCap && RX.test(u)) {
+          var body = (init && typeof init.body === 'string') ? init.body : '';
+          p.then(function(r){ try { r.clone().text().then(function(t){ if (window.__cgCap) window.__cgCap.res = { url: u, body: body, resp: t, t: Date.now() }; }); } catch (x) {} });
+        }
+      } catch (x) {}
       return p;
     };
   } catch (x) {}

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -213,14 +214,16 @@ private fun recText(title: String, r: CgRecord): String = buildString {
 @Composable
 fun RecordView(title: String, cfg: CgRecordCfg, id: Long, onClose: () -> Unit) {
     val ctx = LocalContext.current
-    var rec by remember(id) { mutableStateOf<CgRecord?>(null) }
+    var rec by remember(id) { mutableStateOf<CgRecord?>(CoglasState.recCache[id]) }
     var err by remember(id) { mutableStateOf("") }
     var reload by remember(id) { mutableStateOf(0) }
-    var q by remember(id) { mutableStateOf("") }
+    val q = CoglasState.recQ[id] ?: ""
     LaunchedEffect(id, reload) {
         err = ""
+        if (rec != null && reload == 0) return@LaunchedEffect   // после окна сканера не грузим заново
         try {
             rec = CgRecordApi.load(cfg, id)
+            rec?.let { CoglasState.recCache[id] = it }
         } catch (e: CgError) {
             err = e.message ?: "Ошибка"
         } catch (e: Exception) {
@@ -266,14 +269,17 @@ fun RecordView(title: String, cfg: CgRecordCfg, id: Long, onClose: () -> Unit) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = { cgClip(ctx, recText(title, r)) }, modifier = Modifier.weight(1f)) { Text("Копировать", maxLines = 1) }
                             OutlinedButton(onClick = { cgSend(ctx, recText(title, r)) }, modifier = Modifier.weight(1f)) { Text("Поделиться", maxLines = 1) }
-                            OutlinedButton(onClick = { rec = null; reload++ }, modifier = Modifier.weight(1f)) { Text("Обновить", maxLines = 1) }
+                            OutlinedButton(onClick = { rec = null; CoglasState.recCache.remove(id); reload++ }, modifier = Modifier.weight(1f)) { Text("Обновить", maxLines = 1) }
                         }
                     }
                     item {
                         OutlinedTextField(
-                            value = q, onValueChange = { q = it }, singleLine = true,
+                            value = q, onValueChange = { CoglasState.recQ[id] = it }, singleLine = true,
                             placeholder = { Text("Поиск по позициям") }, modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.large
+                            shape = MaterialTheme.shapes.large,
+                            trailingIcon = {
+                                IconButton(onClick = { CoglasState.requestAppScan() }) { CgBarcodeIcon(MaterialTheme.colorScheme.primary) }
+                            }
                         )
                     }
                     item {

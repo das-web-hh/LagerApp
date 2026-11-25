@@ -111,7 +111,9 @@ fun ExpiryPickerDialog(initial: String, onPick: (String) -> Unit, onDismiss: () 
     val markParsed = remember(mark) { Regex("""^(\d{2})\.(\d{2})\.(\d{4})$""").find(mark.trim()) }
     val simple = remember { DateCfg.simple }
     val numbersOnly = DateCfg.monthNumbersOnly
-    val startYear = parsed?.groupValues?.get(3)?.toInt() ?: if (simple) DateCfg.DEFAULT_YEAR else today.get(Calendar.YEAR)
+    // год по умолчанию — 2027; если в поле уже стоит чужая дата (не сегодняшняя), открываем её год
+    val todayStr = remember { String.format(Locale.ROOT, "%02d.%02d.%04d", today.get(Calendar.DAY_OF_MONTH), today.get(Calendar.MONTH) + 1, today.get(Calendar.YEAR)) }
+    val startYear = if (parsed != null && initial.trim() != todayStr) parsed.groupValues[3].toInt() else DateCfg.DEFAULT_YEAR
     val startMonth = (parsed?.groupValues?.get(2)?.toInt() ?: (today.get(Calendar.MONTH) + 1)).coerceIn(1, 12)
     // если день не выбирали, дата — последнее число выбранного месяца
     val startDay = parsed?.groupValues?.get(1)?.toInt() ?: 0

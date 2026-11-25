@@ -1,6 +1,11 @@
 package ru.storage.app
 
 import android.Manifest
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -112,6 +117,14 @@ object CoglasState {
     var detail by mutableStateOf<CgOrderDetail?>(null)
     var detailBusy by mutableStateOf(false)
     var detailErr by mutableStateOf<CgError?>(null)
+
+    // ---- вкладка App: сканер в строках поиска списка «Накладные» и внутри накладной (состояние живёт вне экрана, чтобы пережить окно сканера)
+    var appScanReq by mutableIntStateOf(0)
+    val listQ = androidx.compose.runtime.mutableStateMapOf<String, String>()
+    val recQ = androidx.compose.runtime.mutableStateMapOf<Long, String>()
+    var listRec by mutableStateOf<Triple<String, String, Long>?>(null)   // раздел, название, номер записи
+    val recCache = HashMap<Long, CgRecord>()
+    fun requestAppScan() { appScanReq++ }
 
     var query by mutableStateOf("")
     var scanned by mutableStateOf("")
@@ -256,6 +269,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         )
     }
 
+    LaunchedEffect(st.appScanReq) { if (st.appScanReq > 0) scanFor = "app" }
     if (scanFor.isNotEmpty()) {
         val target = scanFor
         ScannerScreen(
@@ -266,6 +280,11 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                 if (target == "site") {
                     st.tab = 1
                     CoglasWeb.deliverScan(code)
+                } else if (target == "app") {
+                    // код попадает в строку поиска того окна App, где нажали значок сканера
+                    val lr = st.listRec
+                    if (lr != null) st.recQ[lr.third] = code
+                    else if (st.appPage.startsWith("menu:")) st.listQ[st.appPage.removePrefix("menu:")] = code
                 } else {
                     st.tab = 0
                     st.appPage = "info"
@@ -1331,36 +1350,55 @@ private fun DragFab(
 }
 
 
-/** Большая зелёная галочка по центру экрана: товар найден по коду и отмечен. */
+/** Штрих-код отсканирован и товар найден: значок штрих-кода, лазерная полоса проходит сверху вниз и обратно, код «зеленеет». */
 @Composable
 private fun FoundCheck() {
     val tick = CoglasWeb.foundTick
     var show by remember { mutableStateOf(false) }
+    val sweep = remember { androidx.compose.animation.core.Animatable(0f) }
+    val pop = remember { androidx.compose.animation.core.Animatable(0.6f) }
     LaunchedEffect(tick) {
         if (tick > 0) {
             show = true
-            kotlinx.coroutines.delay(1100)
+            pop.snapTo(0.6f)
+            sweep.snapTo(0f)
+            pop.animateTo(1f, androidx.compose.animation.core.tween(180))
+            sweep.animateTo(1f, androidx.compose.animation.core.tween(420))
+            sweep.animateTo(0f, androidx.compose.animation.core.tween(420))
+            kotlinx.coroutines.delay(250)
             show = false
         }
     }
     if (show) {
+        val widths = remember { listOf(3, 1, 2, 1, 1, 3, 2, 1, 3, 1, 1, 2, 1, 3, 2, 1, 1, 2, 3, 1, 2, 1, 3) }
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Surface(
-                shape = androidx.compose.foundation.shape.CircleShape,
-                color = Color(0xFF2E7D32),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
+                color = Color(0xEE263238),
                 shadowElevation = 10.dp,
-                modifier = Modifier.size(120.dp)
+                modifier = Modifier.size(150.dp).graphicsLayer(scaleX = pop.value, scaleY = pop.value)
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Check, contentDescription = "Готово", tint = Color.White, modifier = Modifier.size(80.dp))
+                Canvas(Modifier.fillMaxSize().padding(24.dp)) {
+                    val total = widths.sum().toFloat()
+                    val unit = size.width / total
+                    val laserY = size.height * sweep.value
+                    fun bars(c: Color) {
+                        var x = 0f
+                        widths.forEachIndexed { i, w ->
+                            if (i % 2 == 0) drawRect(c, Offset(x, 0f), Size(w * unit, size.height))
+                            x += w * unit
+                        }
+                    }
+                    bars(Color.White)                                   // весь код
+                    clipRect(0f, 0f, size.width, laserY) { bars(Color(0xFF66BB6A)) }  // пройденная лазером часть — зелёная
+                    drawRect(Color(0xFFFF1744), Offset(-8f, laserY - 2f), Size(size.width + 16f, 4f))  // лазер
                 }
             }
         }
     }
 }
 
-
-/** Уведомление сайта после «Провести»: галочка (синяя; красный крест при ошибке) и текст внизу, 5 секунд. */
+/** Уведомление сайта по центру экрана: зелёное — 10 секунд, красное — пока оно есть на сайте. */
 @Composable
 private fun NoticeOverlay() {
     val tick = CoglasWeb.noticeTick
@@ -1368,44 +1406,54 @@ private fun NoticeOverlay() {
     LaunchedEffect(tick) {
         if (tick > 0) {
             show = true
-            kotlinx.coroutines.delay(5000)
+            if (CoglasWeb.noticeError) {
+                var waited = 0
+                while (waited < 15000 && !(CoglasWeb.noticeGone && waited >= 1500)) {
+                    kotlinx.coroutines.delay(100)
+                    waited += 100
+                }
+            } else {
+                kotlinx.coroutines.delay(10000)
+            }
             show = false
         }
     }
     if (show) {
         val err = CoglasWeb.noticeError
         val col = if (err) Color(0xFFC62828) else Color(0xFF2E7D32)
-        Box(Modifier.fillMaxSize()) {
-            Surface(
-                shape = androidx.compose.foundation.shape.CircleShape,
-                color = col,
-                shadowElevation = 10.dp,
-                modifier = Modifier.align(Alignment.Center).size(120.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        if (err) Icons.Default.Close else Icons.Default.Check,
-                        contentDescription = null, tint = Color.White, modifier = Modifier.size(80.dp)
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 20.dp)) {
+                Surface(
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    color = col,
+                    shadowElevation = 10.dp,
+                    modifier = Modifier.size(110.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (err) Icons.Default.Close else Icons.Default.Check,
+                            contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                    color = col,
+                    shadowElevation = 10.dp
+                ) {
+                    Text(
+                        CoglasWeb.noticeText,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
                     )
                 }
-            }
-            Surface(
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                color = col,
-                shadowElevation = 10.dp,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 40.dp)
-            ) {
-                Text(
-                    CoglasWeb.noticeText,
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
-                )
             }
         }
     }
 }
-
 
 /** Ожидание: экран слегка затемняется, по центру крутится круг. Касания не перехватывает. */
 @Composable

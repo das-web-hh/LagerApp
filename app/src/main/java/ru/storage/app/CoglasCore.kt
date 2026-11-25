@@ -97,7 +97,19 @@ class CgBridge {
         main.post { CoglasWeb.scanFound() }
     }
 
-    /** Уведомление сайта после «Провести» (Buchen): kind = ok | err. */
+    /** Результат поиска, который приложение сделало через строку поиска сайта. */
+    @JavascriptInterface
+    fun searchDone(id: Int, ok: Boolean, resp: String, body: String, err: String) {
+        main.post { CoglasWeb.siteSearchDone(id, ok, resp, body, err) }
+    }
+
+    /** Красное уведомление сайта пропало (оно исчезает само, как у сайта). */
+    @JavascriptInterface
+    fun noticeEnd() {
+        main.post { CoglasWeb.noticeGone = true }
+    }
+
+    /** Уведомление сайта: kind = post (накладная проведена) | ok (зелёное) | err (красное). */
     @JavascriptInterface
     fun notice(kind: String, text: String) {
         main.post { CoglasWeb.showNotice(kind, text) }
@@ -349,12 +361,15 @@ object CoglasWeb {
     var noticeTick by mutableIntStateOf(0)
     var noticeText by mutableStateOf("")
     var noticeError by mutableStateOf(false)
+    var noticeGone by mutableStateOf(false)
 
     fun showNotice(kind: String, text: String) {
         noticeText = text
-        noticeError = false
+        noticeError = kind == "err"
+        noticeGone = false
         noticeTick++
-        // звуковой сигнал «всё успешно»
+        if (kind != "post") return
+        // звуковой сигнал «накладная проведена, всё успешно»
         try {
             val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100)
             tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 300)
@@ -407,6 +422,71 @@ object CoglasWeb {
         CoglasTr.setGtin(ctx, on)
         gtinMode = on
         bridge.gtinNative = on
+    }
+
+    // ---------------- поиск через строку поиска сайта (вкладка App) ----------------
+    private var searchSeq = 0
+    private val searchCbs = HashMap<Int, (Boolean, String, String) -> Unit>()
+    private val searchKeys = HashMap<Int, String>()
+    private val webScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
+
+    private suspend fun jsAwait(js: String): String = kotlinx.coroutines.suspendCancellableCoroutine { c ->
+        runJs(js) { r -> if (c.isActive) c.resumeWith(Result.success(r)) }
+    }
+
+    private fun finishSearch(id: Int, ok: Boolean, resp: String, err: String) {
+        val cb = searchCbs.remove(id) ?: return
+        searchKeys.remove(id)
+        cb(ok, resp, err)
+    }
+
+    fun siteSearchDone(id: Int, ok: Boolean, resp: String, body: String, err: String) {
+        if (ok && body.isNotEmpty()) {
+            // запрос сайта запоминаем: пригодится для прямых запросов приложения
+            val k = searchKeys[id]
+            val c = appCtx
+            if (k != null && c != null) c.getSharedPreferences("coglas_tr", Context.MODE_PRIVATE).edit().putString("search_body_$k", body).apply()
+        }
+        if (id != searchSeq) { searchCbs.remove(id); searchKeys.remove(id); return }
+        finishSearch(id, ok, resp, err)
+    }
+
+    /** Поиск: приложение открывает раздел на сайте (если он не открыт), вводит текст в строку поиска сайта и получает ответ сайта. */
+    fun siteSearch(key: String, de: String, ru: String, text: String, cb: (Boolean, String, String) -> Unit) {
+        val id = ++searchSeq
+        searchCbs.keys.toList().forEach { if (it != id) { searchCbs.remove(it); searchKeys.remove(it) } }
+        searchCbs[id] = cb
+        searchKeys[id] = key
+        webScope.launch {
+            try {
+                val chk = "window.__cgOnPage ? window.__cgOnPage(" + JSONObject.quote(de) + "," + JSONObject.quote(ru) + ") : 'nohook'"
+                var ok = jsAwait(chk) == "yes"
+                if (!ok) {
+                    openMenu(de, ru)
+                    val t0 = System.currentTimeMillis()
+                    while (System.currentTimeMillis() - t0 < 12000 && !ok) {
+                        kotlinx.coroutines.delay(500)
+                        if (id != searchSeq) return@launch
+                        ok = jsAwait(chk) == "yes"
+                    }
+                }
+                if (id != searchSeq) return@launch
+                if (!ok) { finishSearch(id, false, "", "Не удалось открыть раздел на сайте"); return@launch }
+                kotlinx.coroutines.delay(300)
+                var r = "busy"
+                var n = 0
+                while (r == "busy" && n < 25) {
+                    if (id != searchSeq) return@launch
+                    r = jsAwait("window.__cgSiteSearch ? window.__cgSiteSearch(" + id + "," + JSONObject.quote(text) + ") : 'nohook'")
+                    if (r == "busy") { kotlinx.coroutines.delay(700); n++ }
+                }
+                if (r != "started") { finishSearch(id, false, "", "Сайт не готов к поиску"); return@launch }
+                kotlinx.coroutines.delay(30000)
+                if (searchCbs.containsKey(id)) finishSearch(id, false, "", "Сайт не ответил")
+            } catch (e: Exception) {
+                finishSearch(id, false, "", "Ошибка поиска")
+            }
+        }
     }
 
     fun scanFound() {
