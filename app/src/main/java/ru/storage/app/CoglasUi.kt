@@ -405,6 +405,7 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             if (tab == 1) BusyOverlay()
             if (tab == 1) FoundCheck()
             if (tab == 1) NoticeOverlay()
+            if (tab == 1) FoundBanner()
 
             if (tab == 1 && CoglasWeb.fabs && CoglasWeb.loadError.isEmpty()) {
                 // плавающие кнопки «Назад» и «Скан» приложения: включаются в настройках, перетаскиваются пальцем куда угодно
@@ -1093,6 +1094,34 @@ private fun SettingsTab(goSite: () -> Unit) {
             }
         }
 
+        // ---- уведомления поверх сайта ----
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text("Уведомления на экране", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Галочка после сканирования и сообщения сайта. Применяется сразу.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                listOf(
+                    0 to "Крупные по центру экрана (как раньше)",
+                    1 to "Компактные: узкая полоса сверху, маленькая галочка",
+                    2 to "Только сообщения, без значка после сканирования"
+                ).forEach { (v, label) ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { CoglasWeb.setNoticeStyle(ctx, v) },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = CoglasWeb.noticeStyle == v, onClick = { CoglasWeb.setNoticeStyle(ctx, v) })
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+
         // ---- вид списков сайта ----
         Card(
             Modifier.fillMaxWidth(),
@@ -1369,16 +1398,20 @@ private fun FoundCheck() {
             show = false
         }
     }
-    if (show) {
+    if (show && CoglasWeb.noticeStyle != 2) {
+        val compact = CoglasWeb.noticeStyle != 0
         val widths = remember { listOf(3, 1, 2, 1, 1, 3, 2, 1, 3, 1, 1, 2, 1, 3, 2, 1, 1, 2, 3, 1, 2, 1, 3) }
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.fillMaxSize().then(if (compact) Modifier.padding(top = 64.dp, end = 12.dp) else Modifier),
+            contentAlignment = if (compact) Alignment.TopEnd else Alignment.Center
+        ) {
             Surface(
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(if (compact) 12.dp else 22.dp),
                 color = Color(0xEE263238),
                 shadowElevation = 10.dp,
-                modifier = Modifier.size(150.dp).graphicsLayer(scaleX = pop.value, scaleY = pop.value)
+                modifier = Modifier.size(if (compact) 52.dp else 150.dp).graphicsLayer(scaleX = pop.value, scaleY = pop.value)
             ) {
-                Canvas(Modifier.fillMaxSize().padding(24.dp)) {
+                Canvas(Modifier.fillMaxSize().padding(if (compact) 10.dp else 24.dp)) {
                     val total = widths.sum().toFloat()
                     val unit = size.width / total
                     val laserY = size.height * sweep.value
@@ -1398,57 +1431,127 @@ private fun FoundCheck() {
     }
 }
 
-/** Уведомление сайта по центру экрана: зелёное — 10 секунд, красное — пока оно есть на сайте. */
+/** Синяя надпись с названием товара: появляется, когда сайт нашёл товар и приложение его отметило (с вибрацией). */
 @Composable
-private fun NoticeOverlay() {
-    val tick = CoglasWeb.noticeTick
+private fun FoundBanner() {
+    val tick = CoglasWeb.foundTextTick
     var show by remember { mutableStateOf(false) }
     LaunchedEffect(tick) {
         if (tick > 0) {
             show = true
-            if (CoglasWeb.noticeError) {
-                var waited = 0
-                while (waited < 15000 && !(CoglasWeb.noticeGone && waited >= 1500)) {
-                    kotlinx.coroutines.delay(100)
-                    waited += 100
-                }
-            } else {
-                kotlinx.coroutines.delay(10000)
-            }
+            CoglasWeb.foundBannerShown = true
+            kotlinx.coroutines.delay(3500)
             show = false
+            CoglasWeb.foundBannerShown = false
         }
     }
     if (show) {
-        val err = CoglasWeb.noticeError
-        val col = if (err) Color(0xFFC62828) else Color(0xFF2E7D32)
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 20.dp)) {
-                Surface(
-                    shape = androidx.compose.foundation.shape.CircleShape,
-                    color = col,
-                    shadowElevation = 10.dp,
-                    modifier = Modifier.size(110.dp)
+        Box(Modifier.fillMaxSize().padding(top = 64.dp), contentAlignment = Alignment.TopCenter) {
+            Surface(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                color = Color(0xFF1565C0),
+                shadowElevation = 6.dp,
+                modifier = Modifier.padding(horizontal = 12.dp).clickable { show = false; CoglasWeb.foundBannerShown = false }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            if (err) Icons.Default.Close else Icons.Default.Check,
-                            contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp)
+                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Отмечено: " + CoglasWeb.foundText,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Зелёное уведомление сайта: 10 секунд на экране, нажатие плавно убирает его. Красные уведомления приложение не показывает вообще. */
+@Composable
+private fun NoticeOverlay() {
+    val tick = CoglasWeb.noticeTick
+    var show by remember { mutableStateOf(false) }
+    var dismissTick by remember { mutableIntStateOf(0) }
+    val alpha = remember { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(tick) {
+        if (tick > 0 && !CoglasWeb.noticeError) {
+            alpha.snapTo(1f)
+            show = true
+            kotlinx.coroutines.delay(10000)
+            alpha.animateTo(0f, androidx.compose.animation.core.tween(400))
+            show = false
+        }
+    }
+    LaunchedEffect(dismissTick) {
+        if (dismissTick > 0) {
+            alpha.animateTo(0f, androidx.compose.animation.core.tween(350))
+            show = false
+        }
+    }
+    if (show && !CoglasWeb.noticeError) {
+        val col = Color(0xFF2E7D32)
+        if (CoglasWeb.noticeStyle != 0) {
+            // компактное уведомление: узкая полоса под верхней шапкой, центр экрана остаётся свободным
+            Box(
+                Modifier.fillMaxSize().padding(top = if (CoglasWeb.foundBannerShown) 112.dp else 64.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                    color = col,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.padding(horizontal = 12.dp).graphicsLayer(alpha = alpha.value).clickable { dismissTick++ }
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            CoglasWeb.noticeText,
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 3
                         )
                     }
                 }
-                Spacer(Modifier.height(16.dp))
-                Surface(
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                    color = col,
-                    shadowElevation = 10.dp
+            }
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 20.dp).graphicsLayer(alpha = alpha.value).clickable { dismissTick++ }
                 ) {
-                    Text(
-                        CoglasWeb.noticeText,
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
-                    )
+                    Surface(
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        color = col,
+                        shadowElevation = 10.dp,
+                        modifier = Modifier.size(110.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Surface(
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                        color = col,
+                        shadowElevation = 10.dp
+                    ) {
+                        Text(
+                            CoglasWeb.noticeText,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                        )
+                    }
                 }
             }
         }

@@ -98,6 +98,12 @@ class CgBridge {
         main.post { CoglasWeb.scanFound() }
     }
 
+    /** То же, но с текстом для синей надписи: артикул и название найденного и отмеченного товара. */
+    @JavascriptInterface
+    fun foundText(text: String) {
+        main.post { CoglasWeb.scanFound(text) }
+    }
+
     /** Результат поиска, который приложение сделало через строку поиска сайта. */
     @JavascriptInterface
     fun searchDone(id: Int, ok: Boolean, resp: String, body: String, err: String) {
@@ -251,6 +257,13 @@ object CoglasWeb {
     private fun darkBg(on: Boolean): Int = if (on) Color.rgb(14, 14, 14) else Color.WHITE
 
     var listView by mutableStateOf(0)
+    /** Уведомления поверх сайта: 0 — крупные по центру, 1 — компактные сверху, 2 — только сообщения (без значка сканирования). */
+    var noticeStyle by mutableStateOf(1)
+
+    fun setNoticeStyle(ctx: Context, v: Int) {
+        CoglasTr.setNoticeStyle(ctx, v)
+        noticeStyle = v
+    }
 
     fun setListView(ctx: Context, v: Int) {
         CoglasTr.setListView(ctx, v)
@@ -490,7 +503,13 @@ object CoglasWeb {
         }
     }
 
-    fun scanFound() {
+    /** Синяя надпись «Отмечено: …» после того, как найденный товар отмечен галочкой. */
+    var foundText by mutableStateOf("")
+    var foundTextTick by mutableIntStateOf(0)
+    var foundBannerShown by mutableStateOf(false)
+
+    fun scanFound(text: String = "") {
+        if (text.isNotBlank()) { foundText = text; foundTextTick++ }
         foundTick++
         val c = appCtx ?: return
         try {
@@ -575,6 +594,7 @@ object CoglasWeb {
         dark = CoglasTr.dark(app)
         bridge.darkMode = dark
         listView = CoglasTr.listView(app)
+        noticeStyle = CoglasTr.noticeStyle(app)
         bridge.listMode = listView
         CoglasPages.init(app)
 
@@ -968,6 +988,8 @@ object CoglasTr {
     fun dark(ctx: Context): Boolean = sp(ctx).getBoolean("dark", false)
     fun setDark(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("dark", on).apply() }
     fun listView(ctx: Context): Int = sp(ctx).getInt("listview", 0)
+    fun noticeStyle(ctx: Context): Int = sp(ctx).getInt("nstyle", 1)
+    fun setNoticeStyle(ctx: Context, v: Int) { sp(ctx).edit().putInt("nstyle", v).apply() }
     fun setListView(ctx: Context, v: Int) { sp(ctx).edit().putInt("listview", v).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }

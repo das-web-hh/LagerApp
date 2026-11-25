@@ -557,7 +557,17 @@
         if (!isChecked(cb)) { tap(host); await sleep(350); }
       }
       // товар найден и отмечен: приложение вибрирует и показывает большую галочку
-      if (isChecked(cb)) { try { window.WmsBridge.found(); } catch (x) {} }
+      if (isChecked(cb)) {
+        var ft = '';
+        try {
+          var anc = cb;
+          for (var q = 0; q < 8 && anc && anc !== document.body; q++, anc = anc.parentElement) {
+            var mm = /№:?\s*([A-Za-z0-9._\-]+)\s*,?\s*([^\n]*)/.exec(anc.innerText || '');
+            if (mm) { ft = mm[1] + (mm[2] ? ', ' + mm[2].trim().slice(0, 60) : ''); break; }
+          }
+        } catch (x) {}
+        try { if (window.WmsBridge.foundText) window.WmsBridge.foundText(ft || String(code)); else window.WmsBridge.found(); } catch (x) {}
+      }
       else toast('Не удалось поставить галочку у найденного товара (код ' + code + ').');
       return true;
     }
@@ -1425,6 +1435,7 @@
         try {
           var t = txt(e).replace(/^[\s×✕✖]+/, '').replace(/[\s×✕✖]+$/, '').trim();
           var k = kindOf(e);
+          if (k === 'err') return;   // красные уведомления приложение не трогает и не показывает
           if (t && t.length <= 200 && k) {
             if (t === lastText && Date.now() - lastAt < 3000) return;
             lastText = t; lastAt = Date.now();
