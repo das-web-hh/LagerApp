@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -297,8 +298,9 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         return
     }
 
-    // «Настройки» видит только админ
-    val tab = if (st.tab == 2 && !isAdmin) 1 else st.tab
+    // «App» и «Настройки» видит только админ; у рабочего одно окно — «Сайт» (плюс кнопки «Язык» и «Info» на нижней панели)
+    val tab = if (!isAdmin && st.tab != 1) 1 else st.tab
+    LaunchedEffect(isAdmin, st.tab) { if (!isAdmin && st.tab != 1) st.tab = 1 }
     // экран не гаснет, пока сайт грузится и переводится (иначе при переводе телефон «засыпает»)
     KeepScreenOn(resetKey = CoglasWeb.progress / 20 + CoglasWeb.trBusy + CoglasScan.done)
     // после возврата в приложение будим WebView, чтобы сайт не оставался пустым
@@ -311,37 +313,107 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
-    // нижние кнопки (App / Сайт / Настройки): на сайте по умолчанию скрыты; свайп снизу вверх показывает их на несколько секунд
+    // нижние кнопки: на сайте по умолчанию скрыты. Свайп снизу вверх медленно поднимает их, и они стоят на месте,
+    // пока минуту нет ни одного касания экрана или кнопок; потом так же медленно уходят вниз.
     var navShown by remember { mutableStateOf(false) }
-    LaunchedEffect(navShown) {
-        if (navShown) {
-            kotlinx.coroutines.delay(6000)
+    // при первом открытии окна кнопки один раз сами выезжают снизу и уезжают обратно (подсказка, что они есть)
+    var navHint by remember { mutableStateOf(true) }
+    // время последнего касания (простой массив: запись не вызывает перекомпоновку)
+    val touch = remember { longArrayOf(System.currentTimeMillis()) }
+    var langDlg by remember { mutableStateOf(false) }
+    var helpOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(700)
+        if (navHint) navShown = true
+        kotlinx.coroutines.delay(3500)
+        if (navHint) {
             navShown = false
+            navHint = false
+        }
+    }
+    LaunchedEffect(navShown, navHint) {
+        if (navShown && !navHint) {
+            touch[0] = System.currentTimeMillis()
+            while (navShown) {
+                kotlinx.coroutines.delay(1000)
+                if (System.currentTimeMillis() - touch[0] >= 60000L) navShown = false
+            }
         }
     }
     val navBar: @Composable (Modifier) -> Unit = { m ->
         NavigationBar(modifier = m) {
+            if (isAdmin) {
+                NavigationBarItem(
+                    selected = tab == 0,
+                    onClick = {
+                        // повторное нажатие на «App» возвращает в главное меню App
+                        if (st.tab == 0) { st.closeOrder(); st.appPage = "" }
+                        st.tab = 0
+                    },
+                    icon = { Icon(Icons.Default.Menu, contentDescription = "App") }, label = { Text("App") }
+                )
+            }
             NavigationBarItem(
-                selected = tab == 0,
-                onClick = {
-                    // повторное нажатие на «App» возвращает в главное меню App
-                    if (st.tab == 0) { st.closeOrder(); st.appPage = "" }
-                    st.tab = 0
-                    navShown = false
-                },
-                icon = { Icon(Icons.Default.Menu, contentDescription = "App") }, label = { Text("App") }
-            )
-            NavigationBarItem(
-                selected = tab == 1, onClick = { st.tab = 1; navShown = false },
+                selected = tab == 1, onClick = { st.tab = 1 },
                 icon = { Icon(Icons.Default.Home, contentDescription = "Сайт") }, label = { Text("Сайт") }
             )
             if (isAdmin) {
                 NavigationBarItem(
-                    selected = tab == 2, onClick = { st.tab = 2; navShown = false },
+                    selected = tab == 2, onClick = { st.tab = 2 },
                     icon = { Icon(Icons.Default.Settings, contentDescription = "Настройки") }, label = { Text("Настройки") }
+                )
+            } else {
+                // у рабочего вместо «App» и «Настройки»: выбор языка и справка
+                NavigationBarItem(
+                    selected = false, onClick = { langDlg = true },
+                    icon = { Text(if (CoglasWeb.trOn) "RU" else "DE", fontWeight = FontWeight.Bold) }, label = { Text("Язык") }
+                )
+                NavigationBarItem(
+                    selected = false, onClick = { helpOpen = true },
+                    icon = { Icon(Icons.Default.Info, contentDescription = "Info") }, label = { Text("Info") }
                 )
             }
         }
+    }
+    if (langDlg) {
+        AlertDialog(
+            onDismissRequest = { langDlg = false },
+            title = { Text("Язык сайта") },
+            text = {
+                Column {
+                    Text("Выберите язык, на котором вам удобно работать. Выбор запоминается.", fontSize = 13.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier.fillMaxWidth().clickable { CoglasWeb.setTranslate(ctx, true); st.tab = 1; langDlg = false }.padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = CoglasWeb.trOn, onClick = null)
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("Русский")
+                            Text("сайт переводится на русский", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().clickable { CoglasWeb.setTranslate(ctx, false); st.tab = 1; langDlg = false }.padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = !CoglasWeb.trOn, onClick = null)
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("Deutsch")
+                            Text("сайт без перевода, как в оригинале", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { langDlg = false }) { Text("Закрыть") } }
+        )
+    }
+    // справка «Info»: на весь экран (сайт на это время уходит под неё), «Назад» закрывает справку
+    if (helpOpen) {
+        CoglasHelp(onClose = { helpOpen = false })
+        return
     }
     // где можно прятать нижние кнопки: на сайте (в любом положении) и в ландшафте на любой вкладке
     val navHideable = tab == 1 || landscape
@@ -381,7 +453,17 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(
+            Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
+                // любое касание экрана (в том числе по сайту) сбрасывает минутный отсчёт; события не забираем
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                        touch[0] = System.currentTimeMillis()
+                    }
+                }
+            }
+        ) {
             // сайт всегда живёт под родными окнами: у него общая сессия входа, через неё идут запросы заказов
             key(CoglasWeb.viewKey) {
                 AndroidView(
@@ -438,16 +520,18 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
             }
 
             if (navHideable) {
-                if (navShown) {
-                    // нижние кнопки поверх сайта; свайп вниз по ним прячет их
-                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-                        navBar(
-                            Modifier.pointerInput(Unit) {
-                                detectVerticalDragGestures { _, dy -> if (dy > 8f) navShown = false }
-                            }
-                        )
-                    }
-                } else {
+                // кнопки медленно поднимаются снизу и так же медленно уходят вниз
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = navShown,
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    enter = androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(700)) { it } +
+                        androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(700)),
+                    exit = androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(700)) { it } +
+                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(700))
+                ) {
+                    navBar(Modifier)
+                }
+                if (!navShown) {
                     // узкая полоса у нижнего края: свайп снизу вверх показывает нижние кнопки
                     var acc by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
                     Box(
@@ -457,7 +541,12 @@ fun CoglasScreen(prefs: Prefs, onBack: () -> Unit) {
                                     onDragStart = { acc = 0f },
                                     onVerticalDrag = { _, dy ->
                                         acc += dy
-                                        if (acc < -36f) { acc = 0f; navShown = true }
+                                        if (acc < -36f) {
+                                            acc = 0f
+                                            navHint = false
+                                            touch[0] = System.currentTimeMillis()
+                                            navShown = true
+                                        }
                                     }
                                 )
                             },
