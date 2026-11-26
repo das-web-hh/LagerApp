@@ -303,6 +303,8 @@ fun AppHome() {
             shape = MaterialTheme.shapes.large
         )
         Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { CoglasState.appPage = "barcodes" }, modifier = Modifier.fillMaxWidth()) { Text("Создать список штрих-кодов") }
+        Spacer(Modifier.height(8.dp))
         var shown = 0
         for (g in GROUPS) {
             var list = grouped[g] ?: continue

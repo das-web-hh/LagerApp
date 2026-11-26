@@ -888,6 +888,7 @@ private fun AppTab(onCamera: () -> Unit, goSite: () -> Unit) {
     when (st.appPage) {
         "orders" -> OrdersTab(goSite)
         "info" -> InfoscanTab(onCamera, goSite)
+        "barcodes" -> { val c = LocalContext.current; BarcodeListScreen(remember { Prefs(c) }) { st.appPage = "" } }
         else -> if (st.appPage.startsWith("menu:")) MenuWorkScreen(st.appPage.removePrefix("menu:")) else AppHome()
     }
 }
@@ -1190,9 +1191,13 @@ private fun SettingsTab(goSite: () -> Unit) {
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
             Column(Modifier.padding(14.dp)) {
-                Text("Уведомления на экране", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Уведомления на экране", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Switch(checked = CoglasWeb.appNotices, onCheckedChange = { CoglasWeb.setAppNotices(ctx, it) })
+                }
                 Text(
-                    "Галочка после сканирования и сообщения сайта. Применяется сразу.",
+                    if (CoglasWeb.appNotices) "Включено: галочка после сканирования и сообщения сайта показывает приложение. Применяется сразу."
+                    else "Отключено: уведомления показывает сам сайт, как в браузере; приложение ничего не рисует.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 listOf(
@@ -1201,10 +1206,10 @@ private fun SettingsTab(goSite: () -> Unit) {
                     2 to "Только сообщения, без значка после сканирования"
                 ).forEach { (v, label) ->
                     Row(
-                        Modifier.fillMaxWidth().clickable { CoglasWeb.setNoticeStyle(ctx, v) },
+                        Modifier.fillMaxWidth().clickable(enabled = CoglasWeb.appNotices) { CoglasWeb.setNoticeStyle(ctx, v) },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        RadioButton(selected = CoglasWeb.noticeStyle == v, onClick = { CoglasWeb.setNoticeStyle(ctx, v) })
+                        RadioButton(selected = CoglasWeb.noticeStyle == v, enabled = CoglasWeb.appNotices, onClick = { CoglasWeb.setNoticeStyle(ctx, v) })
                         Text(label, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
@@ -1487,7 +1492,7 @@ private fun FoundCheck() {
             show = false
         }
     }
-    if (show && CoglasWeb.noticeStyle != 2) {
+    if (show && CoglasWeb.noticeStyle != 2 && CoglasWeb.appNotices) {
         val compact = CoglasWeb.noticeStyle != 0
         val widths = remember { listOf(3, 1, 2, 1, 1, 3, 2, 1, 3, 1, 1, 2, 1, 3, 2, 1, 1, 2, 3, 1, 2, 1, 3) }
         Box(
@@ -1568,7 +1573,7 @@ private fun NoticeOverlay() {
     var dismissTick by remember { mutableIntStateOf(0) }
     val alpha = remember { androidx.compose.animation.core.Animatable(1f) }
     LaunchedEffect(tick) {
-        if (tick > 0 && !CoglasWeb.noticeError) {
+        if (tick > 0 && !CoglasWeb.noticeError && CoglasWeb.appNotices) {
             alpha.snapTo(1f)
             show = true
             kotlinx.coroutines.delay(10000)
@@ -1582,7 +1587,7 @@ private fun NoticeOverlay() {
             show = false
         }
     }
-    if (show && !CoglasWeb.noticeError) {
+    if (show && !CoglasWeb.noticeError && CoglasWeb.appNotices) {
         val col = Color(0xFF2E7D32)
         if (CoglasWeb.noticeStyle != 0) {
             // компактное уведомление: узкая полоса под верхней шапкой, центр экрана остаётся свободным

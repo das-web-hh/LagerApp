@@ -1435,6 +1435,8 @@
         try {
           var t = txt(e).replace(/^[\s×✕✖]+/, '').replace(/[\s×✕✖]+$/, '').trim();
           var k = kindOf(e);
+          // вспомогательные уведомления приложения выключены — сайт показывает свои сообщения как есть
+          try { if (window.WmsBridge.noticesOn && !window.WmsBridge.noticesOn()) return; } catch (x) {}
           if (k === 'err') return;   // красные уведомления приложение не трогает и не показывает
           if (t && t.length <= 200 && k) {
             if (t === lastText && Date.now() - lastAt < 3000) return;

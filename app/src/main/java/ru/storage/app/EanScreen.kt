@@ -136,6 +136,7 @@ fun EanScreen(prefs: Prefs, onBack: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var scanning by remember { mutableStateOf(false) }
+    var listOpen by rememberSaveable { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Product>>(emptyList()) }
     var recent by remember { mutableStateOf<List<Product>>(emptyList()) }
@@ -192,6 +193,11 @@ fun EanScreen(prefs: Prefs, onBack: () -> Unit) {
         EanRecent.push(ctx, p.id)
     }
 
+    if (listOpen) {
+        BarcodeListScreen(prefs) { listOpen = false }
+        return
+    }
+
     if (scanning) {
         ScannerScreen(
             prefs = prefs,
@@ -220,6 +226,8 @@ fun EanScreen(prefs: Prefs, onBack: () -> Unit) {
             EanTop(selected, code, top)
             Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
                 Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = { listOpen = true }, modifier = Modifier.fillMaxWidth()) { Text("Создать список") }
+                Spacer(Modifier.height(8.dp))
                 SearchBar(
                     query = query,
                     onChange = { query = it; message = "" },

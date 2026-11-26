@@ -73,6 +73,7 @@ class CgBridge {
     @Volatile var desktopMode = false
     @Volatile var darkMode = false
     @Volatile var listMode = 0
+    @Volatile var noticesNative = true
 
     @JavascriptInterface
     fun log(line: String) {
@@ -86,6 +87,10 @@ class CgBridge {
     /** Сайт открывает свой сканер (getUserMedia) — вместо камеры сайта открываем сканер приложения. */
     @JavascriptInterface
     fun scanOn(): Boolean = scanNative
+
+    /** Вспомогательные уведомления приложения включены: false — сообщения сайта показываются как на самом сайте. */
+    @JavascriptInterface
+    fun noticesOn(): Boolean = noticesNative
 
     /** Режим «Заказ: код в фильтр GTIN и отметка позиции» включён в настройках. */
     @JavascriptInterface
@@ -263,6 +268,15 @@ object CoglasWeb {
     fun setNoticeStyle(ctx: Context, v: Int) {
         CoglasTr.setNoticeStyle(ctx, v)
         noticeStyle = v
+    }
+
+    /** Вспомогательные уведомления приложения (зелёные сообщения и галочка после скана) вместо уведомлений сайта. */
+    var appNotices by mutableStateOf(true)
+
+    fun setAppNotices(ctx: Context, on: Boolean) {
+        CoglasTr.setNotices(ctx, on)
+        appNotices = on
+        bridge.noticesNative = on
     }
 
     fun setListView(ctx: Context, v: Int) {
@@ -595,6 +609,8 @@ object CoglasWeb {
         bridge.darkMode = dark
         listView = CoglasTr.listView(app)
         noticeStyle = CoglasTr.noticeStyle(app)
+        appNotices = CoglasTr.notices(app)
+        bridge.noticesNative = appNotices
         bridge.listMode = listView
         CoglasPages.init(app)
 
@@ -990,6 +1006,8 @@ object CoglasTr {
     fun listView(ctx: Context): Int = sp(ctx).getInt("listview", 0)
     fun noticeStyle(ctx: Context): Int = sp(ctx).getInt("nstyle", 1)
     fun setNoticeStyle(ctx: Context, v: Int) { sp(ctx).edit().putInt("nstyle", v).apply() }
+    fun notices(ctx: Context): Boolean = sp(ctx).getBoolean("notices", true)
+    fun setNotices(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("notices", on).apply() }
     fun setListView(ctx: Context, v: Int) { sp(ctx).edit().putInt("listview", v).apply() }
     fun scan(ctx: Context): Boolean = sp(ctx).getBoolean("scan", true)
     fun setScan(ctx: Context, on: Boolean) { sp(ctx).edit().putBoolean("scan", on).apply() }
