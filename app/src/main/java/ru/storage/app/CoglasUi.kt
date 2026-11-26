@@ -666,7 +666,7 @@ private fun CgErrorBox(err: CgError, onRetry: () -> Unit, goSite: () -> Unit) {
 }
 
 @Composable
-private fun CgCardView(card: CgCard) {
+internal fun CgCardView(card: CgCard) {
     Card(
         Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

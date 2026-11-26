@@ -54,8 +54,12 @@ import kotlinx.coroutines.withContext
  * экран вкладки уничтожается, и «Назад» раньше падал сразу в корень «Работы». Теперь возврат — в то окно, откуда партию открыли.
  */
 object TabNav {
+    /** Бывшее содержимое «Работы» (Ручной, Автоприём, Coglas…): теперь открывается из «Прочее». */
     var work by mutableStateOf<String?>(null)
     var other by mutableStateOf<String?>(null)
+    /** Новая вкладка «Работа»: открытый раздел (Приём, Сборка…) и открытое в нём действие. */
+    var job by mutableStateOf<String?>(null)
+    var jobAction by mutableStateOf<String?>(null)
 }
 
 /** Делегат для локальной переменной экрана, которая на самом деле лежит в TabNav. */
@@ -71,14 +75,29 @@ fun Placeholder(title: String) {
     }
 }
 
-/** Окно «Прочее»: шаблоны накладных, каталог товаров, инфо. */
+/** Окно «Прочее»: всё прежнее содержимое «Работы» (приём, Coglas…), шаблоны накладных, каталог товаров, инфо. */
 @Composable
-fun OtherScreen(prefs: Prefs) {
+fun OtherScreen(prefs: Prefs, receiver: String = "") {
     var section by NavVar({ TabNav.other }, { TabNav.other = it })
+    var oldMode by NavVar({ TabNav.work }, { TabNav.work = it })
+    var viewReceipt by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteJob by remember { mutableStateOf<AutoJob?>(null) }
     val current = section
     val ctx = LocalContext.current
     LaunchedEffect(Unit) { InvoiceProfiles.load(ctx) }
-    SideEffect { TabRoot.set(2, section == null) }
+    SideEffect { TabRoot.set(2, section == null && oldMode == null && viewReceipt == null) }
+    val rid = viewReceipt
+    if (rid != null) {
+        ReceiptCardScreen(rid) { viewReceipt = null }
+        return
+    }
+    if (oldMode != null && current == null) {
+        // окно бывшей «Работы» (Ручной, Автоприём, Coglas и т. д.); «Назад» возвращает на корень «Прочее»
+        ReceiveScreen(prefs, receiver)
+        return
+    }
+    val autoCount = AutoReceiveHolder.jobs.count { !it.nameMode && !it.saved }
+    val nameCount = AutoReceiveHolder.jobs.count { it.nameMode && !it.saved }
     when {
         current == "Каталог товаров" -> CatalogScreen(prefs) { section = null }
         current == "EAN" -> EanScreen(prefs) { section = null }
@@ -102,6 +121,15 @@ fun OtherScreen(prefs: Prefs) {
             Spacer(Modifier.height(16.dp))
             TileGrid(
                 listOf(
+                    TileSpec("Ручной", Icons.Default.Edit) { oldMode = "Ручной" },
+                    TileSpec("По наименованию", Icons.Default.Search, nameCount) { oldMode = "По наименованию" },
+                    TileSpec("Автоприём", Icons.Default.Refresh, autoCount) { oldMode = "Автоприём" },
+                    TileSpec("Приём B-Ware", Icons.Default.Add) { oldMode = "Приём B-Ware" },
+                    TileSpec("Инвентаризация", Icons.Default.Done) { oldMode = "Инвентаризация" },
+                    TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { oldMode = "Инвентарь B-Ware" },
+                    TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { oldMode = "Отправка" },
+                    TileSpec("Выгрузка", Icons.Default.ShoppingCart) { oldMode = "Выгрузка" },
+                    TileSpec("Coglas", Icons.Default.Place) { oldMode = "Coglas" },
                     TileSpec("Партии", Icons.Default.Add) { section = "Партии" },
                     TileSpec("Сборка", Icons.Default.ShoppingCart) { section = "Сборка" },
                     TileSpec("Списки с iPhone", Icons.Default.Share) { section = "Списки с iPhone" },
@@ -120,7 +148,37 @@ fun OtherScreen(prefs: Prefs) {
                     TileSpec("Итог приёма", Icons.Default.Check) { section = "Итог приёма" }
                 )
             )
+
+            if (!Session.isAdmin) {
+                ReceivedGoodsList { viewReceipt = it }
+            }
+
+            val jobs = AutoReceiveHolder.jobs.filter { !it.nameMode }
+            if (jobs.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Text("Партии в работе: ${jobs.size}", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Каждую партию можно свернуть и вернуться к ней позже — она не закроется, пока вы её не сохраните или не удалите.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                jobs.forEach { j -> JobCard(j) { deleteJob = it } }
+            }
         }
+    }
+
+    deleteJob?.let { j ->
+        AlertDialog(
+            onDismissRequest = { deleteJob = null },
+            title = { Text(if (j.saved) "Убрать из списка?" else "Удалить партию?") },
+            text = {
+                Text(if (j.saved) "Партия уже сохранена, из списка она просто исчезнет."
+                else "Партия не сохранена. Введённые количества будут потеряны.")
+            },
+            confirmButton = {
+                Button(onClick = { AutoReceiveHolder.remove(j); deleteJob = null }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { deleteJob = null }) { Text("Отмена") } }
+        )
     }
 }
 
@@ -190,14 +248,11 @@ private fun ProfileRow(label: String, value: String) {
 
 @Composable
 fun ReceiveScreen(prefs: Prefs, receiver: String) {
+    // Вызывается из «Прочее», только когда выбрано одно из бывших окон «Работы»; корень (плитки, партии) рисует OtherScreen.
     var mode by NavVar({ TabNav.work }, { TabNav.work = it })
-    var viewReceipt by rememberSaveable { mutableStateOf<String?>(null) }
-    val admin = Session.isAdmin
     val current = mode
     val ctx = LocalContext.current
-    SideEffect { TabRoot.set(1, mode == null && viewReceipt == null) }
     var pickMode by remember { mutableStateOf("auto") }
-    var deleteJob by remember { mutableStateOf<AutoJob?>(null) }
     var showFiles by rememberSaveable { mutableStateOf(false) }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         val m = pickMode
@@ -247,11 +302,6 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
         }
     }
 
-    val rid = viewReceipt
-    if (rid != null) {
-        ReceiptCardScreen(rid) { viewReceipt = null }
-        return
-    }
     if (current == "Ручной") {
         ManualReceiveScreen(prefs, receiver) { mode = null }
         return
@@ -311,58 +361,6 @@ fun ReceiveScreen(prefs: Prefs, receiver: String) {
     if (current != null) {
         SectionScreen(current) { mode = null }
         return
-    }
-
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
-    ) {
-        Text("Работа", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(16.dp))
-        val autoCount = AutoReceiveHolder.jobs.count { !it.nameMode && !it.saved }
-        val nameCount = AutoReceiveHolder.jobs.count { it.nameMode && !it.saved }
-        TileGrid(
-            listOf(
-                TileSpec("Ручной", Icons.Default.Edit) { mode = "Ручной" },
-                TileSpec("По наименованию", Icons.Default.Search, nameCount) { mode = "По наименованию" },
-                TileSpec("Автоприём", Icons.Default.Refresh, autoCount) { mode = "Автоприём" },
-                TileSpec("Приём B-Ware", Icons.Default.Add) { mode = "Приём B-Ware" },
-                TileSpec("Инвентаризация", Icons.Default.Done) { mode = "Инвентаризация" },
-                TileSpec("Инвентарь B-Ware", Icons.Default.Warning) { mode = "Инвентарь B-Ware" },
-                TileSpec("Отправка", Icons.AutoMirrored.Filled.Send) { mode = "Отправка" },
-                TileSpec("Выгрузка", Icons.Default.ShoppingCart) { mode = "Выгрузка" },
-                TileSpec("Coglas", Icons.Default.Place) { mode = "Coglas" }
-            )
-        )
-
-        if (!admin) {
-            ReceivedGoodsList { viewReceipt = it }
-        }
-
-        val jobs = AutoReceiveHolder.jobs.filter { !it.nameMode }
-        if (jobs.isNotEmpty()) {
-            Spacer(Modifier.height(20.dp))
-            Text("Партии в работе: ${jobs.size}", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Каждую партию можно свернуть и вернуться к ней позже — она не закроется, пока вы её не сохраните или не удалите.",
-                style = MaterialTheme.typography.bodySmall
-            )
-            jobs.forEach { j -> JobCard(j) { deleteJob = it } }
-        }
-    }
-
-    deleteJob?.let { j ->
-        AlertDialog(
-            onDismissRequest = { deleteJob = null },
-            title = { Text(if (j.saved) "Убрать из списка?" else "Удалить партию?") },
-            text = {
-                Text(if (j.saved) "Партия уже сохранена, из списка она просто исчезнет."
-                else "Партия не сохранена. Введённые количества будут потеряны.")
-            },
-            confirmButton = {
-                Button(onClick = { AutoReceiveHolder.remove(j); deleteJob = null }) { Text("Удалить") }
-            },
-            dismissButton = { TextButton(onClick = { deleteJob = null }) { Text("Отмена") } }
-        )
     }
 }
 

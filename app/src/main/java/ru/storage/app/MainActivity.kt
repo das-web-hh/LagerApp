@@ -353,8 +353,8 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
     /** Открыть вкладку из любого места: свёрнутая партия закрывается (остаётся в работе), вкладка открывается с начала. */
     fun go(i: Int) {
         Incoming.openPath = null
-        if (i == 1) TabNav.work = null
-        if (i == 2) TabNav.other = null
+        if (i == 1) { TabNav.job = null; TabNav.jobAction = null }
+        if (i == 2) { TabNav.other = null; TabNav.work = null }
         resets[i] = resets[i] + 1
         selected = i
     }
@@ -456,13 +456,9 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                         selected = selected == i,
                         onClick = { go(i) },
                         icon = {
-                            if (i == 1) {
-                                val n = AutoReceiveHolder.jobs.count { !it.saved }
-                                BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
-                                    Icon(tab.icon, contentDescription = tab.title)
-                                }
-                            } else if (i == 2) {
-                                val n = InvoiceProfiles.newCount
+                            if (i == 2) {
+                                // партии в работе (бывшая «Работа») и новые шаблоны накладных
+                                val n = InvoiceProfiles.newCount + AutoReceiveHolder.jobs.count { !it.saved }
                                 BadgedBox(badge = { if (n > 0) Badge { Text(n.toString()) } }) {
                                     Icon(tab.icon, contentDescription = tab.title)
                                 }
@@ -526,8 +522,8 @@ fun MainScreen(prefs: Prefs, profile: UserProfile, onLogout: () -> Unit) {
                             ) { Incoming.openPath = null }
                         } else when (tab) {
                             0 -> HomeScreen(prefs, profile.firstName) { go(it) }
-                            1 -> ReceiveScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
-                            2 -> OtherScreen(prefs)
+                            1 -> WorkScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
+                            2 -> OtherScreen(prefs, "${profile.firstName} ${profile.lastName}".trim())
                             else -> MoreScreen(profile, prefs, onLogout)
                         }
                     }
