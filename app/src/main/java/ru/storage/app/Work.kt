@@ -112,7 +112,7 @@ fun WorkScreen(prefs: Prefs, receiver: String) {
     if (l != null) {
         when {
             l == "search" -> ProductSearchScreen(prefs) { live = null }
-            l == "unload" -> UnloadScreen { live = null }
+            l == "unload" -> UnloadingScreen(prefs, onOpenReceive = { live = "manual" }) { live = null }
             l == "manual" -> ManualReceiveScreen(prefs, receiver) { live = null }
             l == "assembly" -> AssemblyScreen(prefs, receiver) { live = null }
             l == "send" -> SendHubScreen { live = null }

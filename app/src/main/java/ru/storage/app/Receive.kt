@@ -71,6 +71,17 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
     var metaStamp by remember { mutableStateOf("") }
     var metaAt by remember { mutableStateOf<Long?>(null) }
     val clipboard = LocalClipboardManager.current
+    // разгрузка, к которой привязан этот приём (машина, время привоза, EB, Lieferant)
+    remember { UnloadStore.load(ctx) }
+    var linkedUnload by remember { mutableStateOf<String?>(null) }
+    var pickUnload by remember { mutableStateOf(false) }
+    // заказ из вставки совпал с EB разгрузки — привязываем сами
+    LaunchedEffect(metaOrder) {
+        if (linkedUnload == null && metaOrder.isNotBlank()) {
+            val eb = Ai.latinOrder(metaOrder)
+            UnloadStore.items.firstOrNull { it.eb.isNotBlank() && it.eb.equals(eb, true) }?.let { linkedUnload = it.id }
+        }
+    }
 
     fun addRow(p: Product) {
         val existing = rows.firstOrNull { it.productId == p.id }
@@ -191,6 +202,10 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         }
         val head = listOf(metaSender, metaOrder, metaStamp).filter { it.isNotBlank() }.joinToString(" · ")
         if (head.isNotEmpty()) Text(head, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+        val lu = linkedUnload?.let { UnloadStore.get(it) }
+        OutlinedButton(onClick = { pickUnload = true }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            Text(if (lu == null) "Привязать разгрузку" else unloadLine(lu), maxLines = 2)
+        }
 
         if (siteSug.items.isNotEmpty()) {
             Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -255,6 +270,19 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
         }
     }
 
+    if (pickUnload) {
+        UnloadPickDialog(
+            onDismiss = { pickUnload = false },
+            onClear = { linkedUnload = null; pickUnload = false },
+            onPick = { uid ->
+                linkedUnload = uid
+                pickUnload = false
+                // номер заказа в приём подтягивается из EB разгрузки, если свой ещё не указан
+                UnloadStore.get(uid)?.let { u -> if (metaOrder.isBlank() && u.eb.isNotBlank()) metaOrder = u.eb }
+            }
+        )
+    }
+
     if (showDialog) {
         SaveReceiptDialog(
             initialSender = metaSender,
@@ -283,6 +311,8 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
                     Cloud.saveReceipt(db, r)
                     Media.uploadPending(ctx, db)
                 }
+                linkedUnload?.let { UnloadStore.linkReceipt(ctx, it, r.id) }
+                linkedUnload = null
                 rows.clear()
                 metaSender = ""; metaOrder = ""; metaStamp = ""; metaAt = null
                 showDialog = false

@@ -379,6 +379,13 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         info("Кто принял", r.receiver)
         info("Номер заказа", Ai.latinOrder(r.orderNo))
         info("Отправитель", r.sender)
+        UnloadStore.load(ctx)
+        UnloadStore.byReceipt(r.id)?.let { u ->
+            info("Машина", u.car)
+            info("Привезли", fmtTime(u.arrivedAt))
+            info("EB", u.eb)
+            info("Lieferant", u.lieferant)
+        }
         info("Позиций", "${r.items.size} · всего ${cardFmt(total)} шт")
 
         Spacer(Modifier.height(12.dp))
