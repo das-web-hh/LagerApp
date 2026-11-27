@@ -397,6 +397,8 @@ object CoglasWeb {
         noticeGone = false
         noticeTick++
         if (kind != "post") return
+        // накладная проведена: партия сканов закрыта
+        appCtx?.let { try { ScanSession.clear(it) } catch (e: Exception) { } }
         // звуковой сигнал «накладная проведена, всё успешно»
         try {
             val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100)
@@ -523,7 +525,10 @@ object CoglasWeb {
     var foundBannerShown by mutableStateOf(false)
 
     fun scanFound(text: String = "") {
-        if (text.isNotBlank()) { foundText = text; foundTextTick++ }
+        if (text.isNotBlank()) {
+            foundText = text; foundTextTick++
+            appCtx?.let { try { ScanSession.refineLast(it, text) } catch (e: Exception) { } }
+        }
         foundTick++
         val c = appCtx ?: return
         try {
@@ -553,6 +558,13 @@ object CoglasWeb {
     /** Код со сканера приложения подставляется в поле страницы и подтверждается Enter, как от сканера-«клавиатуры». */
     fun deliverScan(code: String) {
         main.post {
+            // сканы на странице заказа / накладной копятся в партию (ScanSession), пока накладную не проведут
+            runJs("window.__cgScanCtx ? window.__cgScanCtx() : ''") { k ->
+                val c = appCtx
+                if (c != null && (k == "order" || k == "note")) {
+                    try { ScanSession.record(c, code) } catch (e: Exception) { }
+                }
+            }
             runJs("window.__cgScanResult ? window.__cgScanResult(" + JSONObject.quote(code) + ") : 'nohook'") { r ->
                 if (r != "ok") {
                     val ctx = appCtx
@@ -616,7 +628,7 @@ object CoglasWeb {
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
         zoomSaved = CoglasTr.zoom(app, desktop)
-        script = asset(app, "hook.js") + "\n" + asset(app, "bar.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict) + "\n" + asset(app, "unload.js")
+        script = asset(app, "hook.js") + "\n" + asset(app, "bar.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict) + "\n" + asset(app, "unload.js") + "\n" + asset(app, "scanctx.js")
 
         val w = WebView(MutableContextWrapper(ctx))
         // ВАЖНО: без match_parent WebView внутри Compose считает свою высоту «по содержимому» (0),
