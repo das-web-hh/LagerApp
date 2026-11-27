@@ -200,16 +200,21 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
     var editId by rememberSaveable { mutableStateOf<String?>(null) }
     // "" — распознавание без выбранной записи; иначе id записи
     var docFor by rememberSaveable { mutableStateOf<String?>(null) }
-    val d = docFor
-    val e = editId
-    if (d != null) {
-        UnloadDocScreen(prefs, d.ifEmpty { null }) { docFor = null }
-        return
+    SlidePages(UlgPage(editId, docFor), { p -> if (p.doc != null) 2 else if (p.edit != null) 1 else 0 }) { p ->
+        val d = p.doc
+        val e = p.edit
+        when {
+            d != null -> UnloadDocScreen(prefs, d.ifEmpty { null }) { docFor = null }
+            e != null -> UnloadEditScreen(e, onOpenDoc = { docFor = it }, onBack = { editId = null })
+            else -> UnloadList(onNew = { editId = UUID.randomUUID().toString() }, onOpen = { editId = it }, onScan = { docFor = "" }, onOpenReceive = onOpenReceive, onBack = onBack)
+        }
     }
-    if (e != null) {
-        UnloadEditScreen(e, onOpenDoc = { docFor = it }, onBack = { editId = null })
-        return
-    }
+}
+
+private data class UlgPage(val edit: String?, val doc: String?)
+
+@Composable
+private fun UnloadList(onNew: () -> Unit, onOpen: (String) -> Unit, onScan: () -> Unit, onOpenReceive: () -> Unit, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
 
     Column(Modifier.fillMaxSize()) {
@@ -218,7 +223,7 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
             Text("Разгрузка", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(12.dp))
             Button(
-                onClick = { editId = UUID.randomUUID().toString() },
+                onClick = onNew,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
             ) {
                 Icon(Icons.Default.Add, contentDescription = null)
@@ -233,7 +238,7 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
                 LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(list, key = { it.id }) { r ->
                         Card(
-                            onClick = { editId = r.id },
+                            onClick = { onOpen(r.id) },
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -261,7 +266,7 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
                 Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(onClick = { docFor = "" }, modifier = Modifier.weight(1f)) { Text("Сканировать документ", maxLines = 1) }
+                OutlinedButton(onClick = onScan, modifier = Modifier.weight(1f)) { Text("Сканировать документ", maxLines = 1) }
                 OutlinedButton(onClick = onOpenReceive, modifier = Modifier.weight(1f)) { Text("Приём товаров", maxLines = 1) }
             }
         }
