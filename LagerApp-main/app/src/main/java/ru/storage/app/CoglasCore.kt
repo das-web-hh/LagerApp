@@ -616,7 +616,7 @@ object CoglasWeb {
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
         zoomSaved = CoglasTr.zoom(app, desktop)
-        script = asset(app, "hook.js") + "\n" + asset(app, "bar.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict)
+        script = asset(app, "hook.js") + "\n" + asset(app, "bar.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict) + "\n" + asset(app, "unload.js")
 
         val w = WebView(MutableContextWrapper(ctx))
         // ВАЖНО: без match_parent WebView внутри Compose считает свою высоту «по содержимому» (0),
@@ -724,6 +724,7 @@ object CoglasWeb {
             override fun onPageFinished(view: WebView, url: String?) {
                 if (hostOk(url)) {
                     view.evaluateJavascript(script, null); watch(view); nudge(view, 0)
+                    pushUnload()
                     applyZoom(400L); applyZoom(1500L); applyZoom(3500L)
                 }
                 canGoBack = view.canGoBack()
@@ -922,6 +923,29 @@ object CoglasWeb {
     }
 
     // ---------------- выполнить JS на странице ----------------
+
+    /**
+     * «Работа → Разгрузка» → сайт: список разгрузок с EB (номер машины и дата привоза) для автозаполнения формы
+     * «Добавить накладную» (unload.js). Вызывается при загрузке страницы и при любом изменении записей разгрузки.
+     */
+    fun pushUnload() {
+        val w = web ?: return
+        val c = appCtx ?: return
+        try {
+            UnloadStore.load(c)
+            val fmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.ROOT)
+            val arr = org.json.JSONArray()
+            UnloadStore.items.filter { it.eb.isNotBlank() }.forEach { r ->
+                arr.put(
+                    JSONObject().put("id", r.id).put("eb", Ai.latinOrder(r.eb)).put("car", r.car).put("doc", r.docNo)
+                        .put("date", fmt.format(java.util.Date(r.arrivedAt)))
+                )
+            }
+            val js = "window.__cgUnload=" + arr.toString() + ";"
+            main.post { try { w.evaluateJavascript(js, null) } catch (e: Exception) { } }
+        } catch (e: Exception) {
+        }
+    }
 
     fun runJs(js: String, onResult: (String) -> Unit) {
         val w = web

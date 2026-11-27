@@ -54,7 +54,7 @@ private val WORK_SECTIONS = listOf(
     WorkSection(
         "Приём", Icons.Default.Add, listOf(
             WorkAction("Разгрузка", "unload"),
-            WorkAction("Посчитать товары", "manual"),
+            WorkAction("Посчитать товары", "coglas"),
             WorkAction("Проверка брака и расхождений"),
             WorkAction("Маркировка и печать этикеток"),
             WorkAction("Размещение на склад"),
@@ -161,6 +161,7 @@ fun WorkScreen(prefs: Prefs, receiver: String) {
                 l == "search" -> ProductSearchScreen(prefs) { live = null }
                 l == "unload" -> UnloadingScreen(prefs, onOpenReceive = { live = "manual" }) { live = null }
                 l == "manual" -> ManualReceiveScreen(prefs, receiver) { live = null }
+                l == "coglas" -> CoglasScreen(prefs) { live = null }
                 l == "assembly" -> AssemblyScreen(prefs, receiver) { live = null }
                 l == "send" -> SendHubScreen { live = null }
                 l == "inventory" -> InventoryScreen(receiver) { live = null }

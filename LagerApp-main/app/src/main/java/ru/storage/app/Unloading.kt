@@ -147,6 +147,7 @@ object UnloadStore {
         if (i >= 0) items[i] = r else items.add(r)
         items.sortByDescending { it.arrivedAt }
         persist(ctx)
+        try { CoglasWeb.pushUnload() } catch (e: Exception) { }
     }
 
     @Synchronized
@@ -161,6 +162,7 @@ object UnloadStore {
     fun delete(ctx: Context, id: String) {
         items.removeAll { it.id == id }
         persist(ctx)
+        try { CoglasWeb.pushUnload() } catch (e: Exception) { }
     }
 
     /** Привязка приёма к разгрузке (в «Посчитать товары»). */
