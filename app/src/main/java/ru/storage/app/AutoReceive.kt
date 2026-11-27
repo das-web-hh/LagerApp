@@ -1405,12 +1405,14 @@ private fun ColumnScope.NameModeMain(
             // одинаковые строки (30 + ещё 30): считаем в первую, где факт ещё не дошёл до плана
             fun pick(l: List<ItemRow>) = l.firstOrNull { parseQ(it.fact) < parseQ(it.qty) } ?: l.firstOrNull()
             var row = pick(hard)
+            var inCatalog = false
             if (row == null) {
                 // 2) товар каталога по этому коду (с учётом всех названий одного товара) → его строка в списке
                 val ids = HashSet<String>()
                 val names = HashSet<String>()
                 withContext(Dispatchers.IO) {
                     db.findByBarcode(code)?.let { p ->
+                        inCatalog = true
                         ProductGroups.membersOf(db, p).forEach { ids.add(it.id); names.add(it.name.trim().lowercase()) }
                     }
                 }
@@ -1425,8 +1427,11 @@ private fun ColumnScope.NameModeMain(
                 scanStatus = "Нет в списке: $code"
                 ScanFeedback.beep(false)
                 scanBanner = "Нет в списке: $code" to false
+                // «не найден в базе»: нет ни в списке, ни в каталоге (в каталоге есть, но не в списке — это не ненайденный код)
+                MissingBarcodes.result(ctx, code, inCatalog)
                 return@launch
             }
+            MissingBarcodes.result(ctx, code, true)
             row.fact = fmtQ(parseQ(row.fact) + 1)
             Haptics.pulse(ctx, Haptics.TAP)
             ScanFeedback.beep(true)
@@ -1436,6 +1441,7 @@ private fun ColumnScope.NameModeMain(
             jump(row)
         }
     }
+    MissingBarcodesRef({ "" }, { job.order.takeIf { it != "none" }.orEmpty() })
     val countRef = rememberUpdatedState<(String, Boolean) -> Unit> { c, a -> countByCode(c, a) }
     val scanForRef = rememberUpdatedState(scanFor)
     DisposableEffect(Unit) {

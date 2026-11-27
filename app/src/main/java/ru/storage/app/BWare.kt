@@ -507,6 +507,7 @@ fun CatalogWheel(
                 ?: pool?.firstOrNull { sameBarcode(it.barcode, code) || (it.article.isNotBlank() && it.article.trim().equals(code, true)) }
                     ?.also { p -> pool?.remove(p); rows.add(0, p) }
             if (row != null) {
+                if (!inventory && !isolated) MissingBarcodes.result(ctx, code, true)
                 row.fact = fmtQ(bwQty(row.fact) + 1)
                 focusTarget = row; addTick++
                 if (mode == "multi") lastScan = row
@@ -518,6 +519,7 @@ fun CatalogWheel(
                 return@launch
             }
             val p = if (isolated) null else withContext(Dispatchers.IO) { db.findByBarcode(code) }
+            if (!inventory && !isolated) MissingBarcodes.result(ctx, code, p != null)
             if (p != null) {
                 addRow(p.name, p.id, fact = "1", barcode = code)
                 if (mode == "multi") lastScan = focusTarget
@@ -998,6 +1000,7 @@ internal fun BWareHeader(title: String, canClear: Boolean, canNext: Boolean, onC
 fun BWareReceiveScreen(receiver: String, onBack: () -> Unit) {
     val h = BWareHolder
     BackHandler { if (h.step == 1) h.step = 0 else onBack() }
+    MissingBarcodesRef({ "" }, { h.order })
     BWareDraftEffect("recv")   // состояние сохраняется на телефоне и в облаке: не пропадёт ни при выходе, ни при переустановке
     if (h.step == 1) {
         BWarePreview(receiver)

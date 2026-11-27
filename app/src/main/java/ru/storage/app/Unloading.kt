@@ -11,7 +11,18 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,6 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.ui.unit.dp
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
@@ -50,6 +63,8 @@ import java.util.UUID
 
 data class UnloadRec(
     val id: String,
+    /** Имя записи: кто привёз (UPS, DHL, перевозчик) или что привезли (Bigbag, картоны, товары) */
+    val name: String = "",
     val car: String = "",
     val pallets: Int = 0,
     val ew: Int = 0,
@@ -90,7 +105,7 @@ object UnloadStore {
                 }
                 list.add(
                     UnloadRec(
-                        id = o.getString("id"), car = o.optString("car"),
+                        id = o.getString("id"), name = o.optString("name"), car = o.optString("car"),
                         pallets = o.optInt("pallets"), ew = o.optInt("ew"), cartons = o.optInt("cartons"),
                         arrivedAt = o.optLong("arrivedAt"), eb = o.optString("eb"), lieferant = o.optString("lieferant"),
                         docNo = o.optString("docNo"), docFiles = strs("docFiles"), receipts = strs("receipts"),
@@ -110,7 +125,7 @@ object UnloadStore {
             items.forEach { r ->
                 arr.put(
                     JSONObject()
-                        .put("id", r.id).put("car", r.car).put("pallets", r.pallets).put("ew", r.ew).put("cartons", r.cartons)
+                        .put("id", r.id).put("name", r.name).put("car", r.car).put("pallets", r.pallets).put("ew", r.ew).put("cartons", r.cartons)
                         .put("arrivedAt", r.arrivedAt).put("eb", r.eb).put("lieferant", r.lieferant).put("docNo", r.docNo)
                         .put("docFiles", JSONArray(r.docFiles)).put("receipts", JSONArray(r.receipts))
                         .put("saved", r.saved).put("createdAt", r.createdAt).put("updatedAt", r.updatedAt)
@@ -132,6 +147,7 @@ object UnloadStore {
         if (i >= 0) items[i] = r else items.add(r)
         items.sortByDescending { it.arrivedAt }
         persist(ctx)
+        try { CoglasWeb.pushUnload() } catch (e: Exception) { }
     }
 
     @Synchronized
@@ -146,6 +162,7 @@ object UnloadStore {
     fun delete(ctx: Context, id: String) {
         items.removeAll { it.id == id }
         persist(ctx)
+        try { CoglasWeb.pushUnload() } catch (e: Exception) { }
     }
 
     /** Привязка приёма к разгрузке (в «Посчитать товары»). */
@@ -158,6 +175,7 @@ object UnloadStore {
 
 /** «Машина 123 · привезли 26.11.2026 08:30 · EB1234567 · Lieferant 4711» — одна строка для списков и приёма. */
 fun unloadLine(r: UnloadRec): String = listOf(
+    r.name.takeIf { it.isNotBlank() },
     "Машина " + r.car.ifBlank { "—" },
     "привезли " + fmtTime(r.arrivedAt),
     r.eb.takeIf { it.isNotBlank() },
@@ -184,16 +202,21 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
     var editId by rememberSaveable { mutableStateOf<String?>(null) }
     // "" — распознавание без выбранной записи; иначе id записи
     var docFor by rememberSaveable { mutableStateOf<String?>(null) }
-    val d = docFor
-    val e = editId
-    if (d != null) {
-        UnloadDocScreen(prefs, d.ifEmpty { null }) { docFor = null }
-        return
+    SlidePages(UlgPage(editId, docFor), { p -> if (p.doc != null) 2 else if (p.edit != null) 1 else 0 }) { p ->
+        val d = p.doc
+        val e = p.edit
+        when {
+            d != null -> UnloadDocScreen(prefs, d.ifEmpty { null }) { docFor = null }
+            e != null -> UnloadEditScreen(e, onOpenDoc = { docFor = it }, onBack = { editId = null })
+            else -> UnloadList(onNew = { editId = UUID.randomUUID().toString() }, onOpen = { editId = it }, onScan = { docFor = "" }, onOpenReceive = onOpenReceive, onBack = onBack)
+        }
     }
-    if (e != null) {
-        UnloadEditScreen(e, onOpenDoc = { docFor = it }, onBack = { editId = null })
-        return
-    }
+}
+
+private data class UlgPage(val edit: String?, val doc: String?)
+
+@Composable
+private fun UnloadList(onNew: () -> Unit, onOpen: (String) -> Unit, onScan: () -> Unit, onOpenReceive: () -> Unit, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
 
     Column(Modifier.fillMaxSize()) {
@@ -202,7 +225,7 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
             Text("Разгрузка", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(12.dp))
             Button(
-                onClick = { editId = UUID.randomUUID().toString() },
+                onClick = onNew,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
             ) {
                 Icon(Icons.Default.Add, contentDescription = null)
@@ -217,7 +240,7 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
                 LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(list, key = { it.id }) { r ->
                         Card(
-                            onClick = { editId = r.id },
+                            onClick = { onOpen(r.id) },
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -225,21 +248,14 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
                             Column(Modifier.padding(14.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        r.car.ifBlank { "Без номера машины" },
+                                        r.name.ifBlank { r.car.ifBlank { "Без имени" } },
                                         style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
                                     )
                                     if (!r.saved) Text("черновик", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
                                 }
-                                Text("Привезли: " + fmtTime(r.arrivedAt), style = MaterialTheme.typography.bodyMedium)
-                                Text(ulgCounts(r), style = MaterialTheme.typography.bodyMedium)
-                                val doc = listOf(
-                                    r.eb.takeIf { it.isNotBlank() },
-                                    r.lieferant.takeIf { it.isNotBlank() }?.let { "Lieferant $it" },
-                                    r.docNo.takeIf { it.isNotBlank() }?.let { "док. $it" }
-                                ).filterNotNull().joinToString(" · ")
-                                if (doc.isNotEmpty()) Text(doc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                if (r.receipts.isNotEmpty()) Text("Приёмов привязано: ${r.receipts.size}", style = MaterialTheme.typography.bodySmall)
+                                Text(fmtTime(r.arrivedAt), style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
@@ -252,7 +268,7 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
                 Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(onClick = { docFor = "" }, modifier = Modifier.weight(1f)) { Text("Сканировать документ", maxLines = 1) }
+                OutlinedButton(onClick = onScan, modifier = Modifier.weight(1f)) { Text("Сканировать документ", maxLines = 1) }
                 OutlinedButton(onClick = onOpenReceive, modifier = Modifier.weight(1f)) { Text("Приём товаров", maxLines = 1) }
             }
         }
@@ -261,18 +277,116 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
 
 // ====================================================================== создание / редактирование
 
-private fun ulgPickDate(ctx: Context, ms: Long, onPick: (Long) -> Unit) {
-    val c = Calendar.getInstance().apply { timeInMillis = ms }
-    DatePickerDialog(ctx, { _, y, m, d ->
-        onPick(Calendar.getInstance().apply { timeInMillis = ms; set(y, m, d) }.timeInMillis)
-    }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
+/** Номер машины: только латиница ЗАГЛАВНЫМИ, цифры, пробел и дефис; русские буквы-двойники (А, В, Е, К, М, Н, О, Р, С, Т, У, Х) превращаются в латинские. */
+private val CAR_MAP = mapOf(
+    'А' to 'A', 'В' to 'B', 'Е' to 'E', 'К' to 'K', 'М' to 'M', 'Н' to 'H',
+    'О' to 'O', 'Р' to 'P', 'С' to 'C', 'Т' to 'T', 'У' to 'Y', 'Х' to 'X'
+)
+
+private fun ulgCar(s: String): String {
+    val sb = StringBuilder()
+    for (ch in s.uppercase()) {
+        val c = CAR_MAP[ch] ?: ch
+        if (c in 'A'..'Z' || c in '0'..'9' || c == ' ' || c == '-') sb.append(c)
+    }
+    return sb.toString().take(15)
 }
 
-private fun ulgPickTime(ctx: Context, ms: Long, onPick: (Long) -> Unit) {
-    val c = Calendar.getInstance().apply { timeInMillis = ms }
-    TimePickerDialog(ctx, { _, h, mi ->
-        onPick(Calendar.getInstance().apply { timeInMillis = ms; set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, mi); set(Calendar.SECOND, 0) }.timeInMillis)
-    }, c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), true).show()
+/** Один барабан: вертикальный список, значение под подсветкой по центру выбрано. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun UlgWheel(labels: List<String>, index: Int, modifier: Modifier = Modifier, onChange: (Int) -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val itemH = 44.dp
+    val boxH = 220.dp
+    val st = rememberLazyListState(initialFirstVisibleItemIndex = index.coerceIn(0, labels.lastIndex))
+    val cur by rememberUpdatedState(onChange)
+    var last by remember { mutableIntStateOf(index) }
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            val li = st.layoutInfo
+            val c = (li.viewportStartOffset + li.viewportEndOffset) / 2
+            li.visibleItemsInfo.minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - c) }?.index
+        }.collect { i ->
+            if (i != null && i != last) {
+                last = i
+                cur(i)
+                Haptics.pulse(ctx, Haptics.PICKER)
+            }
+        }
+    }
+    LazyColumn(
+        state = st,
+        flingBehavior = rememberSnapFlingBehavior(st),
+        contentPadding = PaddingValues(vertical = (boxH - itemH) / 2),
+        modifier = modifier.height(boxH)
+    ) {
+        itemsIndexed(labels) { i, t ->
+            val sel = i == last
+            Box(
+                Modifier.fillMaxWidth().height(itemH).clickable { scope.launch { st.animateScrollToItem(i) } },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    t,
+                    fontSize = if (sel) 22.sp else 17.sp,
+                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                    color = if (sel) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/** Выбор даты и времени барабанами: день · месяц · год | часы : минуты. */
+@Composable
+private fun UlgDateTimeDialog(initial: Long, onDismiss: () -> Unit, onPick: (Long) -> Unit) {
+    val cal0 = remember { Calendar.getInstance().apply { timeInMillis = initial } }
+    var year by remember { mutableIntStateOf(cal0.get(Calendar.YEAR)) }
+    var month by remember { mutableIntStateOf(cal0.get(Calendar.MONTH) + 1) }
+    var day by remember { mutableIntStateOf(cal0.get(Calendar.DAY_OF_MONTH)) }
+    var hour by remember { mutableIntStateOf(cal0.get(Calendar.HOUR_OF_DAY)) }
+    var minute by remember { mutableIntStateOf(cal0.get(Calendar.MINUTE)) }
+    val thisYear = remember { Calendar.getInstance().get(Calendar.YEAR) }
+    val years = remember { ((minOf(thisYear, year) - 3)..(maxOf(thisYear, year) + 1)).toList() }
+    val dim = Calendar.getInstance().apply { clear(); set(year, month - 1, 1) }.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val dayShown = minOf(day, dim)
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxWidth(0.94f), shape = RoundedCornerShape(24.dp), tonalElevation = 6.dp) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Когда привезли", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.fillMaxWidth()) {
+                    Box(
+                        Modifier.align(Alignment.Center).fillMaxWidth().height(44.dp)
+                            .clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primaryContainer)
+                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        // число дней зависит от месяца: барабан дней пересоздаётся при смене длины месяца
+                        key(dim) {
+                            UlgWheel((1..dim).map { "%02d".format(it) }, dayShown - 1, Modifier.weight(1f)) { day = it + 1 }
+                        }
+                        UlgWheel((1..12).map { "%02d".format(it) }, month - 1, Modifier.weight(1f)) { month = it + 1 }
+                        UlgWheel(years.map { it.toString() }, years.indexOf(year).coerceAtLeast(0), Modifier.weight(1.4f)) { year = years[it] }
+                        Spacer(Modifier.width(10.dp))
+                        UlgWheel((0..23).map { "%02d".format(it) }, hour, Modifier.weight(1f)) { hour = it }
+                        Text(":", fontWeight = FontWeight.Bold)
+                        UlgWheel((0..59).map { "%02d".format(it) }, minute, Modifier.weight(1f)) { minute = it }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Отмена") }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = {
+                        onPick(Calendar.getInstance().apply { clear(); set(year, month - 1, dayShown, hour, minute, 0) }.timeInMillis)
+                    }) { Text("Готово") }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -280,82 +394,123 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
     val ctx = LocalContext.current
     val initial = remember(id) { UnloadStore.get(id) }
     val now0 = remember(id) { System.currentTimeMillis() }
-    var car by remember(id) { mutableStateOf(initial?.car ?: "") }
+    var name by remember(id) { mutableStateOf(initial?.name ?: "") }
+    var car by remember(id) { mutableStateOf(ulgCar(initial?.car ?: "")) }
     var pallets by remember(id) { mutableStateOf(initial?.pallets?.takeIf { it > 0 }?.toString() ?: "") }
     var ew by remember(id) { mutableStateOf(initial?.ew?.takeIf { it > 0 }?.toString() ?: "") }
     var cartons by remember(id) { mutableStateOf(initial?.cartons?.takeIf { it > 0 }?.toString() ?: "") }
     // время прибытия фиксируется само в момент открытия «Новой разгрузки»; его можно поправить
     var arrived by remember(id) { mutableLongStateOf(initial?.arrivedAt ?: now0) }
+    // новая запись открывается сразу для ввода; готовая — только для просмотра, править её можно по карандашу
+    var editing by remember(id) { mutableStateOf(initial == null) }
     var err by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
+    var pickDt by remember { mutableStateOf(false) }
     var gone by remember { mutableStateOf(false) }
     val live = UnloadStore.items.firstOrNull { it.id == id }
 
     /** Пишет только поля формы: данные документа (EB, Lieferant) не трогает. */
     fun persist(markSaved: Boolean = false, force: Boolean = false) {
-        if (gone) return
+        if (gone || !editing && !markSaved && !force) return
         val p = pallets.toIntOrNull() ?: 0
         val w = ew.toIntOrNull() ?: 0
         val c = cartons.toIntOrNull() ?: 0
-        val has = car.isNotBlank() || p > 0 || w > 0 || c > 0 || force || markSaved || UnloadStore.get(id) != null
+        val has = name.isNotBlank() || car.isNotBlank() || p > 0 || w > 0 || c > 0 || force || markSaved || UnloadStore.get(id) != null
         if (!has) return
         val base = UnloadStore.get(id) ?: UnloadRec(id = id, arrivedAt = arrived, createdAt = now0, updatedAt = now0)
         UnloadStore.upsert(
             ctx,
             base.copy(
-                car = car.trim(), pallets = p, ew = w, cartons = c, arrivedAt = arrived,
+                name = name.trim(), car = ulgCar(car).trim(), pallets = p, ew = w, cartons = c, arrivedAt = arrived,
                 saved = base.saved || markSaved, updatedAt = System.currentTimeMillis()
             )
         )
     }
 
-    // автосохранение: при каждом изменении полей (с короткой паузой) и при выходе из окна
-    LaunchedEffect(car, pallets, ew, cartons, arrived) {
+    // автосохранение (только в режиме правки): при каждом изменении полей с короткой паузой и при выходе из окна
+    LaunchedEffect(name, car, pallets, ew, cartons, arrived, editing) {
+        if (!editing) return@LaunchedEffect
         delay(400)
         persist()
     }
     DisposableEffect(id) { onDispose { persist() } }
     BackHandler { persist(); onBack() }
 
+    val c = Calendar.getInstance().apply { timeInMillis = arrived }
+    val dateTxt = "%02d.%02d.%04d".format(c.get(Calendar.DAY_OF_MONTH), c.get(Calendar.MONTH) + 1, c.get(Calendar.YEAR))
+    val timeTxt = "%02d:%02d".format(c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE))
+
+    @Composable
+    fun row(label: String, value: String) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(130.dp))
+            Text(value.ifBlank { "—" }, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        }
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        TextButton(onClick = { persist(); onBack() }) { Text("‹ Назад") }
-        Text(if (initial == null) "Новая разгрузка" else "Разгрузка", style = MaterialTheme.typography.headlineSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { persist(); onBack() }) { Text("‹ Назад") }
+            Spacer(Modifier.weight(1f))
+            // единственная кнопка изменения записи
+            if (!editing) {
+                IconButton(onClick = { editing = true }) { Icon(Icons.Default.Edit, contentDescription = "Изменить") }
+            }
+        }
+        Text(
+            if (initial == null) "Новая разгрузка" else name.ifBlank { "Разгрузка" },
+            style = MaterialTheme.typography.headlineSmall
+        )
         Spacer(Modifier.height(12.dp))
 
-        OutlinedTextField(
-            value = car, onValueChange = { car = it; err = "" },
-            label = { Text("Номер машины *") }, singleLine = true,
-            isError = err.isNotEmpty(), modifier = Modifier.fillMaxWidth()
-        )
-        if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = pallets, onValueChange = { pallets = it.filter { ch -> ch.isDigit() }.take(5) },
-            label = { Text("Паллеты") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = ew, onValueChange = { ew = it.filter { ch -> ch.isDigit() }.take(5) },
-            label = { Text("Одноразовые паллеты (Einwegpalette)") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = cartons, onValueChange = { cartons = it.filter { ch -> ch.isDigit() }.take(5) },
-            label = { Text("Картоны / посылки") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(14.dp))
-        Text("Когда привезли", style = MaterialTheme.typography.titleSmall)
-        val c = Calendar.getInstance().apply { timeInMillis = arrived }
-        val dateTxt = "%02d.%02d.%04d".format(c.get(Calendar.DAY_OF_MONTH), c.get(Calendar.MONTH) + 1, c.get(Calendar.YEAR))
-        val timeTxt = "%02d:%02d".format(c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { ulgPickDate(ctx, arrived) { arrived = it } }) { Text(dateTxt) }
-            OutlinedButton(onClick = { ulgPickTime(ctx, arrived) { arrived = it } }) { Text(timeTxt) }
-            TextButton(onClick = { arrived = System.currentTimeMillis() }) { Text("Сейчас") }
+        if (editing) {
+            OutlinedTextField(
+                value = name, onValueChange = { name = it },
+                label = { Text("Имя (кто привёз / что привезли)") },
+                placeholder = { Text("UPS, DHL, перевозчик, Bigbag, картоны, товары…") },
+                singleLine = true, modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = car, onValueChange = { car = ulgCar(it); err = "" },
+                label = { Text("Номер машины *") },
+                placeholder = { Text("HH ER 234") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                isError = err.isNotEmpty(), modifier = Modifier.fillMaxWidth()
+            )
+            if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = pallets, onValueChange = { pallets = it.filter { ch -> ch.isDigit() }.take(5) },
+                label = { Text("Паллеты") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = ew, onValueChange = { ew = it.filter { ch -> ch.isDigit() }.take(5) },
+                label = { Text("Одноразовые паллеты (Einwegpalette)") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = cartons, onValueChange = { cartons = it.filter { ch -> ch.isDigit() }.take(5) },
+                label = { Text("Картоны / посылки") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(14.dp))
+            Text("Когда привезли", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { pickDt = true }) { Text("$dateTxt  $timeTxt") }
+                TextButton(onClick = { arrived = System.currentTimeMillis() }) { Text("Сейчас") }
+            }
+        } else {
+            row("Имя", name)
+            row("Номер машины", car)
+            row("Привезли", "$dateTxt $timeTxt")
+            row("Паллеты", pallets.ifBlank { "0" })
+            row("Einwegpalette", ew.ifBlank { "0" })
+            row("Картоны / посылки", cartons.ifBlank { "0" })
         }
 
         Spacer(Modifier.height(16.dp))
@@ -376,35 +531,42 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
                 if (live != null && live.receipts.isNotEmpty()) {
                     Text("Приёмов привязано: ${live.receipts.size}", style = MaterialTheme.typography.bodySmall)
                 }
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = { persist(force = true); onOpenDoc(id) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (hasDoc) "Распознать документ заново" else "Сканировать / распознать документ")
+                if (editing) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { persist(force = true); onOpenDoc(id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (hasDoc) "Распознать документ заново" else "Сканировать / распознать документ")
+                    }
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = {
-                if (car.isBlank()) { err = "Укажите номер машины"; return@Button }
-                persist(markSaved = true)
-                onBack()
-            },
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text("Сохранить") }
-        if (initial != null) {
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("Удалить запись", color = MaterialTheme.colorScheme.error)
+        if (editing) {
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = {
+                    if (car.isBlank()) { err = "Укажите номер машины"; return@Button }
+                    persist(markSaved = true)
+                    if (initial == null) onBack() else editing = false
+                },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text("Сохранить") }
+            if (initial != null) {
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Удалить запись", color = MaterialTheme.colorScheme.error)
+                }
             }
+            Text(
+                "Все изменения сохраняются сами — в черновик, даже если не нажать «Сохранить».",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
-        Text(
-            "Все изменения сохраняются сами — в черновик, даже если не нажать «Сохранить».",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp)
-        )
     }
 
+    if (pickDt) {
+        UlgDateTimeDialog(arrived, onDismiss = { pickDt = false }, onPick = { arrived = it; pickDt = false })
+    }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },

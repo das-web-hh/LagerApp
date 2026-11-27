@@ -546,8 +546,8 @@
         if (n === 0) { verdict = 'zero'; break; }
         if (n > 1) { verdict = 'many'; break; }
       }
-      if (verdict === 'zero') { toast('Товар с кодом ' + code + ' не найден'); return false; }
-      if (verdict === 'many') { toast('По коду ' + code + ' найдено позиций: ' + total() + '. Галочка не поставлена.'); return false; }
+      if (verdict === 'zero') { try { window.WmsBridge.scanVerdict(String(code), false); } catch (x) {} toast('Товар с кодом ' + code + ' не найден'); return false; }
+      if (verdict === 'many') { try { window.WmsBridge.scanVerdict(String(code), true); } catch (x) {} toast('По коду ' + code + ' найдено позиций: ' + total() + '. Галочка не поставлена.'); return false; }
       if (!cb) { toast('Сайт не успел найти товар по коду ' + code + '. Галочка не поставлена.'); return false; }
       try { (vis(cb) ? cb : (cb.closest('label') || cb)).scrollIntoView({ block: 'nearest' }); } catch (x) {}
       if (!isChecked(cb)) {
@@ -567,6 +567,7 @@
           }
         } catch (x) {}
         try { if (window.WmsBridge.foundText) window.WmsBridge.foundText(ft || String(code)); else window.WmsBridge.found(); } catch (x) {}
+        try { window.WmsBridge.scanVerdict(String(code), true); } catch (x) {}
       }
       else toast('Не удалось поставить галочку у найденного товара (код ' + code + ').');
       return true;

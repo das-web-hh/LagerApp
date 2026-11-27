@@ -96,6 +96,12 @@ class CgBridge {
     @JavascriptInterface
     fun gtinOn(): Boolean = gtinNative
 
+    /** Итог поиска кода в окне «Заказ» (режим GTIN): found = false — сайт не нашёл товар. */
+    @JavascriptInterface
+    fun scanVerdict(code: String, found: Boolean) {
+        main.post { CoglasWeb.siteVerdict(code, found) }
+    }
+
     /** Короткое сообщение от страницы (например, «товар не найден»). */
     /** Товар найден по коду и отмечен галочкой: вибрация и большая галочка на экране. */
     @JavascriptInterface
@@ -397,6 +403,9 @@ object CoglasWeb {
         noticeGone = false
         noticeTick++
         if (kind != "post") return
+        // накладная проведена: партия сканов закрыта
+        appCtx?.let { try { ScanSession.clear(it) } catch (e: Exception) { } }
+        appCtx?.let { try { MissingBarcodes.endSession(it) } catch (e: Exception) { } }
         // звуковой сигнал «накладная проведена, всё успешно»
         try {
             val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100)
@@ -523,7 +532,10 @@ object CoglasWeb {
     var foundBannerShown by mutableStateOf(false)
 
     fun scanFound(text: String = "") {
-        if (text.isNotBlank()) { foundText = text; foundTextTick++ }
+        if (text.isNotBlank()) {
+            foundText = text; foundTextTick++
+            appCtx?.let { try { ScanSession.refineLast(it, text) } catch (e: Exception) { } }
+        }
         foundTick++
         val c = appCtx ?: return
         try {
@@ -553,6 +565,14 @@ object CoglasWeb {
     /** Код со сканера приложения подставляется в поле страницы и подтверждается Enter, как от сканера-«клавиатуры». */
     fun deliverScan(code: String) {
         main.post {
+            // сканы на странице заказа / накладной копятся в партию (ScanSession), пока накладную не проведут
+            runJs("window.__cgScanCtx ? window.__cgScanCtx() : ''") { k ->
+                val c = appCtx
+                if (c != null && (k == "order" || k == "note")) {
+                    try { ScanSession.record(c, code) } catch (e: Exception) { }
+                    try { checkMissing(c, code, k) } catch (e: Exception) { }
+                }
+            }
             runJs("window.__cgScanResult ? window.__cgScanResult(" + JSONObject.quote(code) + ") : 'nohook'") { r ->
                 if (r != "ok") {
                     val ctx = appCtx
@@ -564,6 +584,36 @@ object CoglasWeb {
                 }
             }
         }
+    }
+
+    /**
+     * Ненайденные коды в окнах «Заказ» / «Накладная». Режим GTIN в заказе: итог сообщает страница (scanVerdict).
+     * Иначе код ищется в каталоге приложения.
+     */
+    private fun checkMissing(c: Context, code: String, kind: String) {
+        MissingBarcodes.touch(code)
+        if (gtinMode && kind == "order") return
+        finishMissing(c, code)
+    }
+
+    fun siteVerdict(code: String, found: Boolean) {
+        val c = appCtx ?: return
+        if (found) { MissingBarcodes.result(c, code, true); return }
+        finishMissing(c, code)
+    }
+
+    /** Сайт (или режим без сайта) товар не нашёл: смотрим каталог приложения; нет и там — считаем ненайденным. */
+    private fun finishMissing(c: Context, code: String) {
+        val app = c.applicationContext
+        Thread {
+            val inDb = try { ProductDb.get(app).findByBarcode(code) != null } catch (e: Exception) { true }
+            main.post {
+                if (inDb) { MissingBarcodes.result(app, code, true); return@post }
+                runJs("window.__cgScanRef ? window.__cgScanRef() : ''") { ref ->
+                    MissingBarcodes.result(app, code, false, if (ref.startsWith("#")) ref else "")
+                }
+            }
+        }.start()
     }
 
     // камера для сканера на сайте: сначала разрешение Android, потом разрешение странице
@@ -616,7 +666,7 @@ object CoglasWeb {
 
         val dict = CoglasTr.dictJson(app).replace("\\", "\\\\").replace("'", "\\'")
         zoomSaved = CoglasTr.zoom(app, desktop)
-        script = asset(app, "hook.js") + "\n" + asset(app, "bar.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict)
+        script = asset(app, "hook.js") + "\n" + asset(app, "bar.js") + "\n" + asset(app, "app.js").replace("__DICT__", dict) + "\n" + asset(app, "unload.js") + "\n" + asset(app, "scanctx.js")
 
         val w = WebView(MutableContextWrapper(ctx))
         // ВАЖНО: без match_parent WebView внутри Compose считает свою высоту «по содержимому» (0),
@@ -724,6 +774,7 @@ object CoglasWeb {
             override fun onPageFinished(view: WebView, url: String?) {
                 if (hostOk(url)) {
                     view.evaluateJavascript(script, null); watch(view); nudge(view, 0)
+                    pushUnload()
                     applyZoom(400L); applyZoom(1500L); applyZoom(3500L)
                 }
                 canGoBack = view.canGoBack()
@@ -922,6 +973,29 @@ object CoglasWeb {
     }
 
     // ---------------- выполнить JS на странице ----------------
+
+    /**
+     * «Работа → Разгрузка» → сайт: список разгрузок с EB (номер машины и дата привоза) для автозаполнения формы
+     * «Добавить накладную» (unload.js). Вызывается при загрузке страницы и при любом изменении записей разгрузки.
+     */
+    fun pushUnload() {
+        val w = web ?: return
+        val c = appCtx ?: return
+        try {
+            UnloadStore.load(c)
+            val fmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.ROOT)
+            val arr = org.json.JSONArray()
+            UnloadStore.items.filter { it.eb.isNotBlank() }.forEach { r ->
+                arr.put(
+                    JSONObject().put("id", r.id).put("eb", Ai.latinOrder(r.eb)).put("car", r.car).put("doc", r.docNo)
+                        .put("date", fmt.format(java.util.Date(r.arrivedAt)))
+                )
+            }
+            val js = "window.__cgUnload=" + arr.toString() + ";"
+            main.post { try { w.evaluateJavascript(js, null) } catch (e: Exception) { } }
+        } catch (e: Exception) {
+        }
+    }
 
     fun runJs(js: String, onResult: (String) -> Unit) {
         val w = web

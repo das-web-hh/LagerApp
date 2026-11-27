@@ -1,6 +1,16 @@
 package ru.storage.app
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -44,7 +54,7 @@ private val WORK_SECTIONS = listOf(
     WorkSection(
         "Приём", Icons.Default.Add, listOf(
             WorkAction("Разгрузка", "unload"),
-            WorkAction("Посчитать товары", "manual"),
+            WorkAction("Посчитать товары", "coglas"),
             WorkAction("Проверка брака и расхождений"),
             WorkAction("Маркировка и печать этикеток"),
             WorkAction("Размещение на склад"),
@@ -100,60 +110,94 @@ private val WORK_SECTIONS = listOf(
     )
 )
 
+/** Окно вкладки «Работа» — вся навигация внутри вкладки описана двумя значениями: раздел и открытое в нём действие. */
+private data class WorkPage(val section: String?, val live: String?)
+
+private fun workDepth(p: WorkPage) = if (p.live != null) 2 else if (p.section != null) 1 else 0
+
+/**
+ * Окна с анимацией: открытие — новое окно выезжает справа налево и закрывает прежнее, закрытие — наоборот, окно уезжает вправо.
+ * depth — «глубина» окна: больше — открылось, меньше — закрылось. Содержимое рисуется по значению page, а не по текущему состоянию,
+ * поэтому уходящее окно во время анимации остаётся таким, каким было.
+ */
+@OptIn(ExperimentalAnimationApi::class)
+@Composable
+fun <T> SlidePages(page: T, depth: (T) -> Int, content: @Composable (T) -> Unit) {
+    val bg = MaterialTheme.colorScheme.background
+    AnimatedContent(
+        targetState = page,
+        transitionSpec = {
+            val forward = depth(targetState) > depth(initialState)
+            val move = tween<IntOffset>(320, easing = FastOutSlowInEasing)
+            val fade = tween<Float>(320)
+            val t = if (forward) {
+                (slideInHorizontally(move) { w -> w }) togetherWith (slideOutHorizontally(move) { w -> -w / 4 } + fadeOut(fade))
+            } else {
+                (slideInHorizontally(move) { w -> -w / 4 } + fadeIn(fade)) togetherWith (slideOutHorizontally(move) { w -> w })
+            }
+            // открывающееся окно поверх прежнего; при закрытии наверху остаётся уходящее
+            t.apply { targetContentZIndex = if (forward) 1f else -1f }
+        },
+        label = "slide"
+    ) { p ->
+        // пока идёт анимация, окно непрозрачное — иначе под ним просвечивало бы прежнее
+        val animating = transition.currentState != transition.targetState
+        Box(Modifier.fillMaxSize().then(if (animating) Modifier.background(bg) else Modifier)) { content(p) }
+    }
+}
+
 @Composable
 fun WorkScreen(prefs: Prefs, receiver: String) {
     var section by NavVar({ TabNav.job }, { TabNav.job = it })
     var live by NavVar({ TabNav.jobAction }, { TabNav.jobAction = it })
-    val current = section
-    val l = live
     // нижнее меню видно только на корне вкладки
     SideEffect { TabRoot.set(1, section == null && live == null) }
 
-    if (l != null) {
+    SlidePages(WorkPage(section, live), ::workDepth) { p ->
+        val l = p.live
+        val sec = WORK_SECTIONS.firstOrNull { it.title == p.section }
         when {
-            l == "search" -> ProductSearchScreen(prefs) { live = null }
-            l == "unload" -> UnloadingScreen(prefs, onOpenReceive = { live = "manual" }) { live = null }
-            l == "manual" -> ManualReceiveScreen(prefs, receiver) { live = null }
-            l == "assembly" -> AssemblyScreen(prefs, receiver) { live = null }
-            l == "send" -> SendHubScreen { live = null }
-            l == "inventory" -> InventoryScreen(receiver) { live = null }
-            l.startsWith("stub:") -> SectionScreen(l.removePrefix("stub:")) { live = null }
-            else -> live = null
-        }
-        return
-    }
-
-    val sec = WORK_SECTIONS.firstOrNull { it.title == current }
-    if (sec != null) {
-        BackHandler { section = null }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-            TextButton(onClick = { section = null }) { Text("‹ Назад") }
-            Text(sec.title, style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(16.dp))
-            sec.actions.forEach { a ->
-                FilledTonalButton(
-                    onClick = { live = a.live ?: "stub:${a.title}" },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp)
-                ) { Text(a.title, style = MaterialTheme.typography.titleMedium) }
-                Spacer(Modifier.height(10.dp))
+            l != null -> when {
+                l == "search" -> ProductSearchScreen(prefs) { live = null }
+                l == "unload" -> UnloadingScreen(prefs, onOpenReceive = { live = "manual" }) { live = null }
+                l == "manual" -> ManualReceiveScreen(prefs, receiver) { live = null }
+                l == "coglas" -> CoglasScreen(prefs) { live = null }
+                l == "assembly" -> AssemblyScreen(prefs, receiver) { live = null }
+                l == "send" -> SendHubScreen { live = null }
+                l == "inventory" -> InventoryScreen(receiver) { live = null }
+                l.startsWith("stub:") -> SectionScreen(l.removePrefix("stub:")) { live = null }
+                else -> Box(Modifier.fillMaxSize())
+            }
+            sec != null -> {
+                BackHandler { section = null }
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                    TextButton(onClick = { section = null }) { Text("‹ Назад") }
+                    Text(sec.title, style = MaterialTheme.typography.headlineMedium)
+                    Spacer(Modifier.height(16.dp))
+                    sec.actions.forEach { a ->
+                        FilledTonalButton(
+                            onClick = { live = a.live ?: "stub:${a.title}" },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp)
+                        ) { Text(a.title, style = MaterialTheme.typography.titleMedium) }
+                        Spacer(Modifier.height(10.dp))
+                    }
+                }
+            }
+            else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                Text("Работа", style = MaterialTheme.typography.headlineMedium)
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { live = "search" },
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                ) {
+                    Icon(Icons.Default.Search, contentDescription = null)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Поиск товара / ячейки", style = MaterialTheme.typography.titleMedium)
+                }
+                Spacer(Modifier.height(16.dp))
+                TileGrid(WORK_SECTIONS.map { s -> TileSpec(s.title, s.icon) { section = s.title } })
             }
         }
-        return
-    }
-
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Работа", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = { live = "search" },
-            modifier = Modifier.fillMaxWidth().height(56.dp)
-        ) {
-            Icon(Icons.Default.Search, contentDescription = null)
-            Spacer(Modifier.width(10.dp))
-            Text("Поиск товара / ячейки", style = MaterialTheme.typography.titleMedium)
-        }
-        Spacer(Modifier.height(16.dp))
-        TileGrid(WORK_SECTIONS.map { s -> TileSpec(s.title, s.icon) { section = s.title } })
     }
 }
 

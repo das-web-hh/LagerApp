@@ -531,6 +531,15 @@ fun DocEditorScreen(docId: String, onBack: () -> Unit) {
         }
     }
 
+    fun shareNow() {
+        val v = wvRef[0] ?: return
+        v.evaluateJavascript("getDoc()") { r ->
+            val body = decodeJs(r)
+            if (body != null) DocStore.saveBody(ctx, docId, body)
+            MissingBarcodes.share(ctx, title.ifBlank { "Dokument" }, body ?: DocStore.readBody(ctx, docId))
+        }
+    }
+
     fun printNow() {
         val v = wvRef[0] ?: return
         v.evaluateJavascript("getDoc()") { r ->
@@ -558,6 +567,14 @@ fun DocEditorScreen(docId: String, onBack: () -> Unit) {
                 modifier = Modifier.weight(1f)
             )
             TextButton(onClick = { printNow() }, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("🖨 Печать") }
+        }
+        if (kind == "text") {
+            // «Поделиться»: системное меню отправки (WhatsApp, Telegram, Gmail …) с текстом документа
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), horizontalArrangement = Arrangement.End) {
+                OutlinedButton(onClick = { shareNow() }, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp), modifier = Modifier.height(36.dp)) {
+                    Text("↗ Поделиться")
+                }
+            }
         }
         AndroidView(
             modifier = Modifier.weight(1f).fillMaxWidth(),

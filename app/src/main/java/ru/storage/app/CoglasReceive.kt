@@ -328,6 +328,10 @@ fun ReceiveScreen(job: RecvJob) {
     // дату приема, которую сайт ставит сам, узнаём один раз в фоне — на ней в календаре будет рамка
     LaunchedEffect(job) { if (job.siteDate.isBlank()) CoglasAuto.probeDate(ctx, job) }
     DisposableEffect(job) { onDispose { ReceiveStore.save(ctx) } }
+    // сканы с сайта (пока партия не проведена): количество у товара = сколько раз его отсканировали
+    remember { ScanSession.load(ctx) }
+    LaunchedEffect(job, ScanSession.version) { applyScans(job, false) }
+    MissingBarcodesRef({ job.waybill }, { job.orderNumber })
 
     if (st.receiveStep == 1) {
         ReceivePreview(job)
@@ -407,6 +411,16 @@ fun ReceiveScreen(job: RecvJob) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
             )
+        }
+        if (ScanSession.items.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Сканы с сайта: ${ScanSession.items.size} поз. · ${ScanSession.totalScans()} шт",
+                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { applyScans(job, true) }) { Text("Взять количества") }
+                TextButton(onClick = { ScanSession.clear(ctx) }) { Text("Очистить") }
+            }
         }
         Spacer(Modifier.height(6.dp))
         CatalogWheel(
@@ -592,6 +606,28 @@ fun ReceiveScreen(job: RecvJob) {
             onPick = { job.date = it; datePick = false; ReceiveStore.save(ctx) },
             onDismiss = { datePick = false }
         )
+    }
+}
+
+/**
+ * Количества из сканов сайта → строки приёмки: товар ищется по штрих-коду или артикулу в списке и в скрытых плановых позициях,
+ * количество = число сканов. overwrite = false: строки, где количество уже набрано вручную, не трогаем.
+ */
+internal fun applyScans(job: RecvJob, overwrite: Boolean) {
+    ScanSession.items.toList().forEach { e ->
+        fun hit(r: ItemRow) = (r.barcode.isNotBlank() && r.barcode == e.code) || (e.article.isNotBlank() && r.article.trim().equals(e.article, true))
+        var row = job.rows.firstOrNull { hit(it) }
+        if (row == null) {
+            val p = job.pool.firstOrNull { hit(it) }
+            if (p != null) {
+                job.pool.remove(p)
+                job.rows.add(p)
+                row = p
+            }
+        }
+        if (row == null) return@forEach
+        if (row.barcode.isBlank()) row.barcode = e.code
+        if (overwrite || parseQ(row.fact) <= 0.0) row.fact = e.count.toString()
     }
 }
 

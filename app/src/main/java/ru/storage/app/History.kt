@@ -381,6 +381,7 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         info("Отправитель", r.sender)
         UnloadStore.load(ctx)
         UnloadStore.byReceipt(r.id)?.let { u ->
+            info("Разгрузка", u.name)
             info("Машина", u.car)
             info("Привезли", fmtTime(u.arrivedAt))
             info("EB", u.eb)
