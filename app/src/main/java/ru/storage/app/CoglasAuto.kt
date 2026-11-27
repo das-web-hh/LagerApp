@@ -123,7 +123,11 @@ object CoglasAuto {
         }
     } ?: ""
 
+    /** Приём, с которого запущен автоприём: по нему «Провести» считает, сколько товаров было в партии. */
+    @Volatile var lastJob: RecvJob? = null
+
     fun start(ctx: Context, j: RecvJob) {
+        lastJob = j
         stop()
         val app = ctx.applicationContext
         val payload = jobJson(j)

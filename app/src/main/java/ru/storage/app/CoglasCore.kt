@@ -96,6 +96,18 @@ class CgBridge {
     @JavascriptInterface
     fun gtinOn(): Boolean = gtinNative
 
+    /** Нажата кнопка «Провести» / Buchen: запоминаем количество товаров. */
+    @JavascriptInterface
+    fun buchenClick(rows: Int) {
+        main.post { CoglasWeb.onBuchenClick(rows) }
+    }
+
+    /** Сайт показал зелёное уведомление «накладная проведена» (на любом языке сайта). */
+    @JavascriptInterface
+    fun posted(text: String) {
+        main.post { CoglasWeb.onPosted(text) }
+    }
+
     /** Итог поиска кода в окне «Заказ» (режим GTIN): found = false — сайт не нашёл товар. */
     @JavascriptInterface
     fun scanVerdict(code: String, found: Boolean) {
@@ -594,6 +606,16 @@ object CoglasWeb {
         MissingBarcodes.touch(code)
         if (gtinMode && kind == "order") return
         finishMissing(c, code)
+    }
+
+    fun onBuchenClick(rows: Int) { try { BuchenLog.snapshot(rows) } catch (e: Exception) { } }
+
+    fun onPosted(text: String) {
+        val c = appCtx ?: return
+        try { BuchenLog.posted(c, text) } catch (e: Exception) { }
+        // партия закрыта и тогда, когда вспомогательные уведомления выключены
+        try { ScanSession.clear(c) } catch (e: Exception) { }
+        try { MissingBarcodes.endSession(c) } catch (e: Exception) { }
     }
 
     fun siteVerdict(code: String, found: Boolean) {

@@ -1400,6 +1400,12 @@
       if (!b) return;
       var t = (b.innerText || b.textContent || b.value || '').replace(/\s+/g, ' ').trim();
       buchenAt = 0;
+      // «Провести» / Buchen: запоминаем, сколько позиций на странице (приложение дополнит своими цифрами)
+      if (/(^|\s)(buchen|провести|проводить)(\s|$|\()/i.test(t)) {
+        var nrows = 0;
+        try { nrows = [].slice.call(document.querySelectorAll('table tbody tr')).filter(vis).length; } catch (x) {}
+        try { window.WmsBridge.buchenClick(nrows); } catch (x) {}
+      }
     } catch (x) {}
   }, true);
 
@@ -1436,6 +1442,8 @@
         try {
           var t = txt(e).replace(/^[\s×✕✖]+/, '').replace(/[\s×✕✖]+$/, '').trim();
           var k = kindOf(e);
+          // успех «Провести» запоминаем всегда, даже если вспомогательные уведомления выключены
+          if (t && t.length <= 200 && k === 'ok' && RX_OK.test(t)) { try { window.WmsBridge.posted(t); } catch (x) {} }
           // вспомогательные уведомления приложения выключены — сайт показывает свои сообщения как есть
           try { if (window.WmsBridge.noticesOn && !window.WmsBridge.noticesOn()) return; } catch (x) {}
           if (k === 'err') return;   // красные уведомления приложение не трогает и не показывает
