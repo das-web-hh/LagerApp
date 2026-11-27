@@ -1543,7 +1543,7 @@ private fun FoundBanner() {
         Box(Modifier.fillMaxSize().padding(top = 64.dp), contentAlignment = Alignment.TopCenter) {
             Surface(
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
-                color = Color(0xFF1565C0),
+                color = if (CoglasWeb.foundBad) Color(0xFFC62828) else Color(0xFF1565C0),
                 shadowElevation = 6.dp,
                 modifier = Modifier.padding(horizontal = 12.dp).clickable { show = false; CoglasWeb.foundBannerShown = false }
             ) {
@@ -1551,10 +1551,10 @@ private fun FoundBanner() {
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Icon(if (CoglasWeb.foundBad) Icons.Default.Close else Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Отмечено: " + CoglasWeb.foundText,
+                        if (CoglasWeb.foundBad || CoglasWeb.foundText.startsWith("Нашли")) CoglasWeb.foundText else "Отмечено: " + CoglasWeb.foundText,
                         color = Color.White,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 2

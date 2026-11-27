@@ -545,7 +545,7 @@ object CoglasWeb {
 
     fun scanFound(text: String = "") {
         if (text.isNotBlank()) {
-            foundText = text; foundTextTick++
+            foundBad = false; foundText = text; foundTextTick++
             appCtx?.let { try { ScanSession.refineLast(it, text) } catch (e: Exception) { } }
         }
         foundTick++
@@ -577,25 +577,68 @@ object CoglasWeb {
     /** Код со сканера приложения подставляется в поле страницы и подтверждается Enter, как от сканера-«клавиатуры». */
     fun deliverScan(code: String) {
         main.post {
-            // сканы на странице заказа / накладной копятся в партию (ScanSession), пока накладную не проведут
             runJs("window.__cgScanCtx ? window.__cgScanCtx() : ''") { k ->
                 val c = appCtx
-                if (c != null && (k == "order" || k == "note")) {
-                    try { ScanSession.record(c, code) } catch (e: Exception) { }
-                    try { checkMissing(c, code, k) } catch (e: Exception) { }
-                }
-            }
-            runJs("window.__cgScanResult ? window.__cgScanResult(" + JSONObject.quote(code) + ") : 'nohook'") { r ->
-                if (r != "ok") {
-                    val ctx = appCtx
-                    if (ctx != null) {
-                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("barcode", code))
-                        android.widget.Toast.makeText(ctx, "Нет поля для кода на странице. Код скопирован: $code", android.widget.Toast.LENGTH_LONG).show()
-                    }
+                // Окна «Заказы» (order) и «Накладные» (note) при включённых уведомлениях: код запоминается и проверяется
+                // в самом приложении, на сайт НЕ отправляется. Выключены уведомления — код уходит на сайт, ничего не запоминается.
+                if (c != null && appNotices && (k == "order" || k == "note")) {
+                    localScan(c, code, k)
+                } else {
+                    sendScanToSite(code)
                 }
             }
         }
+    }
+
+    private fun sendScanToSite(code: String) {
+        runJs("window.__cgScanResult ? window.__cgScanResult(" + JSONObject.quote(code) + ") : 'nohook'") { r ->
+            if (r != "ok") {
+                val ctx = appCtx
+                if (ctx != null) {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("barcode", code))
+                    android.widget.Toast.makeText(ctx, "Нет поля для кода на странице. Код скопирован: $code", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    /** Скан в окне заказа / накладной без сайта: запомнили, сверили с каталогом, показали «Нашли · N» или «Такого штрих-кода нет». */
+    private fun localScan(c: Context, code: String, kind: String) {
+        val clean = code.trim()
+        if (clean.isEmpty()) return
+        try { ScanSession.record(c, clean) } catch (e: Exception) { }
+        try { MissingBarcodes.touch(clean) } catch (e: Exception) { }
+        val count = ScanSession.items.firstOrNull { it.code == clean }?.count ?: 1
+        finishMissing(c, clean) { found, name ->
+            if (found) scanLocalFound(name, count) else scanLocalMissing(clean, count)
+        }
+    }
+
+    /** Красная надпись вместо синей: код не найден. */
+    var foundBad by mutableStateOf(false)
+
+    private fun scanLocalFound(name: String, count: Int) {
+        foundBad = false
+        foundText = "Нашли" + (if (name.isNotBlank()) ": $name" else "") + " · отсканировано: $count"
+        foundTextTick++
+        scanFound()
+    }
+
+    private fun scanLocalMissing(code: String, count: Int) {
+        foundBad = true
+        foundText = "Такого штрих-кода нет: $code" + (if (count > 1) " (сканов: $count)" else "")
+        foundTextTick++
+        val c = appCtx ?: return
+        try {
+            val v: android.os.Vibrator? = if (android.os.Build.VERSION.SDK_INT >= 31) {
+                (c.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                c.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            if (v != null && v.hasVibrator()) v.vibrate(android.os.VibrationEffect.createOneShot(400, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+        } catch (e: Exception) { }
     }
 
     /**
@@ -620,16 +663,19 @@ object CoglasWeb {
 
     fun siteVerdict(code: String, found: Boolean) {
         val c = appCtx ?: return
+        if (!appNotices) return   // без уведомлений ничего не запоминаем
         if (found) { MissingBarcodes.result(c, code, true); return }
         finishMissing(c, code)
     }
 
     /** Сайт (или режим без сайта) товар не нашёл: смотрим каталог приложения; нет и там — считаем ненайденным. */
-    private fun finishMissing(c: Context, code: String) {
+    private fun finishMissing(c: Context, code: String, onResult: ((Boolean, String) -> Unit)? = null) {
         val app = c.applicationContext
         Thread {
-            val inDb = try { ProductDb.get(app).findByBarcode(code) != null } catch (e: Exception) { true }
+            val p = try { ProductDb.get(app).findByBarcode(code) } catch (e: Exception) { null }
+            val inDb = p != null
             main.post {
+                onResult?.invoke(inDb, p?.name.orEmpty())
                 if (inDb) { MissingBarcodes.result(app, code, true); return@post }
                 runJs("window.__cgScanRef ? window.__cgScanRef() : ''") { ref ->
                     MissingBarcodes.result(app, code, false, if (ref.startsWith("#")) ref else "")
