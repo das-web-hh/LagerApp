@@ -104,9 +104,21 @@ object ScanSession {
         }
     }
 
+    /** Коды, уже отправленные на сайт в этой партии и принятые им: повторный скан такого кода на сайт не уходит, только считается. */
+    private val sentToSite = HashSet<String>()
+    /** Номер партии: растёт при закрытии, по нему окно подсчёта отличает новую партию от старой. */
+    var batch = 0
+        private set
+
+    fun wasSent(code: String): Boolean = sentToSite.contains(code.trim())
+    fun markSent(code: String) { sentToSite.add(code.trim()) }
+    fun unmarkSent(code: String) { sentToSite.remove(code.trim()) }
+
     /** Накладная проведена (Buchen) или нажали «Очистить»: партия закрыта. */
     fun clear(ctx: Context) {
         items.clear()
+        sentToSite.clear()
+        batch++
         lastCode = ""
         version++
         save(ctx)

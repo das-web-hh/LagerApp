@@ -542,6 +542,10 @@ object CoglasWeb {
     var foundText by mutableStateOf("")
     var foundTextTick by mutableIntStateOf(0)
     var foundBannerShown by mutableStateOf(false)
+    /** Какие уведомления уже показаны: при возврате на вкладку «Сайт» старые не повторяются. */
+    var seenFoundTick = 0
+    var seenBannerTick = 0
+    var seenNoticeTick = 0
 
     fun scanFound(text: String = "") {
         if (text.isNotBlank()) {
@@ -574,15 +578,28 @@ object CoglasWeb {
         bridge.scanNative = on
     }
 
-    /** Код со сканера приложения подставляется в поле страницы и подтверждается Enter, как от сканера-«клавиатуры». */
+    /**
+     * Код со сканера приложения подставляется в поле страницы и подтверждается Enter, как от сканера-«клавиатуры».
+     * Внутри открытого заказа / накладной при включённых уведомлениях: первый скан кода уходит на сайт (сайт находит товар,
+     * приложение ставит галочку), повторные сканы того же кода на сайт НЕ уходят — только считаются в приложении.
+     * Выключены уведомления — каждый скан уходит на сайт, ничего не запоминается.
+     */
     fun deliverScan(code: String) {
         main.post {
             runJs("window.__cgScanCtx ? window.__cgScanCtx() : ''") { k ->
                 val c = appCtx
-                // Окна «Заказы» (order) и «Накладные» (note) при включённых уведомлениях: код запоминается и проверяется
-                // в самом приложении, на сайт НЕ отправляется. Выключены уведомления — код уходит на сайт, ничего не запоминается.
                 if (c != null && appNotices && (k == "order" || k == "note")) {
-                    localScan(c, code, k)
+                    val clean = code.trim()
+                    val repeat = ScanSession.wasSent(clean)
+                    try { ScanSession.record(c, clean) } catch (e: Exception) { }
+                    if (repeat) {
+                        val e = ScanSession.items.firstOrNull { it.code == clean }
+                        scanLocalFound(e?.name.orEmpty(), e?.count ?: 1)
+                    } else {
+                        ScanSession.markSent(clean)
+                        try { checkMissing(c, clean, k) } catch (e: Exception) { }
+                        sendScanToSite(code)
+                    }
                 } else {
                     sendScanToSite(code)
                 }
@@ -593,6 +610,7 @@ object CoglasWeb {
     private fun sendScanToSite(code: String) {
         runJs("window.__cgScanResult ? window.__cgScanResult(" + JSONObject.quote(code) + ") : 'nohook'") { r ->
             if (r != "ok") {
+                ScanSession.unmarkSent(code)
                 val ctx = appCtx
                 if (ctx != null) {
                     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -603,42 +621,14 @@ object CoglasWeb {
         }
     }
 
-    /** Скан в окне заказа / накладной без сайта: запомнили, сверили с каталогом, показали «Нашли · N» или «Такого штрих-кода нет». */
-    private fun localScan(c: Context, code: String, kind: String) {
-        val clean = code.trim()
-        if (clean.isEmpty()) return
-        try { ScanSession.record(c, clean) } catch (e: Exception) { }
-        try { MissingBarcodes.touch(clean) } catch (e: Exception) { }
-        val count = ScanSession.items.firstOrNull { it.code == clean }?.count ?: 1
-        finishMissing(c, clean) { found, name ->
-            if (found) scanLocalFound(name, count) else scanLocalMissing(clean, count)
-        }
-    }
-
     /** Красная надпись вместо синей: код не найден. */
     var foundBad by mutableStateOf(false)
 
-    private fun scanLocalFound(name: String, count: Int) {
+    fun scanLocalFound(name: String, count: Int) {
         foundBad = false
         foundText = "Нашли" + (if (name.isNotBlank()) ": $name" else "") + " · отсканировано: $count"
         foundTextTick++
         scanFound()
-    }
-
-    private fun scanLocalMissing(code: String, count: Int) {
-        foundBad = true
-        foundText = "Такого штрих-кода нет: $code" + (if (count > 1) " (сканов: $count)" else "")
-        foundTextTick++
-        val c = appCtx ?: return
-        try {
-            val v: android.os.Vibrator? = if (android.os.Build.VERSION.SDK_INT >= 31) {
-                (c.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                c.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-            }
-            if (v != null && v.hasVibrator()) v.vibrate(android.os.VibrationEffect.createOneShot(400, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-        } catch (e: Exception) { }
     }
 
     /**
@@ -663,6 +653,7 @@ object CoglasWeb {
 
     fun siteVerdict(code: String, found: Boolean) {
         val c = appCtx ?: return
+        if (!found) ScanSession.unmarkSent(code)   // сайт не нашёл: следующий скан этого кода снова уйдёт на сайт
         if (!appNotices) return   // без уведомлений ничего не запоминаем
         if (found) { MissingBarcodes.result(c, code, true); return }
         finishMissing(c, code)
@@ -1053,11 +1044,13 @@ object CoglasWeb {
             UnloadStore.load(c)
             val fmt = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.ROOT)
             val arr = org.json.JSONArray()
-            UnloadStore.items.filter { it.eb.isNotBlank() }.forEach { r ->
-                arr.put(
-                    JSONObject().put("id", r.id).put("eb", Ai.latinOrder(r.eb)).put("car", r.car).put("doc", r.docNo)
-                        .put("date", fmt.format(java.util.Date(r.arrivedAt)))
-                )
+            UnloadStore.items.forEach { r ->
+                r.allDocs().filter { it.eb.isNotBlank() }.forEach { d ->
+                    arr.put(
+                        JSONObject().put("id", r.id).put("eb", Ai.latinOrder(d.eb)).put("car", r.car).put("doc", d.docNo)
+                            .put("date", fmt.format(java.util.Date(r.arrivedAt)))
+                    )
+                }
             }
             val js = "window.__cgUnload=" + arr.toString() + ";"
             main.post { try { w.evaluateJavascript(js, null) } catch (e: Exception) { } }

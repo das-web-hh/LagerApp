@@ -79,7 +79,7 @@ fun ManualReceiveScreen(prefs: Prefs, receiver: String, onBack: () -> Unit) {
     LaunchedEffect(metaOrder) {
         if (linkedUnload == null && metaOrder.isNotBlank()) {
             val eb = Ai.latinOrder(metaOrder)
-            UnloadStore.items.firstOrNull { it.eb.isNotBlank() && it.eb.equals(eb, true) }?.let { linkedUnload = it.id }
+            UnloadStore.items.firstOrNull { u -> u.allDocs().any { d -> d.eb.isNotBlank() && d.eb.equals(eb, true) } }?.let { linkedUnload = it.id }
         }
     }
 

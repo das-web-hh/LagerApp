@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,11 +62,45 @@ import java.util.UUID
  * Записи лежат на телефоне (unloading.json). Из «Посчитать товары» разгрузку можно привязать к приёму.
  */
 
+/** Ещё один документ (накладная) к той же разгрузке: водитель может привезти несколько. */
+data class UnloadDoc(
+    val eb: String = "",
+    val lieferant: String = "",
+    val docNo: String = "",
+    val files: List<String> = emptyList()
+)
+
+/** Страны номеров машин: код, название, знак на номере. Германия — первая и по умолчанию. */
+data class UlgCountry(val code: String, val name: String)
+
+val ULG_COUNTRIES = listOf(
+    UlgCountry("DE", "Германия"), UlgCountry("PL", "Польша"), UlgCountry("NL", "Нидерланды"), UlgCountry("CZ", "Чехия"),
+    UlgCountry("LT", "Литва"), UlgCountry("LV", "Латвия"), UlgCountry("EE", "Эстония"), UlgCountry("RO", "Румыния"),
+    UlgCountry("BG", "Болгария"), UlgCountry("HU", "Венгрия"), UlgCountry("SK", "Словакия"), UlgCountry("SI", "Словения"),
+    UlgCountry("HR", "Хорватия"), UlgCountry("AT", "Австрия"), UlgCountry("CH", "Швейцария"), UlgCountry("DK", "Дания"),
+    UlgCountry("BE", "Бельгия"), UlgCountry("FR", "Франция"), UlgCountry("IT", "Италия"), UlgCountry("ES", "Испания"),
+    UlgCountry("PT", "Португалия"), UlgCountry("SE", "Швеция"), UlgCountry("NO", "Норвегия"), UlgCountry("FI", "Финляндия"),
+    UlgCountry("LU", "Люксембург"), UlgCountry("GB", "Великобритания"), UlgCountry("IE", "Ирландия"), UlgCountry("GR", "Греция"),
+    UlgCountry("RS", "Сербия"), UlgCountry("TR", "Турция"), UlgCountry("UA", "Украина"), UlgCountry("BY", "Беларусь"),
+    UlgCountry("MD", "Молдова"), UlgCountry("GE", "Грузия"), UlgCountry("KZ", "Казахстан"), UlgCountry("RU", "Россия")
+)
+
+fun ulgCountry(code: String): UlgCountry = ULG_COUNTRIES.firstOrNull { it.code.equals(code, true) } ?: ULG_COUNTRIES[0]
+
+/** Флаг-эмодзи из двухбуквенного кода страны. */
+fun ulgFlag(code: String): String {
+    val c = code.uppercase()
+    if (c.length != 2) return ""
+    return String(Character.toChars(0x1F1E6 + (c[0] - 'A'))) + String(Character.toChars(0x1F1E6 + (c[1] - 'A')))
+}
+
 data class UnloadRec(
     val id: String,
     /** Имя записи: кто привёз (UPS, DHL, перевозчик) или что привезли (Bigbag, картоны, товары) */
     val name: String = "",
     val car: String = "",
+    /** Страна номера машины (ISO), по умолчанию Германия */
+    val carCountry: String = "DE",
     val pallets: Int = 0,
     val ew: Int = 0,
     val cartons: Int = 0,
@@ -74,13 +109,24 @@ data class UnloadRec(
     val lieferant: String = "",
     val docNo: String = "",
     val docFiles: List<String> = emptyList(),
+    /** Второй, третий… документы (первый лежит в eb / lieferant / docNo / docFiles) */
+    val extraDocs: List<UnloadDoc> = emptyList(),
     /** id приёмов, которые привязаны к этой разгрузке */
     val receipts: List<String> = emptyList(),
     /** false — черновик (автосохранение), true — нажали «Сохранить» */
     val saved: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
-)
+) {
+    /** Все документы с данными: первый и дополнительные. */
+    fun allDocs(): List<UnloadDoc> {
+        val first = UnloadDoc(eb, lieferant, docNo, docFiles)
+        val list = ArrayList<UnloadDoc>()
+        if (eb.isNotBlank() || lieferant.isNotBlank() || docNo.isNotBlank()) list.add(first)
+        list.addAll(extraDocs)
+        return list
+    }
+}
 
 object UnloadStore {
     val items = mutableStateListOf<UnloadRec>()
@@ -103,9 +149,23 @@ object UnloadStore {
                     val a = o.optJSONArray(k) ?: return emptyList()
                     return (0 until a.length()).map { a.getString(it) }
                 }
+                val extras = ArrayList<UnloadDoc>()
+                o.optJSONArray("extraDocs")?.let { a ->
+                    for (k in 0 until a.length()) {
+                        val d = a.getJSONObject(k)
+                        val fa = d.optJSONArray("files")
+                        extras.add(
+                            UnloadDoc(
+                                eb = d.optString("eb"), lieferant = d.optString("lieferant"), docNo = d.optString("docNo"),
+                                files = if (fa == null) emptyList() else (0 until fa.length()).map { fa.getString(it) }
+                            )
+                        )
+                    }
+                }
                 list.add(
                     UnloadRec(
                         id = o.getString("id"), name = o.optString("name"), car = o.optString("car"),
+                        carCountry = o.optString("carCountry").ifBlank { "DE" }, extraDocs = extras,
                         pallets = o.optInt("pallets"), ew = o.optInt("ew"), cartons = o.optInt("cartons"),
                         arrivedAt = o.optLong("arrivedAt"), eb = o.optString("eb"), lieferant = o.optString("lieferant"),
                         docNo = o.optString("docNo"), docFiles = strs("docFiles"), receipts = strs("receipts"),
@@ -127,6 +187,15 @@ object UnloadStore {
                     JSONObject()
                         .put("id", r.id).put("name", r.name).put("car", r.car).put("pallets", r.pallets).put("ew", r.ew).put("cartons", r.cartons)
                         .put("arrivedAt", r.arrivedAt).put("eb", r.eb).put("lieferant", r.lieferant).put("docNo", r.docNo)
+                        .put("carCountry", r.carCountry)
+                        .put(
+                            "extraDocs",
+                            JSONArray().also { ea ->
+                                r.extraDocs.forEach { d ->
+                                    ea.put(JSONObject().put("eb", d.eb).put("lieferant", d.lieferant).put("docNo", d.docNo).put("files", JSONArray(d.files)))
+                                }
+                            }
+                        )
                         .put("docFiles", JSONArray(r.docFiles)).put("receipts", JSONArray(r.receipts))
                         .put("saved", r.saved).put("createdAt", r.createdAt).put("updatedAt", r.updatedAt)
                 )
@@ -176,7 +245,7 @@ object UnloadStore {
 /** «Машина 123 · привезли 26.11.2026 08:30 · EB1234567 · Lieferant 4711» — одна строка для списков и приёма. */
 fun unloadLine(r: UnloadRec): String = listOf(
     r.name.takeIf { it.isNotBlank() },
-    "Машина " + r.car.ifBlank { "—" },
+    "Машина " + (if (r.carCountry.isNotBlank() && !r.carCountry.equals("DE", true)) r.carCountry.uppercase() + " " else "") + r.car.ifBlank { "—" },
     "привезли " + fmtTime(r.arrivedAt),
     r.eb.takeIf { it.isNotBlank() },
     r.lieferant.takeIf { it.isNotBlank() }?.let { "Lieferant $it" }
@@ -206,7 +275,7 @@ fun UnloadingScreen(prefs: Prefs, onOpenReceive: () -> Unit, onBack: () -> Unit)
         val d = p.doc
         val e = p.edit
         when {
-            d != null -> UnloadDocScreen(prefs, d.ifEmpty { null }) { docFor = null }
+            d != null -> UnloadDocScreen(prefs, d.removePrefix("+").ifEmpty { null }, addMode = d.startsWith("+") || d.isEmpty()) { docFor = null }
             e != null -> UnloadEditScreen(e, onOpenDoc = { docFor = it }, onBack = { editId = null })
             else -> UnloadList(onNew = { editId = UUID.randomUUID().toString() }, onOpen = { editId = it }, onScan = { docFor = "" }, onOpenReceive = onOpenReceive, onBack = onBack)
         }
@@ -389,6 +458,11 @@ private fun UlgDateTimeDialog(initial: Long, onDismiss: () -> Unit, onPick: (Lon
     }
 }
 
+/** Виды груза. По умолчанию — паллеты; нажатием на вид груза его можно сменить. */
+private val ULG_CARGO = listOf("Паллеты", "Einwegpalette", "Картоны / посылки")
+
+private data class UlgCargo(val type: Int, val qty: String)
+
 @Composable
 private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
@@ -396,9 +470,21 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
     val now0 = remember(id) { System.currentTimeMillis() }
     var name by remember(id) { mutableStateOf(initial?.name ?: "") }
     var car by remember(id) { mutableStateOf(ulgCar(initial?.car ?: "")) }
-    var pallets by remember(id) { mutableStateOf(initial?.pallets?.takeIf { it > 0 }?.toString() ?: "") }
-    var ew by remember(id) { mutableStateOf(initial?.ew?.takeIf { it > 0 }?.toString() ?: "") }
-    var cartons by remember(id) { mutableStateOf(initial?.cartons?.takeIf { it > 0 }?.toString() ?: "") }
+    var country by remember(id) { mutableStateOf(initial?.carCountry?.ifBlank { "DE" } ?: "DE") }
+    var pickCountry by remember { mutableStateOf(false) }
+    // груз: строки «вид + количество»; по умолчанию одна строка «Паллеты»
+    val cargo = remember(id) {
+        mutableStateListOf<UlgCargo>().apply {
+            if (initial != null) {
+                if (initial.pallets > 0) add(UlgCargo(0, initial.pallets.toString()))
+                if (initial.ew > 0) add(UlgCargo(1, initial.ew.toString()))
+                if (initial.cartons > 0) add(UlgCargo(2, initial.cartons.toString()))
+            }
+            if (isEmpty()) add(UlgCargo(0, ""))
+        }
+    }
+    fun cargoSum(t: Int) = cargo.filter { it.type == t }.sumOf { it.qty.toIntOrNull() ?: 0 }
+    val cargoKey = cargo.joinToString(";") { it.type.toString() + ":" + it.qty }
     // время прибытия фиксируется само в момент открытия «Новой разгрузки»; его можно поправить
     var arrived by remember(id) { mutableLongStateOf(initial?.arrivedAt ?: now0) }
     // новая запись открывается сразу для ввода; готовая — только для просмотра, править её можно по карандашу
@@ -412,23 +498,23 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
     /** Пишет только поля формы: данные документа (EB, Lieferant) не трогает. */
     fun persist(markSaved: Boolean = false, force: Boolean = false) {
         if (gone || !editing && !markSaved && !force) return
-        val p = pallets.toIntOrNull() ?: 0
-        val w = ew.toIntOrNull() ?: 0
-        val c = cartons.toIntOrNull() ?: 0
+        val p = cargoSum(0)
+        val w = cargoSum(1)
+        val c = cargoSum(2)
         val has = name.isNotBlank() || car.isNotBlank() || p > 0 || w > 0 || c > 0 || force || markSaved || UnloadStore.get(id) != null
         if (!has) return
         val base = UnloadStore.get(id) ?: UnloadRec(id = id, arrivedAt = arrived, createdAt = now0, updatedAt = now0)
         UnloadStore.upsert(
             ctx,
             base.copy(
-                name = name.trim(), car = ulgCar(car).trim(), pallets = p, ew = w, cartons = c, arrivedAt = arrived,
+                name = name.trim(), car = ulgCar(car).trim(), carCountry = country, pallets = p, ew = w, cartons = c, arrivedAt = arrived,
                 saved = base.saved || markSaved, updatedAt = System.currentTimeMillis()
             )
         )
     }
 
     // автосохранение (только в режиме правки): при каждом изменении полей с короткой паузой и при выходе из окна
-    LaunchedEffect(name, car, pallets, ew, cartons, arrived, editing) {
+    LaunchedEffect(name, car, country, cargoKey, arrived, editing) {
         if (!editing) return@LaunchedEffect
         delay(400)
         persist()
@@ -471,6 +557,12 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
                 singleLine = true, modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
+            Text("Страна номера машины", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedButton(onClick = { pickCountry = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(ulgFlag(country) + "  " + ulgCountry(country).name + "  (" + country + ")", modifier = Modifier.weight(1f))
+                Text("▾")
+            }
+            Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = car, onValueChange = { car = ulgCar(it); err = "" },
                 label = { Text("Номер машины *") },
@@ -481,23 +573,33 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
             )
             if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = pallets, onValueChange = { pallets = it.filter { ch -> ch.isDigit() }.take(5) },
-                label = { Text("Паллеты") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = ew, onValueChange = { ew = it.filter { ch -> ch.isDigit() }.take(5) },
-                label = { Text("Одноразовые паллеты (Einwegpalette)") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = cartons, onValueChange = { cartons = it.filter { ch -> ch.isDigit() }.take(5) },
-                label = { Text("Картоны / посылки") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
-            )
+            Text("Груз (нажмите на вид груза, чтобы изменить)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            cargo.forEachIndexed { i, line ->
+                var menu by remember { mutableStateOf(false) }
+                Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1.3f)) {
+                        OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                            Text(ULG_CARGO[line.type], maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text("▾")
+                        }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            ULG_CARGO.forEachIndexed { t, label ->
+                                DropdownMenuItem(text = { Text(label) }, onClick = { cargo[i] = line.copy(type = t); menu = false })
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedTextField(
+                        value = line.qty, onValueChange = { cargo[i] = line.copy(qty = it.filter { ch -> ch.isDigit() }.take(5)) },
+                        label = { Text("Кол-во") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f)
+                    )
+                    if (cargo.size > 1) {
+                        IconButton(onClick = { cargo.removeAt(i) }) { Icon(Icons.Default.Close, contentDescription = "Убрать") }
+                    }
+                }
+            }
+            TextButton(onClick = { cargo.add(UlgCargo(if (cargo.any { it.type == 0 }) 2 else 0, "")) }) { Text("+ Добавить груз") }
             Spacer(Modifier.height(14.dp))
             Text("Когда привезли", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -506,11 +608,11 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
             }
         } else {
             row("Имя", name)
-            row("Номер машины", car)
+            row("Номер машины", if (car.isBlank()) "" else ulgFlag(country) + " " + car + " (" + country + ")")
             row("Привезли", "$dateTxt $timeTxt")
-            row("Паллеты", pallets.ifBlank { "0" })
-            row("Einwegpalette", ew.ifBlank { "0" })
-            row("Картоны / посылки", cartons.ifBlank { "0" })
+            row("Паллеты", cargoSum(0).toString())
+            row("Einwegpalette", cargoSum(1).toString())
+            row("Картоны / посылки", cargoSum(2).toString())
         }
 
         Spacer(Modifier.height(16.dp))
@@ -519,22 +621,43 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(Modifier.padding(14.dp)) {
-                Text("Документ", style = MaterialTheme.typography.titleSmall)
-                val hasDoc = live != null && (live.eb.isNotBlank() || live.lieferant.isNotBlank() || live.docNo.isNotBlank())
-                if (hasDoc && live != null) {
-                    if (live.eb.isNotBlank()) Text("EB: ${live.eb}", style = MaterialTheme.typography.bodyLarge)
-                    if (live.lieferant.isNotBlank()) Text("Lieferant: ${live.lieferant}", style = MaterialTheme.typography.bodyLarge)
-                    if (live.docNo.isNotBlank()) Text("Номер документа: ${live.docNo}", style = MaterialTheme.typography.bodyLarge)
-                } else {
+                Text("Документы", style = MaterialTheme.typography.titleSmall)
+                val docs = live?.allDocs().orEmpty()
+                val hasFirst = live != null && (live.eb.isNotBlank() || live.lieferant.isNotBlank() || live.docNo.isNotBlank())
+                if (docs.isEmpty()) {
                     Text("Документ ещё не распознан", style = MaterialTheme.typography.bodyMedium)
+                }
+                docs.forEachIndexed { i, d ->
+                    if (docs.size > 1) {
+                        Spacer(Modifier.height(6.dp))
+                        Text("Документ ${i + 1}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (d.eb.isNotBlank()) Text("EB: ${d.eb}", style = MaterialTheme.typography.bodyLarge)
+                    if (d.lieferant.isNotBlank()) Text("Lieferant: ${d.lieferant}", style = MaterialTheme.typography.bodyLarge)
+                    if (d.docNo.isNotBlank()) Text("Номер документа: ${d.docNo}", style = MaterialTheme.typography.bodyLarge)
+                    val extraIdx = i - (if (hasFirst) 1 else 0)
+                    if (editing && extraIdx >= 0) {
+                        TextButton(onClick = {
+                            UnloadStore.update(ctx, id) { cur -> cur.copy(extraDocs = cur.extraDocs.filterIndexed { j, _ -> j != extraIdx }, updatedAt = System.currentTimeMillis()) }
+                        }) { Text("Убрать этот документ", color = MaterialTheme.colorScheme.error) }
+                    }
                 }
                 if (live != null && live.receipts.isNotEmpty()) {
                     Text("Приёмов привязано: ${live.receipts.size}", style = MaterialTheme.typography.bodySmall)
                 }
-                if (editing) {
-                    Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(8.dp))
+                if (!hasFirst) {
                     OutlinedButton(onClick = { persist(force = true); onOpenDoc(id) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (hasDoc) "Распознать документ заново" else "Сканировать / распознать документ")
+                        Text("Сканировать / распознать документ")
+                    }
+                } else {
+                    OutlinedButton(onClick = { persist(force = true); onOpenDoc("+" + id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("+ Добавить документ")
+                    }
+                    if (editing) {
+                        TextButton(onClick = { persist(force = true); onOpenDoc(id) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Распознать первый документ заново")
+                        }
                     }
                 }
             }
@@ -566,6 +689,32 @@ private fun UnloadEditScreen(id: String, onOpenDoc: (String) -> Unit, onBack: ()
 
     if (pickDt) {
         UlgDateTimeDialog(arrived, onDismiss = { pickDt = false }, onPick = { arrived = it; pickDt = false })
+    }
+    if (pickCountry) {
+        AlertDialog(
+            onDismissRequest = { pickCountry = false },
+            title = { Text("Страна номера машины") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    ULG_COUNTRIES.forEach { cn ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { country = cn.code; pickCountry = false }.padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(ulgFlag(cn.code), fontSize = 22.sp)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                cn.name + "  (" + cn.code + ")",
+                                fontWeight = if (cn.code == country) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        HorizontalDivider()
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { pickCountry = false }) { Text("Закрыть") } }
+        )
     }
     if (confirmDelete) {
         AlertDialog(
@@ -654,7 +803,7 @@ private suspend fun ulgRecognize(ctx: Context, uri: Uri): UlgResult {
 }
 
 @Composable
-fun UnloadDocScreen(prefs: Prefs, targetId: String?, onBack: () -> Unit) {
+fun UnloadDocScreen(prefs: Prefs, targetId: String?, addMode: Boolean = false, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     remember { UnloadStore.load(ctx) }
@@ -717,7 +866,7 @@ fun UnloadDocScreen(prefs: Prefs, targetId: String?, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         TextButton(onClick = onBack) { Text("‹ Назад") }
-        Text("Распознавание документа", style = MaterialTheme.typography.headlineSmall)
+        Text(if (addMode) "Добавить документ" else "Распознавание документа", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(4.dp))
         Text(
             "Из документа берутся только номер EB, номер Lieferant и номер документа.",
@@ -781,10 +930,20 @@ fun UnloadDocScreen(prefs: Prefs, targetId: String?, onBack: () -> Unit) {
                 val target = picked
                 if (target != null && UnloadStore.get(target) != null) {
                     UnloadStore.update(ctx, target) {
-                        it.copy(
-                            eb = eb.trim(), lieferant = lieferant.trim(), docNo = docNo.trim(),
-                            docFiles = (it.docFiles + files).distinct(), updatedAt = now
-                        )
+                        val firstEmpty = it.eb.isBlank() && it.lieferant.isBlank() && it.docNo.isBlank()
+                        val nd = UnloadDoc(eb.trim(), lieferant.trim(), docNo.trim(), files)
+                        when {
+                            // обычное распознавание или у записи ещё нет документа: пишем в первый документ
+                            !addMode || firstEmpty -> it.copy(
+                                eb = nd.eb, lieferant = nd.lieferant, docNo = nd.docNo,
+                                docFiles = (it.docFiles + files).distinct(), updatedAt = now
+                            )
+                            // такой документ уже есть — не дублируем, только добавляем файл
+                            it.allDocs().any { d -> d.eb == nd.eb && d.lieferant == nd.lieferant && d.docNo == nd.docNo } ->
+                                it.copy(docFiles = (it.docFiles + files).distinct(), updatedAt = now)
+                            // «Добавить»: следующий документ той же разгрузки
+                            else -> it.copy(extraDocs = it.extraDocs + nd, updatedAt = now)
+                        }
                     }
                 } else {
                     UnloadStore.upsert(

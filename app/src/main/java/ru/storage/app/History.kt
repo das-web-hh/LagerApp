@@ -382,10 +382,14 @@ fun ReceiptCardScreen(id: String, onClose: () -> Unit) {
         UnloadStore.load(ctx)
         UnloadStore.byReceipt(r.id)?.let { u ->
             info("Разгрузка", u.name)
-            info("Машина", u.car)
+            info("Машина", (if (u.carCountry.isNotBlank() && !u.carCountry.equals("DE", true)) u.carCountry.uppercase() + " " else "") + u.car)
             info("Привезли", fmtTime(u.arrivedAt))
             info("EB", u.eb)
             info("Lieferant", u.lieferant)
+            u.extraDocs.forEachIndexed { i, d ->
+                info("EB " + (i + 2), d.eb)
+                info("Lieferant " + (i + 2), d.lieferant)
+            }
         }
         info("Позиций", "${r.items.size} · всего ${cardFmt(total)} шт")
 

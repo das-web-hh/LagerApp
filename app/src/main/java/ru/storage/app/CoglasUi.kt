@@ -1481,7 +1481,8 @@ private fun FoundCheck() {
     val sweep = remember { androidx.compose.animation.core.Animatable(0f) }
     val pop = remember { androidx.compose.animation.core.Animatable(0.6f) }
     LaunchedEffect(tick) {
-        if (tick > 0) {
+        if (tick > 0 && tick != CoglasWeb.seenFoundTick) {
+            CoglasWeb.seenFoundTick = tick
             show = true
             pop.snapTo(0.6f)
             sweep.snapTo(0f)
@@ -1531,12 +1532,16 @@ private fun FoundBanner() {
     val tick = CoglasWeb.foundTextTick
     var show by remember { mutableStateOf(false) }
     LaunchedEffect(tick) {
-        if (tick > 0) {
+        if (tick > 0 && tick != CoglasWeb.seenBannerTick) {
+            CoglasWeb.seenBannerTick = tick
             show = true
             CoglasWeb.foundBannerShown = true
-            kotlinx.coroutines.delay(3500)
-            show = false
-            CoglasWeb.foundBannerShown = false
+            try {
+                kotlinx.coroutines.delay(3500)
+            } finally {
+                show = false
+                CoglasWeb.foundBannerShown = false
+            }
         }
     }
     if (show) {
@@ -1573,7 +1578,9 @@ private fun NoticeOverlay() {
     var dismissTick by remember { mutableIntStateOf(0) }
     val alpha = remember { androidx.compose.animation.core.Animatable(1f) }
     LaunchedEffect(tick) {
-        if (tick > 0 && !CoglasWeb.noticeError && CoglasWeb.appNotices) {
+        if (tick > 0 && tick != CoglasWeb.seenNoticeTick) {
+            CoglasWeb.seenNoticeTick = tick
+            if (CoglasWeb.noticeError || !CoglasWeb.appNotices) return@LaunchedEffect
             alpha.snapTo(1f)
             show = true
             kotlinx.coroutines.delay(10000)

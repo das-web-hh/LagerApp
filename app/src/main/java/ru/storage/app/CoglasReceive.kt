@@ -613,6 +613,8 @@ fun ReceiveScreen(job: RecvJob) {
  * Количества из сканов сайта → строки приёмки: товар ищется по штрих-коду или артикулу в списке и в скрытых плановых позициях,
  * количество = число сканов. overwrite = false: строки, где количество уже набрано вручную, не трогаем.
  */
+private val appliedScan = HashMap<String, Int>()
+
 internal fun applyScans(job: RecvJob, overwrite: Boolean) {
     ScanSession.items.toList().forEach { e ->
         fun hit(r: ItemRow) = (r.barcode.isNotBlank() && r.barcode == e.code) || (e.article.isNotBlank() && r.article.trim().equals(e.article, true))
@@ -627,7 +629,12 @@ internal fun applyScans(job: RecvJob, overwrite: Boolean) {
         }
         if (row == null) return@forEach
         if (row.barcode.isBlank()) row.barcode = e.code
-        if (overwrite || parseQ(row.fact) <= 0.0) row.fact = e.count.toString()
+        // количество = число сканов: ставится поверх старого (было 8, отсканировали 5 раз — станет 5), как только число сканов изменилось
+        val key = System.identityHashCode(job).toString() + "|" + ScanSession.batch + "|" + e.code
+        if (overwrite || appliedScan[key] != e.count) {
+            row.fact = e.count.toString()
+            appliedScan[key] = e.count
+        }
     }
 }
 
